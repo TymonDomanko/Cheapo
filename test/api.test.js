@@ -134,7 +134,7 @@ test('signup page shop choice and settings: preferred shops filter search and ne
   const r = await api('POST', '/api/auth/signup', { email: 'lee@example.com', password: 'password123', preferredStores: ['coles', 'aldi'] });
   assert.deepEqual(r.body.user.preferredStores, ['coles', 'aldi']);
   const groups = (await api('GET', '/api/search?q=milk')).body;
-  const stores = new Set(groups.flatMap((g) => g.members.map((m) => m.store)));
+  const stores = new Set(groups.flatMap((g) => Object.keys(g.best)));
   assert.ok(!stores.has('woolworths'), 'Woolworths hidden from search');
   const list = (await api('GET', '/api/lists')).body[0];
   assert.deepEqual((await api('GET', `/api/lists/${list.id}`)).body.included, ['coles', 'aldi']);
@@ -383,14 +383,16 @@ test('barcodes match products the names miss; same brand + different barcode doe
   const anon = client();
   const g = (await anon('GET', '/api/search?q=protein+chocolate+low+fat+nas')).body[0];
   assert.equal(g.best.woolworths?.product.store_product_id, 'b1', 'matched by barcode');
-  assert.ok(!g.members.some((m) => m.store_product_id === 'b2'), 'different barcode, same brand: not the same');
+  const eq = (await anon('GET', `/api/products/${g.anchor.id}`)).body.equivalents;
+  assert.ok(!eq.some((m) => m.store_product_id === 'b2'), 'different barcode, same brand: not the same');
 });
 
 test('wrong-match reports: admin accepts, rule applies to everyone', async () => {
   const user = client();
   await user('POST', '/api/auth/login', { email: 'pat@example.com', password: 'password123' });
   const g = (await user('GET', '/api/search?q=milk&store=woolworths')).body[0];
-  const other = g.members.find((m) => m.store === 'aldi');
+  const equivalents = async (api, id) => (await api('GET', `/api/products/${id}`)).body.equivalents;
+  const other = (await equivalents(user, g.anchor.id)).find((m) => m.store === 'aldi');
   assert.ok(other, 'ALDI milk is matched to begin with');
   const r = await user('POST', '/api/match-reports', { anchorId: g.anchor.id, productId: other.id, kind: 'not_same', note: 'different milk' });
   assert.equal(r.body.status, 'open');
@@ -399,8 +401,7 @@ test('wrong-match reports: admin accepts, rule applies to everyone', async () =>
   const queue = (await admin('GET', '/api/admin/match-reports')).body.open;
   assert.equal(queue.length, 1);
   await admin('POST', `/api/admin/match-reports/${queue[0].id}`, { decision: 'accept' });
-  const after = (await client()('GET', '/api/search?q=milk&store=woolworths')).body[0];
-  assert.ok(!after.members.some((m) => m.id === other.id), 'no longer matched for anyone');
+  assert.ok(!(await equivalents(client(), g.anchor.id)).some((m) => m.id === other.id), 'no longer matched for anyone');
   await admin('DELETE', `/api/admin/match-rules/${Math.min(g.anchor.id, other.id)}/${Math.max(g.anchor.id, other.id)}`);
 });
 
@@ -945,4 +946,14 @@ test('home page: unusual deals for everyone, and your regulars on sale', async (
   assert.equal(r.deal.kind, 'multi');
   assert.equal(r.deal.unit, 3);
   assert.equal(r.deal.pctOff, 25);
+});
+
+test('responses are compressed and search results stay small', async () => {
+  const res = await fetch(base + '/api/search?q=milk', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(res.headers.get('content-encoding'), 'gzip');
+  const groups = await res.json();
+  assert.ok(groups.length && groups.every((g) => typeof g.memberCount === 'number' && !g.members), 'counts, not every equivalent');
+  assert.ok(!JSON.stringify(groups).includes('_tokens'), 'no internal fields');
+  const js = await fetch(base + '/app.js', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(js.headers.get('content-encoding'), 'gzip');
 });

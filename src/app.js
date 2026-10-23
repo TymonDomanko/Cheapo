@@ -2,6 +2,7 @@
 // lists behind a login, and admin-only data management.
 
 import express from 'express';
+import compression from 'compression';
 import path from 'node:path';
 import { getDb } from './db.js';
 import { STORES, STORE_INFO } from './stores.js';
@@ -69,6 +70,8 @@ export function createApp() {
   const tp = process.env.TRUST_PROXY;
   if (tp) app.set('trust proxy', /^\d+$/.test(tp) ? Number(tp) : tp === 'true' ? 1 : tp);
   app.disable('x-powered-by');
+  // Gzip responses: search results and lists shrink 5-10x, which matters on phones.
+  app.use(compression());
 
   app.use((req, res, next) => {
     res.set({
@@ -85,9 +88,11 @@ export function createApp() {
   const bigJson = express.json({ limit: '5mb' });
   app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
   app.use(express.static(path.resolve('public')));
-  app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist')));
+  // Libraries only change when the app is upgraded, so browsers may keep them for a day.
+  const vendor = { maxAge: '1d' };
+  app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist'), vendor));
   // Barcode reading for phones without a built-in barcode reader (iPhone Safari).
-  app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd')));
+  app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd'), vendor));
   // Pages handled by the single-page app.
   const spa = (req, res) => res.sendFile(path.resolve('public/index.html'));
   app.get(['/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
@@ -136,7 +141,7 @@ export function createApp() {
   const searchLimit = rateLimit({ windowMs: 60000, max: 90 });
   app.get('/api/search', searchLimit, h((req) => {
     const { q = '', store, specials, mode } = req.query;
-    return compareSearch(String(q).slice(0, 100), {
+    const groups = compareSearch(String(q).slice(0, 100), {
       store,
       stores: req.user?.preferredStores,
       igaStore: igaFor(req),
@@ -146,6 +151,8 @@ export function createApp() {
       limit: Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
+    // The page shows how many equivalents there are, not each one; leave them out to keep this small.
+    return groups.map(({ members, ...g }) => ({ ...g, memberCount: members.length }));
   }));
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.

@@ -787,7 +787,7 @@ function valueHint(bv) {
 
 function renderGroup(g) {
   const a = g.anchor;
-  const n = g.members.length;
+  const n = g.memberCount ?? g.members?.length ?? 1;
   return `<div class="row">
     ${thumb(a)}
     <div class="title" data-product="${a.id}">
@@ -870,6 +870,7 @@ async function openProduct(id) {
           ${x.id !== p.id ? `<button class="small ghost" data-report="${x.id}" data-anchor="${p.id}" title="These aren’t the same product">Wrong match?</button>` : ''}</td></tr>`).join('')}</tbody>
     </table></div>
     <p class="hint">Products are matched by barcode where the stores publish one, otherwise by size and name. Spotted a wrong match? Use “Wrong match?” and an admin will fix it for everyone.</p>`;
+  await loadChartLibrary();
   drawHistory(d);
 }
 
@@ -882,6 +883,17 @@ function historyTable(d) {
       <td>${esc(c.name)}</td><td class="num">${money(h.price)}${h.on_special ? ' <span class="tag-special">SPECIAL</span>' : ''}</td></tr>`;
     }).join('')}
   </tbody></table>`;
+}
+
+/** The chart library is only needed for price history and spending, so it loads on first use. */
+let chartLibrary = null;
+function loadChartLibrary() {
+  if (window.Chart) return Promise.resolve();
+  chartLibrary ||= loadScript('/vendor/chart.js/chart.umd.js').catch((e) => {
+    chartLibrary = null;
+    throw e;
+  });
+  return chartLibrary;
 }
 
 function drawHistory(d) {
@@ -1306,6 +1318,7 @@ async function openSpending() {
         <td class="num">${x.oneShop ? `<span class="saving" title="${esc(`All at ${storeName(x.oneShop.store)}: ${money(x.oneShop.total)}`)}">${money(x.saved)}</span>` : '—'}</td></tr>`).join('')}</tbody>
     </table></div>
     <p class="hint">Costs are worked out from the online prices when each shop was finished, assuming you bought each item at the shop it was planned for. Notes aren’t counted.</p>`;
+  if (sp.months.length > 1) await loadChartLibrary().catch(() => {});
   if (sp.months.length > 1 && window.Chart) {
     spendingChart?.destroy();
     spendingChart = new Chart($('#spending-chart'), {

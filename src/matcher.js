@@ -69,6 +69,18 @@ export function nameTokens(name, brand) {
   return out;
 }
 
+// Each product's tokens, worked out once. Kept off the product object itself so
+// they never end up in API responses.
+const tokenCache = new WeakMap();
+export function tokensOf(p) {
+  let t = tokenCache.get(p);
+  if (!t) {
+    t = nameTokens(p.name, p.brand);
+    tokenCache.set(p, t);
+  }
+  return t;
+}
+
 /** Dice coefficient between two token sets (0..1). */
 export function tokenSimilarity(a, b) {
   if (!a.size || !b.size) return 0;
@@ -114,8 +126,8 @@ export function matchScore(anchor, candidate, mode = 'similar', { ignoreSize = f
   if (anchor.id != null && anchor.id === candidate.id) return 1;
   if (!ignoreSize && !samePack(anchor, candidate)) return 0;
   if (mode === 'exact' && !sameBrand(anchor, candidate)) return 0;
-  const a = anchor._tokens || nameTokens(anchor.name, anchor.brand);
-  const c = candidate._tokens || nameTokens(candidate.name, candidate.brand);
+  const a = tokensOf(anchor);
+  const c = tokensOf(candidate);
   for (const t of a) if (VARIANT_WORDS.has(t) && !c.has(t)) return 0;
   for (const t of c) if (VARIANT_WORDS.has(t) && !a.has(t)) return 0;
   let score = tokenSimilarity(a, c);
@@ -129,10 +141,8 @@ export function matchScore(anchor, candidate, mode = 'similar', { ignoreSize = f
  * @returns {Array<{product:object, score:number}>} best first, above threshold
  */
 export function rankMatches(anchor, candidates, mode = 'similar', threshold = MATCH_THRESHOLD) {
-  anchor._tokens ||= nameTokens(anchor.name, anchor.brand);
   const out = [];
   for (const c of candidates) {
-    c._tokens ||= nameTokens(c.name, c.brand);
     const score = matchScore(anchor, c, mode);
     if (score >= threshold) out.push({ product: c, score });
   }

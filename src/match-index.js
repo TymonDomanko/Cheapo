@@ -8,7 +8,7 @@
 // rebuild takes a moment on a full catalogue).
 
 import { getDb, catalogueVersion } from './db.js';
-import { nameTokens } from './matcher.js';
+import { tokensOf } from './matcher.js';
 
 const REBUILD_EVERY_MS = 30 * 1000;
 const SMALL = 20000; // small catalogues (tests, demo) rebuild straight away
@@ -38,8 +38,7 @@ function words(ix) {
   if (ix.words) return ix.words;
   ix.words = new Map();
   for (const r of ix.rows) {
-    r._tokens ||= nameTokens(r.name, r.brand);
-    for (const t of r._tokens) {
+    for (const t of tokensOf(r)) {
       if (!ix.words.has(t)) ix.words.set(t, []);
       ix.words.get(t).push(r);
     }
@@ -53,7 +52,7 @@ function words(ix) {
  */
 export function sameWordCandidates(anchor) {
   const w = words(current());
-  const toks = [...(anchor._tokens ||= nameTokens(anchor.name, anchor.brand))]
+  const toks = [...tokensOf(anchor)]
     .map((t) => w.get(t) || [])
     .sort((a, b) => a.length - b.length)
     .slice(0, 3);
@@ -97,4 +96,9 @@ export function sameSizeCandidates(anchor) {
     }
   }
   return out;
+}
+
+/** Build the indexes ahead of time (after the server starts), so the first search doesn't wait. */
+export function warmUp() {
+  words(current());
 }

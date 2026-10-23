@@ -7,6 +7,8 @@ import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
 import { checkCollector } from './admin-alerts.js';
+import { warmUp } from './match-index.js';
+import { unusualDeals } from './deals.js';
 import { ensureDefaultTracked, ensureDirectory, checkOnlineStores, checkIsDue } from './iga.js';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -21,6 +23,15 @@ if (checkIsDue() && !process.env.DISABLE_BACKGROUND_SCRAPES) {
   ensureDirectory().catch((e) => console.warn(`IGA store list not loaded yet: ${e.message}`));
 }
 const app = createApp();
+// Build the product-matching index and the home page's deals in the background, so the first visitors don't wait.
+setTimeout(() => {
+  try {
+    warmUp();
+    unusualDeals(); // and the home page's deals
+  } catch (e) {
+    console.warn(`Matching index not built yet: ${e.message}`);
+  }
+}, 1000).unref();
 
 if (SCRAPE_CRON) {
   cron.schedule(SCRAPE_CRON, async () => {
