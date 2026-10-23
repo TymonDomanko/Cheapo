@@ -10,7 +10,8 @@ const ORIGIN = 'https://www.woolworths.com.au';
 const PAGE_SIZE = 36;
 const SKIP = new Set(
   (process.env.WOOLWORTHS_SKIP_CATEGORIES ??
-    // Seasonal/duplicate groupings, plus third-party marketplace departments (hundreds of thousands of listings).
+    // Seasonal/duplicate groupings, plus third-party marketplace departments. Marketplace listings
+    // inside the other departments are left out by the request (isHideEverydayMarketProducts).
     'specials,everyday-market,healthylife,halloween,christmas,easter,container-bonus-credits,back-to-school,dinner,lunch-box,gift-ideas,electronics,home-lifestyle,front-of-store')
     .split(',').map((s) => s.trim()).filter(Boolean),
 );
@@ -55,10 +56,12 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
           enableAdReRanking: false,
           groupEdmVariants: true,
           categoryVersion: 'v2',
+          // Leave out Everyday Market (third-party sellers): ~90% of listings, none of them groceries.
+          isHideEverydayMarketProducts: true,
         });
         const total = json.TotalRecordCount ?? json.totalRecordCount ?? 0;
         pages = Math.ceil(total / PAGE_SIZE);
-        const items = extractProducts(json).map((p) => mapProduct(p, cat.name));
+        const items = ownRange(extractProducts(json)).map((p) => mapProduct(p, cat.name));
         log(`woolworths: ${cat.slug} page ${page}/${pages} (${items.length})`);
         yield items;
         if (!items.length) break;
@@ -68,6 +71,11 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
   } finally {
     await client.close();
   }
+}
+
+/** Woolworths' own range: no Everyday Market (third-party marketplace) listings. */
+export function ownRange(products) {
+  return products.filter((p) => !p.IsMarketProduct);
 }
 
 /** Products arrive grouped in "bundles" (variants); flatten them. */

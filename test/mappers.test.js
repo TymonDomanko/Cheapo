@@ -44,3 +44,9 @@ test('a category that keeps failing is skipped, not the whole shop', async () =>
   assert.deepEqual(r.got, []);
   assert.deepEqual((await run([])).got, ['a', 'b', 'c', 'd']);
 });
+
+test('Woolworths: Everyday Market (third-party) listings are left out', async () => {
+  const { ownRange, extractProducts } = await import('../src/scrapers/woolworths.js');
+  const json = { Bundles: [{ Products: [{ Stockcode: 1, Name: 'Woolworths Full Cream Milk 2L' }] }, { Products: [{ Stockcode: 1124514655, Name: 'Kenzzi Salon Pro+ Hair Dryer', IsMarketProduct: true }] }] };
+  assert.deepEqual(ownRange(extractProducts(json)).map((p) => p.Name), ['Woolworths Full Cream Milk 2L']);
+});

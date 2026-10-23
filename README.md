@@ -2,7 +2,7 @@
 
 A grocery price comparison site for Australian supermarkets: **Woolworths, Coles, ALDI, IGA and Harris Farm**. It can run publicly with accounts and shared household lists, or just on your own computer.
 
-- **Every product and price** from each chain (about 60,000 products), refreshed daily.
+- **Every product and price** from each chain (about 75,000 products), refreshed daily. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
 - **Deals on the home page.** Your regulars (things you buy often or have on your lists) that are on special, a multi-buy or a member price at one of your shops, even if it's a different brand of the same thing. Plus **unusual deals**: specials that break a product's normal pattern, like its first special in months or cheaper than its specials usually get. The every-few-weeks half-price cycles aren't included.
 - **Search and compare.** Each result shows the cheapest equivalent at every store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand.
 - **Sign-up, log-in and settings pages.** At `/signup` you pick the shops you use. At `/settings` you change those shops, your name and your password, or delete your account. Search only compares your shops, and new lists start with them.
