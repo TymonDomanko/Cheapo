@@ -23,6 +23,7 @@
     "express": "^4.21.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^10.2.1",
+    "postject": "1.0.0-alpha.6",
     "undici": "^6.19.8"
   },
   "optionalDependencies": {

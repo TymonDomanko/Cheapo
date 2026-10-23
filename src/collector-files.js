@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 export const COLLECTOR_CODE = [
   'src/collector-files.js',
   'src/cli/collect.js',
+  'src/mini-cron.js',
   'src/promos.js',
   'src/scrapers/registry.js',
   'src/scrapers/http.js',
@@ -17,8 +18,9 @@ export const COLLECTOR_CODE = [
   'src/scrapers/harrisfarm.js',
 ];
 
-// npm packages the collector needs (installed by its start script).
-export const COLLECTOR_DEPS = { 'node-cron': '^4.6.0', undici: '^6.19.8' };
+// The collector needs no npm packages (so it can run as a single executable).
+// undici is only used to go through an HTTPS_PROXY, if one is set.
+export const COLLECTOR_DEPS = { undici: '^6.19.8' };
 
 /** A short fingerprint of the collector's code. @param read (path) => file text */
 export function collectorVersion(read) {

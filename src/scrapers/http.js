@@ -4,11 +4,21 @@
 //    store's own origin (via Playwright). Slower, but survives bot protection
 //    that rejects non-browser clients. Set SCRAPE_MODE=browser to use it.
 
-import { ProxyAgent } from 'undici';
-
 // Node's fetch ignores proxy env vars; honour them for scraper requests so this works behind a proxy.
+// undici is optional so the home collector also runs as a single executable with no packages.
 const PROXY = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY;
-const dispatcher = PROXY ? new ProxyAgent(PROXY) : undefined;
+// (Without undici, Node 22.21+ can still use the proxy for every request when NODE_USE_ENV_PROXY=1.)
+const dispatcher = PROXY && process.env.NODE_USE_ENV_PROXY !== '1' ? await proxyAgent(PROXY) : undefined;
+
+async function proxyAgent(url) {
+  try {
+    const { ProxyAgent } = await import('undici');
+    return new ProxyAgent(url);
+  } catch {
+    console.warn('HTTPS_PROXY is set but the undici package isn\'t available; set NODE_USE_ENV_PROXY=1 to use it.');
+    return undefined;
+  }
+}
 
 const UA = process.env.SCRAPE_USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';

@@ -3,14 +3,17 @@
 // from your own connection and sends the products to your public site.
 //
 // Easiest: download it from your site's Admin page (Site settings → Home
-// collector) and run start.bat / start.sh. Or from this repo:
+// collector) — a single program for Windows or Linux, or a zip with
+// start.bat / start.sh for any computer with Node.js. Or from this repo:
 //   COLLECTOR_SERVER=https://groceries.example.com COLLECTOR_TOKEN=… npm run collect
 //   npm run collect -- woolworths aldi --server=https://… --token=…
 //   npm run collect -- --cron="0 4 * * *"     # keep running and collect daily
 //
 // A downloaded collector keeps itself up to date: before each collection it
 // asks the site for the latest version and, if it's different, downloads it,
-// checks it, replaces its own files and restarts (exit code 75).
+// checks it, replaces its own files and restarts (exit code 75). The single
+// program (src/collector-launcher.cjs) does the downloading itself and only
+// needs this to ask for the restart.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,13 +37,14 @@ const stores = named.length ? named : (process.env.COLLECT_STORES || 'woolworths
 
 // How this copy runs: a downloaded bundle can update itself; inside the Docker
 // image or a git checkout it can't (pull the new image / code instead).
-const MODE = fs.existsSync(path.join(ROOT, '.collector-bundle')) ? 'bundle' : fs.existsSync('/.dockerenv') ? 'docker' : 'source';
+const MODE = process.env.COLLECTOR_MODE === 'exe' ? 'exe'
+  : fs.existsSync(path.join(ROOT, '.collector-bundle')) ? 'bundle' : fs.existsSync('/.dockerenv') ? 'docker' : 'source';
 const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf8'));
 
 // Scrapers read proxy settings when loaded, so load them after .env.
 const { SCRAPERS } = await import('../scrapers/registry.js');
 const { sleep } = await import('../scrapers/http.js');
-const { default: cron } = await import('node-cron');
+const cron = await import('../mini-cron.js');
 
 if (!server || !token) {
   console.error('Set COLLECTOR_SERVER and COLLECTOR_TOKEN (in .env, or pass --server= and --token=).');
@@ -96,9 +100,13 @@ async function updateIfNeeded() {
     return false;
   }
   if (latest === VERSION) return false;
+  if (MODE === 'exe' && process.env.AUTO_UPDATE !== 'false') {
+    console.log(`Updating collector ${VERSION} → ${latest}…`);
+    return true; // the launcher fetches the new code when it restarts us
+  }
   if (MODE !== 'bundle' || process.env.AUTO_UPDATE === 'false') {
     console.warn(`A newer collector is available (${latest}; this is ${VERSION}). `
-      + (MODE === 'docker' ? 'Run: docker compose pull && docker compose up -d' : MODE === 'bundle' ? 'Download it from the Admin page, or set AUTO_UPDATE=true.' : 'Pull the latest code.'));
+      + (MODE === 'docker' ? 'Run: docker compose pull && docker compose up -d' : MODE === 'source' ? 'Pull the latest code.' : 'Download it from the Admin page, or set AUTO_UPDATE=true.'));
     return false;
   }
   console.log(`Updating collector ${VERSION} → ${latest}…`);

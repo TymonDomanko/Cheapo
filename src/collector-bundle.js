@@ -23,7 +23,7 @@ const PACKAGE_JSON = JSON.stringify({
   type: 'module',
   engines: { node: '>=20' },
   scripts: { start: 'node src/cli/collect.js' },
-  dependencies: COLLECTOR_DEPS,
+  optionalDependencies: COLLECTOR_DEPS,
 }, null, 2) + '\n';
 
 // Exit code 75 = "I've updated myself, start me again".

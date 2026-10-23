@@ -170,20 +170,49 @@ Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from
 **Easiest: download it from the Admin page.**
 
 1. Go to **Admin → Site settings → Home collector** and untick Woolworths and ALDI under "This server crawls". Save.
-2. Press **⬇ Download home collector**. The zip is already set up for your site: its address, a collector token, and the stores you unticked.
-3. Unzip it on any computer that stays on (Windows, Mac or Linux) that has [Node.js 20+](https://nodejs.org) installed.
-4. Run `start.bat` (Windows) or `sh start.sh` (Mac/Linux). It installs what it needs, collects once straight away, then collects every day at 4am (`COLLECT_CRON` in its `.env`).
+2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
+   - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
+     - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
+     - On Linux, make it executable first: `chmod +x grocery-collector && ./grocery-collector`.
+     - To start it with the computer, run it once with `--autostart` (undo with `--no-autostart`). On Windows this adds it to the Startup folder; on a Linux desktop it adds a log-in entry. On a Linux server, use a systemd service instead (below).
+   - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside; `COLLECT_CRON` sets the time.
 
 **It keeps itself up to date.**
-- Before each collection, it asks your site for the latest collector version.
-- If there's a newer one, it downloads it, checks the code matches the version fingerprint, replaces its files and restarts.
-- Its `.env` settings are never touched by updates. To turn updating off, set `AUTO_UPDATE=false` in its `.env`.
+- Before each collection, it asks your site for the latest collector version. If there's a newer one, it downloads it, checks the code matches the version fingerprint, and restarts with it.
+- The single program keeps the collector's code in your app-data folder (`%LOCALAPPDATA%\GroceryCollector` on Windows, `~/.local/share/grocery-collector` on Linux). It fetches the latest code each time it starts, and uses the saved copy if your site can't be reached. You never need to download the program again, unless you make a new token.
+- The zip version replaces its own files instead; its `.env` is never touched. Set `AUTO_UPDATE=false` there to turn updating off.
+
+**Where the programs come from.** Each program is the official Node.js binary from nodejs.org (checked against its published SHA-256 sums) with the small launcher in `src/collector-launcher.cjs` added. It uses Node's single-executable-application feature. Your site's address and token are appended to the end of each download.
+- The Docker image comes with the programs ready-made.
+- Otherwise the server builds each one the first time someone asks for it. This takes about a minute and needs roughly 1 GB of free memory and access to nodejs.org; it's cached under `DATA_DIR/collector-exe` afterwards.
+- On a small server where building fails, build them on another machine: `node src/cli/build-collector-exe.js --prebuild collector-exe`, then copy that folder to the app folder (or point `COLLECTOR_EXE_PREBUILT` at it). Alternatively, use the zip.
+- There's no Mac program because Apple only runs programs that were signed on a Mac.
+
+**Linux server with systemd.** Put the program in `/opt/grocery-collector/` and create `/etc/systemd/system/grocery-collector.service`:
+
+```ini
+[Unit]
+Description=Grocery home collector
+After=network-online.target
+
+[Service]
+ExecStart=/opt/grocery-collector/grocery-collector
+User=nobody
+Environment=GROCERY_COLLECTOR_HOME=/var/lib/grocery-collector
+StateDirectory=grocery-collector
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then run `sudo systemctl enable --now grocery-collector`.
 
 **Checking on it.** The Admin page shows when the collector last connected, how it's run, and whether it's up to date. It also warns if it hasn't connected for more than a day and a half.
 
 **Docker instead.** Use [`deploy/collector/`](deploy/collector): copy `.env.example` to `.env` and fill in `COLLECTOR_SERVER` and the token from the Admin page's `.env`, then run `docker compose up -d`. A Docker collector can't replace its own code. The Admin page tells you when to run `docker compose pull && docker compose up -d`.
 
-The token in the collector's `.env` is what lets it send prices, so keep that file private. If it's ever exposed, press **Generate a new token** and download the collector again.
+The token inside the downloaded program (or the zip's `.env`) is what lets it send prices, so don't share the download. If it's ever exposed, press **Generate a new token** and download the collector again.
 
 ## The daily refresh
 

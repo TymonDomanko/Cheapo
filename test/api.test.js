@@ -583,3 +583,72 @@ test('home collector download, version check and self-update bundle', async () =
   await admin('DELETE', '/api/admin/settings/collector-token');
   if (saved) process.env.COLLECTOR_TOKEN = saved;
 });
+
+test('home collector as a single program: download with settings appended, and the launcher fetching its code', async () => {
+  const zlib = await import('node:zlib');
+  const { spawn } = await import('node:child_process');
+  const { programName } = await import('../src/collector-exe-targets.js');
+  const { CONFIG_MARK, CONFIG_END } = await import('../src/collector-exe.js');
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const get = (p) => fetch(base + p, { headers: { Cookie: cookie } });
+
+  // A stand-in "prebuilt" program, as the Docker image would have.
+  const pre = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-exe-'));
+  process.env.COLLECTOR_EXE_PREBUILT = pre;
+  const fake = Buffer.from('pretend program '.repeat(1000));
+  fs.writeFileSync(path.join(pre, programName('linux-x64', true)), zlib.gzipSync(fake));
+
+  const { programs } = await (await get('/api/admin/collector/programs')).json();
+  assert.deepEqual(programs.map((p) => [p.id, p.ready]), [['windows-x64', false], ['linux-x64', true], ['linux-arm64', false]]);
+  assert.equal(programs[1].bytes, fake.length);
+  assert.equal((await get('/api/admin/collector/programs/windows-x64')).status, 409, 'not built yet');
+  assert.equal((await fetch(base + '/api/admin/collector/programs/linux-x64')).status, 401, 'admins only');
+
+  const saved = process.env.COLLECTOR_TOKEN;
+  delete process.env.COLLECTOR_TOKEN;
+  const res = await get('/api/admin/collector/programs/linux-x64');
+  assert.match(res.headers.get('content-disposition'), /filename="grocery-collector"/);
+  const body = Buffer.from(await res.arrayBuffer());
+  assert.equal(Number(res.headers.get('content-length')), body.length);
+  assert.ok(body.subarray(0, fake.length).equals(fake), 'the program, unchanged');
+  const tail = body.subarray(fake.length).toString('latin1');
+  assert.ok(tail.startsWith(CONFIG_MARK) && tail.endsWith(CONFIG_END));
+  const config = JSON.parse(Buffer.from(tail.slice(CONFIG_MARK.length, -CONFIG_END.length), 'base64').toString());
+  assert.ok(config.COLLECTOR_TOKEN.length >= 24, 'a token was made for the download');
+  assert.equal(config.AUTO_UPDATE, 'true');
+  assert.ok(config.COLLECTOR_SERVER.startsWith('http'));
+
+  // The launcher (run here by plain Node) downloads the code, checks it, caches it and starts the collector.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-home-'));
+  const child = spawn(process.execPath, [new URL('../src/collector-launcher.cjs', import.meta.url).pathname, 'aldi'], {
+    env: {
+      ...process.env, GROCERY_COLLECTOR_CHILD: '1', GROCERY_COLLECTOR_HOME: home,
+      COLLECTOR_SERVER: base, COLLECTOR_TOKEN: config.COLLECTOR_TOKEN, COLLECT_CRON: '0 4 * * *', COLLECT_ON_START: 'false', AUTO_UPDATE: 'true',
+    },
+  });
+  let out = '';
+  child.stdout.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => (out += d));
+  const latest = (await (await fetch(base + '/api/collector/latest', { headers: { Authorization: `Bearer ${config.COLLECTOR_TOKEN}` } })).json()).version;
+  for (let i = 0; i < 100 && !out.includes('Collecting on schedule'); i++) await new Promise((r) => setTimeout(r, 100));
+  child.kill();
+  assert.match(out, new RegExp(`Home collector ${latest} \\(exe\\)`), out);
+  assert.ok(fs.existsSync(path.join(home, 'code', latest, 'src', 'scrapers', 'aldi.js')), 'code cached for offline starts');
+
+  fs.rmSync(pre, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+  delete process.env.COLLECTOR_EXE_PREBUILT;
+  if (saved) process.env.COLLECTOR_TOKEN = saved;
+  else delete process.env.COLLECTOR_TOKEN;
+});
+
+test('home collector code needs no npm packages (so it can run as a single program)', async () => {
+  const { COLLECTOR_CODE } = await import('../src/collector-files.js');
+  for (const p of COLLECTOR_CODE) {
+    const text = fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+    for (const [, spec] of text.matchAll(/^import .* from '([^']+)'/gm)) {
+      assert.ok(spec.startsWith('.') || spec.startsWith('node:'), `${p} imports ${spec}`);
+    }
+  }
+});

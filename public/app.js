@@ -1605,15 +1605,66 @@ function ago(iso) {
 /** "Last connected 2 hours ago · up to date" for the home collector. */
 function collectorStatusLine(c) {
   if (!c.last) return '<span class="hint">No collector has connected yet.</span>';
-  const how = { bundle: 'downloaded copy', docker: 'Docker', source: 'from the code' }[c.last.mode] || c.last.mode;
+  const how = { exe: 'program', bundle: 'downloaded copy', docker: 'Docker', source: 'from the code' }[c.last.mode] || c.last.mode;
   const stale = Date.now() - Date.parse(c.last.at) > 36 * 3600000;
   const version = c.last.upToDate
     ? '<span class="state ready">✓ up to date</span>'
-    : `<span class="state pending">older version</span> — ${c.last.mode === 'bundle'
+    : `<span class="state pending">older version</span> — ${c.last.mode === 'bundle' || c.last.mode === 'exe'
       ? 'it updates itself before its next collection'
       : c.last.mode === 'docker' ? 'run <code>docker compose pull && docker compose up -d</code> on that machine' : 'pull the latest code on that machine'}`;
   return `Last connected <strong>${ago(c.last.at)}</strong>${stale ? ' <span class="warn">(it should connect daily — is that computer on?)</span>' : ''}
     · ${esc(how)}, version ${esc(c.last.version)} · ${version}`;
+}
+
+// Which download to offer first, from the browser's platform.
+function likelyPlatform() {
+  const ua = navigator.userAgent;
+  if (/Windows/.test(ua)) return 'windows-x64';
+  if (/Mac OS X|Macintosh/.test(ua)) return 'mac';
+  if (/Linux/.test(ua)) return /aarch64|arm/i.test(ua) ? 'linux-arm64' : 'linux-x64';
+  return null;
+}
+
+/** Download buttons: a single program per platform (built on first request), or the zip. */
+function collectorDownloads(programs) {
+  const mine = likelyPlatform();
+  const ordered = [...programs].sort((a, b) => (b.id === mine) - (a.id === mine));
+  const button = (p, i) => `<button type="button" class="${i === 0 && mine !== 'mac' ? 'primary' : 'small'}" data-program="${p.id}">⬇ ${esc(p.label)}</button>`;
+  const errors = programs.filter((p) => p.error).map((p) => `<p class="warn">${esc(p.label)} couldn’t be prepared: ${esc(p.error)}</p>`).join('');
+  return `<div class="actions download-row">${ordered.map(button).join('')}
+      <a class="button ${mine === 'mac' ? 'primary' : 'small'}" href="/api/admin/collector/download" download>⬇ Mac / zip</a></div>
+    <p class="hint" id="program-progress" hidden></p>${errors}
+    <p class="hint"><strong>Windows / Linux:</strong> one file — run it and leave it running. Nothing to install; it’s already set up for this site and keeps itself up to date.
+      Windows may warn that it’s from an unknown publisher (choose <em>More info → Run anyway</em>). To start it with the computer, run it once with <code>--autostart</code>.<br>
+      <strong>Mac, or anywhere with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>:</strong> unzip and run <code>start.sh</code> (or <code>start.bat</code>).
+      Prefer Docker? Use <code>deploy/collector</code>.<br>
+      It collects the stores this server doesn’t crawl (below).</p>
+`;
+}
+
+/** Fetch a program, asking the server to prepare it first if needed. */
+async function downloadProgram(btn) {
+  const id = btn.dataset.program;
+  const progress = $('#program-progress');
+  btn.disabled = true;
+  let status = await api(`/api/admin/collector/programs/${id}/build`, { method: 'POST' });
+  if (status.building) {
+    progress.hidden = false;
+    progress.textContent = 'Preparing the program — this takes a minute the first time…';
+  }
+  while (status.building) {
+    await new Promise((r) => setTimeout(r, 3000));
+    status = (await api('/api/admin/collector/programs')).programs.find((p) => p.id === id);
+  }
+  btn.disabled = false;
+  progress.hidden = true;
+  if (!status.ready) throw new Error(`Couldn’t prepare it: ${status.error || 'unknown error'}`);
+  const a = document.createElement('a');
+  a.href = `/api/admin/collector/programs/${id}`;
+  a.download = '';
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 
 async function loadAdminSettings(justMadeToken = null) {
@@ -1661,9 +1712,7 @@ async function loadAdminSettings(justMadeToken = null) {
       <form id="collector-settings" class="card stack">
         <h3>Home collector</h3>
         <p class="hint">For stores that block this server: a small program on a computer at home crawls them and sends the prices here.</p>
-        <p><a class="button primary" href="/api/admin/collector/download" download>⬇ Download home collector</a></p>
-        <p class="hint">Unzip it on any computer that stays on (Windows, Mac or Linux, with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>), then run <code>start.bat</code> or <code>start.sh</code>.
-          It’s already set up for this site, keeps itself up to date, and collects the stores this server doesn’t crawl (below). Prefer Docker? Use <code>deploy/collector</code>.</p>
+        ${collectorDownloads(collector.programs)}
         <p class="collector-status">${collectorStatusLine(collector)}</p>
         <p><strong>Token:</strong>${envTag('COLLECTOR_TOKEN')} ${st.COLLECTOR_TOKEN.set ? 'set' : '<span class="hint">none — the collector can’t send prices</span>'}</p>
         ${justMadeToken ? `<div class="notice">Copy this into the collector’s .env as COLLECTOR_TOKEN (or just download the collector again — the download includes it). It won’t be shown again here.
@@ -1741,8 +1790,14 @@ $('#admin-root').addEventListener('click', async (e) => {
       loadAdmin();
     } else if (t.id === 'copy-token') {
       copyText($('#new-token').value);
+    } else if (t.dataset.program) {
+      await downloadProgram(t);
     }
   } catch (err) {
+    if (t.dataset.program) {
+      t.disabled = false;
+      $('#program-progress').hidden = true;
+    }
     if (t.id === 'test-email') t.disabled = false;
     toast(err.message);
   }

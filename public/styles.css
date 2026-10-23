@@ -323,3 +323,4 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .stack .copy-row input { flex: 1; }
 .stack > label .env-tag, .stack h3 .env-tag { align-self: flex-start; }
 .shop-picker > label.check { display: flex; margin: 6px 0; }
+.download-row { flex-wrap: wrap; }

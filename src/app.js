@@ -18,6 +18,8 @@ import * as backup from './backup.js';
 import * as settings from './settings.js';
 import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
+import * as collectorExe from './collector-exe.js';
+import { COLLECTOR_CODE } from './collector-files.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
 import { backfillColesBarcodes, barcodeStatus, colesBarcodeProgress } from './barcodes.js';
@@ -377,6 +379,7 @@ export function createApp() {
   app.get('/api/collector/latest', requireCollector, h(() => ({ version: collectorBundle.latestCollectorVersion() })));
   app.get('/api/collector/bundle', requireCollector, h((req) => ({
     version: collectorBundle.latestCollectorVersion(),
+    code: COLLECTOR_CODE,
     files: collectorBundle.bundleFiles(siteUrl(req)),
   })));
   const collectorRun = (req) => {
@@ -443,7 +446,7 @@ export function createApp() {
     stores: STORES,
     currentAddress: `${req.protocol}://${req.get('host')}`,
     litestream: backup.litestreamInfo(),
-    collector: collectorBundle.collectorStatus(),
+    collector: { ...collectorBundle.collectorStatus(), programs: collectorExe.exeStatuses() },
   })));
 
   app.put('/api/admin/settings', requireAdmin, h((req) => {
@@ -472,19 +475,25 @@ export function createApp() {
     settings.setSetting('COLLECTOR_TOKEN', token);
     return { token };
   }));
-  // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
-  app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
+  // What a downloaded collector is set up with: this site, its token (made now
+  // if there isn't one) and the stores this server doesn't crawl itself (if it
+  // crawls everything, the usual two).
+  function collectorSetup(req) {
     let token = getSetting('COLLECTOR_TOKEN');
     if (!token) {
       token = settings.newCollectorToken();
       settings.setSetting('COLLECTOR_TOKEN', token);
     }
-    // Stores the server doesn't crawl itself; if it crawls everything, the usual two.
     const notCrawled = STORES.filter((x) => !serverStores().includes(x));
-    const stores = notCrawled.length ? notCrawled : ['woolworths', 'aldi'];
+    return { serverUrl: siteUrl(req), token, stores: notCrawled.length ? notCrawled : ['woolworths', 'aldi'], cron: '0 4 * * *' };
+  }
+
+  // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
+  app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
+    const setup = collectorSetup(req);
     const files = {
-      ...collectorBundle.bundleFiles(siteUrl(req)),
-      '.env': collectorBundle.envFile({ serverUrl: siteUrl(req), token, stores, cron: '0 4 * * *' }),
+      ...collectorBundle.bundleFiles(setup.serverUrl),
+      '.env': collectorBundle.envFile(setup),
     };
     res.set({
       'Content-Type': 'application/zip',
@@ -492,6 +501,29 @@ export function createApp() {
       'Cache-Control': 'no-store',
     });
     res.send(collectorBundle.zip(files, 'grocery-home-collector'));
+  });
+
+  // The home collector as a single program per platform. Built in the
+  // background the first time (it takes a minute), then served from a cache.
+  app.get('/api/admin/collector/programs', requireAdmin, h(() => ({ programs: collectorExe.exeStatuses() })));
+  app.post('/api/admin/collector/programs/:target/build', requireAdmin, h((req) => {
+    collectorExe.buildExe(req.params.target);
+    return collectorExe.exeStatus(req.params.target);
+  }));
+  app.get('/api/admin/collector/programs/:target', requireAdmin, (req, res) => {
+    const { target } = req.params;
+    if (!collectorExe.TARGETS[target]) return res.status(404).json({ error: 'Unknown platform' });
+    if (!collectorExe.exeStatus(target).ready) return res.status(409).json({ error: 'Not built yet — start the build first' });
+    const setup = collectorSetup(req);
+    collectorExe.sendExe(res, target, {
+      COLLECTOR_SERVER: setup.serverUrl,
+      COLLECTOR_TOKEN: setup.token,
+      COLLECT_STORES: setup.stores.join(','),
+      COLLECT_CRON: setup.cron,
+      TZ: 'Australia/Sydney',
+      COLLECT_ON_START: 'true',
+      AUTO_UPDATE: 'true',
+    });
   });
 
   app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
