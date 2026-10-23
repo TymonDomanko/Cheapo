@@ -1,72 +1,116 @@
 # Supermarket Tools
 
-A self-hosted grocery price comparison site for **Woolworths, Coles and ALDI** (Australia).
+A grocery price comparison site for Australian supermarkets: **Woolworths, Coles, ALDI, IGA and Harris Farm**. It can run publicly with accounts and shared household lists, or just on your own computer.
 
-- **Pulls every product and price** from all three stores (about 50,000 products) and refreshes them daily.
-- **Search and compare.** Each result row shows the cheapest equivalent at each store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand. So "Coles Full Cream Milk 3L", "Woolworths Full Cream Milk 3L" and "Farmdale Full Cream Milk 3L" are treated as the same item.
-- **Shopping list.** Add products, set quantities, and pick how strict matching should be: any brand, same brand only, or this exact product. You can also override the product used at any store, or exclude a store for an item.
-- **Order the cheapest.** One button splits your list so each item comes from the store where it's cheapest. It then opens a browser and fills your **Woolworths and Coles trolleys** with those items. ALDI Australia has no online grocery ordering, so ALDI items become a printable in-store list. It shows what the split saves compared with buying everything at one store.
-- **Price history.** Every refresh records price changes. Each product has a step chart of its price over time, alongside the matching products at the other stores. A "Price changes" tab lists the biggest recent rises and drops.
+- **Every product and price** from each chain (about 60,000 products), refreshed daily.
+- **Search and compare.** Each result shows the cheapest equivalent at every store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand.
+- **Accounts and shared lists.** Anyone can search. Signing up gives you a shopping list; you can make more lists and **share one with your household** using an invite link. Everyone on a shared list can add, change and remove items, and sees each other's changes.
+- **Choose your shops.** Each list has a card per supermarket that you can tick or untick:
+  - A shop you use says what it's **saving you** (how much more the list would cost without it), and warns if it's the only place you can get some items.
+  - A shop you've excluded says what it's **costing you** (how much including it would save).
+- **Order the cheapest.** Splits your list so each item comes from its cheapest shop. You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
+- **Price history.** Each product has a step chart of its price over time, alongside the matching products at the other shops. A "Price changes" tab lists the biggest recent rises and drops.
+- **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button.
 
-## Quick start
+## Run it on your computer
 
 ```bash
 npm install
-npx playwright install chromium   # only needed for "Order cheapest" and SCRAPE_MODE=browser
-npm run seed:demo                 # optional: fake demo data so you can try the UI immediately
-npm start                         # http://localhost:3000
+npm run seed:demo            # optional: fake demo data so you can try the UI immediately
+ADMIN_EMAILS=you@example.com npm start   # http://localhost:3000, then sign up with that email
 ```
 
-Then open the **Data** tab and press **Refresh prices now**, or run a scrape from the terminal:
+Open **Admin**, then press **Refresh all prices**. You can also scrape from the terminal:
 
 ```bash
-npm run scrape                          # all stores, all categories (20–40 min)
-npm run scrape -- coles                 # one store
-npm run scrape -- aldi --max-pages=2    # quick partial run for testing
-npm run scrape -- woolworths --categories=dairy-eggs-fridge,pantry
+npm run scrape                          # all stores (20–60 min)
+npm run scrape -- iga harrisfarm        # some stores
+npm run scrape -- aldi --max-pages=2    # quick partial run
 ```
 
-Once you have real data, remove the demo products with `npm run seed:demo -- --clear`.
+Once you have real data, remove the demo products with `npm run seed:demo -- --clear`. You can make an existing account an admin with `npm run admin -- you@example.com`.
 
-The server refreshes prices automatically every day at 04:15 (`SCRAPE_CRON`). Price history builds up from your first scrape onwards, because the stores don't publish historical prices.
+## Host it publicly
 
-## How ordering works
+The repo includes a `Dockerfile` and `docker-compose.yml`. The database is one SQLite file on a persistent volume (`/data`).
 
-1. Build your list and press **Order cheapest**. You'll see the split by store, with totals.
-2. Press **Fill my trolleys**. A Chromium window opens with its own profile, saved in `data/browser-profile`, so you only need to log in once.
-3. For Woolworths, items go in through the same trolley endpoint the website's own "Add to cart" button calls. For Coles, the app opens each product page and clicks **Add**. If an item can't be added (out of stock, or the store wants a delivery address first), it's listed with a link so you can add it yourself.
-4. The browser stops at each trolley. **You choose a delivery or pick-up slot and pay yourself.** The app never completes a purchase.
+```bash
+cp .env.example .env     # set ADMIN_EMAILS and check the other settings
+docker compose up -d --build
+```
+
+Put it behind a reverse proxy that handles HTTPS (Caddy, nginx, or your host's load balancer). In production, session cookies are HTTPS-only. Set `TRUST_PROXY` to the number of proxies in front of the app so client IPs (used for rate limiting) come through correctly. Sign up with the email in `ADMIN_EMAILS` to become the first admin.
+
+Any host that can run a Docker container with a persistent disk will work (a VPS, Fly.io, Railway, Render with a disk, and so on). Run **one** instance: SQLite and the in-process rate limiter and scheduler assume a single server. For more than one instance, move to PostgreSQL.
+
+**Scraping from a cloud server.** Coles, IGA and Harris Farm work from datacentre IPs. Woolworths and ALDI use Akamai bot protection that sometimes blocks cloud IPs. If their scrapes fail in the Admin page, run `npm run scrape -- woolworths aldi` from a home machine against the same database, or give the server a residential proxy through `HTTPS_PROXY`.
+
+### Security
+
+- Passwords are hashed with scrypt.
+- Sessions are random tokens in HttpOnly, SameSite=Lax cookies; only a hash of each token is stored.
+- State-changing requests must come from the site's own origin and be JSON.
+- Login, sign-up and search are rate-limited.
+- Every list endpoint checks membership: outsiders get "not found".
+- Pages send a strict Content-Security-Policy.
+
+## Ordering
+
+On the public site, **Order cheapest** gives a per-shop list with links to each product and copy and print buttons. It doesn't buy anything. The shops have no public ordering APIs, and they can't be given your login.
+
+When **self-hosting on your own computer**, set `ENABLE_TROLLEY_FILL=true` and run `npx playwright install chromium`. Admins then get a **Fill my trolleys automatically** button. It opens a browser on that machine, where you log in once, and adds the items to your Woolworths and Coles trolleys. It stops at the trolley, so you choose a delivery slot and pay yourself. Keep this off on a public server.
 
 ## Configuration
 
-Set these as environment variables (see `.env.example`):
+See `.env.example`. The main settings:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `3000` | Web server port |
-| `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices automatically. Set it empty to disable. |
-| `SCRAPE_MODE` | `fetch` | `browser` sends all scraping through a real Chromium, for when a store blocks plain HTTP requests |
-| `DATA_DIR` / `DB_PATH` | `data/` | Where the SQLite database and browser profile live |
-| `COLES_DELAY_MS`, `WOOLWORTHS_DELAY_MS`, `ALDI_DELAY_MS` | 1000 / 600 / 500 | Pause between requests to each store |
-| `COLES_SKIP_CATEGORIES`, `WOOLWORTHS_SKIP_CATEGORIES`, `ALDI_SKIP_CATEGORIES` | seasonal / duplicate groups | Comma-separated category slugs to leave out |
-| `CHROMIUM_PATH` | Playwright's | Use a different Chromium or Chrome binary |
+| `ADMIN_EMAILS` | — | Accounts with these emails become admins when they sign up |
+| `ALLOW_SIGNUPS` | `true` | Set to `false` to close registration |
+| `NODE_ENV` | — | `production` turns on HTTPS-only cookies |
+| `TRUST_PROXY` | — | Number of reverse proxies in front of the app |
+| `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices (server time); empty disables it |
+| `IGA_STORE_ID` | `32600` | Which IGA store's prices to track. IGA stores set their own prices; find IDs at `igashop.com.au/api/storefront/stores` |
+| `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |
+| `ENABLE_TROLLEY_FILL` | `false` | Self-hosted trolley automation (see above) |
+| `DATA_DIR` / `DB_PATH` | `data/` | Where the SQLite database lives |
+| `*_DELAY_MS`, `*_SKIP_CATEGORIES` | per store | Request pacing and categories to skip, per store |
+
+## Supermarkets
+
+| Chain | Source | Notes |
+|---|---|---|
+| Woolworths | Website JSON API | Akamai-protected; may need a home IP |
+| Coles | Next.js data routes | Backs off automatically when it serves a bot check |
+| ALDI | api.aldi.com.au | In-store only, so no online ordering |
+| IGA | igashop.com.au storefront API | Prices for one IGA store (`IGA_STORE_ID`) |
+| Harris Farm | Shopify `/products.json` | NSW, QLD and ACT |
+
+Chains I looked at but didn't add:
+
+- **Drakes** and **Foodland (SA)** both have online shops, but I couldn't reach either site from the development environment, so I couldn't check what their data looks like. They're good candidates to add next.
+- **FoodWorks, Costco and Spudshed** don't publish a usable online grocery catalogue.
+
+To add a chain, write a scraper module in `src/scrapers/` that yields products, then register it in `src/scrapers/index.js` and `src/stores.js`.
 
 ## How it works
 
 ```
 src/
-  scrapers/        one module per store + shared HTTP client (cookies, retries, bot-check back-off)
-    coles.js       Next.js JSON data routes  (/_next/data/<build>/en/browse/<category>.json)
-    woolworths.js  /apis/ui/PiesCategoriesWithSpecials + /apis/ui/browse/category
-    aldi.js        api.aldi.com.au /v2/product-category-tree + /v3/product-search
+  scrapers/        one module per chain + shared HTTP client (cookies, retries, bot-check back-off)
+  stores.js        the list of chains and their display info
   units.js         pack-size parsing ("6 x 375mL" → 2250 ml, "Per Kg" → 1000 g)
   matcher.js       "is this the same product?" — same size + similar name, brand stripped
-  compare.js       search, cross-store grouping, shopping list resolution, order plan
-  order/           trolley-filling automation (Playwright)
-  db.js            SQLite schema (products, price_history, shopping_list, …) with FTS5 search
-  server.js        Express API + daily schedule
+  compare.js       search and cross-store grouping
+  lists.js         shared lists, invites, per-store choices, cheapest split, store savings/cost
+  auth.js          accounts, sessions, CSRF/origin checks, rate limiting
+  order/           optional trolley-filling automation (Playwright, self-hosted only)
+  db.js            SQLite schema (products, price_history, users, lists, …) with FTS5 search
+  app.js           Express routes (public / logged-in / admin)
+  server.js        starts the app + daily schedule
 public/            the web UI (vanilla JS + Chart.js)
-test/              unit tests for size parsing and matching (npm test)
+test/              unit tests for size parsing and matching, API tests for accounts, sharing and pricing (npm test)
 ```
 
 ### Matching rules
@@ -80,5 +124,5 @@ test/              unit tests for size parsing and matching (npm test)
 
 - **Unofficial data.** None of these stores has a public API. The scrapers read the same JSON the store websites load, so a site redesign can break them. Each store's code is a short, self-contained module that's easy to fix.
 - **Bot protection.** Woolworths and ALDI sit behind Akamai and can block datacentre or cloud IPs. Run the app from a home connection, or try `SCRAPE_MODE=browser`.
-- **Prices are online prices.** In-store prices can differ by location. Coles and Woolworths prices here use their default store or region.
-- **Use it for yourself.** Keep the request delays polite, and check each store's terms of use. This is a personal tool, not a service to run at scale.
+- **Prices are online prices.** In-store prices can differ by location. Coles and Woolworths use their default store or region, and IGA uses the one store you configure.
+- **Terms of use.** Keep the request delays polite, and check each store's terms of use before running this publicly. Scraping data and republishing it is a grey area, and the stores may object to a public site.

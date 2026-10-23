@@ -4,11 +4,11 @@
 //    store's own origin (via Playwright). Slower, but survives bot protection
 //    that rejects non-browser clients. Set SCRAPE_MODE=browser to use it.
 
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
+import { ProxyAgent } from 'undici';
 
-// Node's fetch ignores proxy env vars; honour them so this works behind a proxy.
+// Node's fetch ignores proxy env vars; honour them for scraper requests so this works behind a proxy.
 const PROXY = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY;
-if (PROXY) setGlobalDispatcher(new ProxyAgent(PROXY));
+const dispatcher = PROXY ? new ProxyAgent(PROXY) : undefined;
 
 const UA = process.env.SCRAPE_USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
@@ -99,6 +99,7 @@ class FetchClient {
           },
           body: body ? JSON.stringify(body) : undefined,
           redirect: 'follow',
+          dispatcher,
         });
         this.storeCookies(res);
         const text = await res.text();

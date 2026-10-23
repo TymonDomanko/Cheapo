@@ -68,11 +68,13 @@ const ITEMS = [
   ['Tuna in Springwater', '95g', 'Canned Food', 1.6, { woolworths: 'John West', coles: 'John West' }],
 ];
 
-const STORE_FACTOR = { woolworths: 1.0, coles: 1.0, aldi: 0.86 };
+const STORE_FACTOR = { woolworths: 1.0, coles: 1.0, aldi: 0.86, iga: 1.1, harrisfarm: 1.06 };
 const SEARCH = {
   woolworths: (q) => `https://www.woolworths.com.au/shop/search/products?searchTerm=${encodeURIComponent(q)}`,
   coles: (q) => `https://www.coles.com.au/search/products?q=${encodeURIComponent(q)}`,
   aldi: (q) => `https://www.aldi.com.au/results?q=${encodeURIComponent(q)}`,
+  iga: (q) => `https://www.igashop.com.au/search?q=${encodeURIComponent(q)}`,
+  harrisfarm: (q) => `https://www.harrisfarm.com.au/search?q=${encodeURIComponent(q)}`,
 };
 
 // Deterministic PRNG so the demo looks the same every time.
@@ -82,7 +84,14 @@ const money = (n) => Math.max(0.5, Math.round(n * 20) / 20);
 
 const DAYS = 90;
 const products = [];
+const FRESH = new Set(['Milk', 'Eggs', 'Butter', 'Cheese', 'Yoghurt', 'Bread', 'Fruit', 'Vegetables', 'Salad', 'Poultry', 'Beef']);
 ITEMS.forEach(([name, size, category, base, brands], i) => {
+  // IGA carries its own "Community Co" range plus the national brands;
+  // Harris Farm mostly fresh food under its own name.
+  const national = brands.coles && brands.coles !== 'Coles' ? brands.coles : null;
+  brands = { ...brands };
+  if (brands.coles !== undefined) brands.iga = national ?? (brands.coles === '' ? '' : 'Community Co');
+  if (FRESH.has(category)) brands.harrisfarm = brands.coles === '' ? '' : national ?? 'Harris Farm';
   for (const [store, brand] of Object.entries(brands)) {
     const factor = STORE_FACTOR[store] * (0.95 + rand() * 0.1);
     products.push({
@@ -109,7 +118,7 @@ for (let day = DAYS; day >= 0; day--) {
       let price = p.price;
       if (p.rises && day < DAYS / 2) price = money(price * 1.08); // inflation step mid-way through
       // ALDI rarely runs specials; the others run half-price/discount cycles.
-      const onSpecial = store !== 'aldi' && (DAYS - day + p.specialOffset) % p.specialEvery < 7;
+      const onSpecial = store !== 'aldi' && store !== 'harrisfarm' && (DAYS - day + p.specialOffset) % p.specialEvery < 7;
       const now = onSpecial ? money(price * (rand() < 0.3 ? 0.5 : 0.8)) : price;
       return {
         store_product_id: p.id,

@@ -12,6 +12,7 @@
     "dev": "node --watch src/server.js",
     "scrape": "node src/cli/scrape.js",
     "seed:demo": "node src/cli/seed-demo.js",
+    "admin": "node src/cli/admin.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

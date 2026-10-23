@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseSizeFrom, altSize, unitPrice } from './units.js';
 
-export const STORES = ['woolworths', 'coles', 'aldi'];
+export { STORES } from './stores.js';
 
 const DATA_DIR = process.env.DATA_DIR || path.resolve('data');
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'supermarket.db');
@@ -76,20 +76,64 @@ function migrate(d) {
     );
     CREATE INDEX IF NOT EXISTS idx_history_product ON price_history (product_id, recorded_at);
 
-    CREATE TABLE IF NOT EXISTS shopping_list (
+    CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    -- Only a hash of the session token is stored, so a leaked database can't be used to log in.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS lists (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      excluded_stores TEXT NOT NULL DEFAULT '[]', -- JSON array of store ids not to shop at
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS list_members (
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member', -- owner | member
+      joined_at TEXT NOT NULL,
+      PRIMARY KEY (list_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS list_invites (
+      token TEXT PRIMARY KEY,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS list_items (
+      id INTEGER PRIMARY KEY,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
       quantity INTEGER NOT NULL DEFAULT 1,
       match_mode TEXT NOT NULL DEFAULT 'similar', -- similar | exact | this
+      added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       added_at TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_list_items_list ON list_items (list_id);
 
     -- Per-store manual choice for a list item. product_id NULL = never buy this item at that store.
-    CREATE TABLE IF NOT EXISTS list_overrides (
-      list_item_id INTEGER NOT NULL REFERENCES shopping_list(id) ON DELETE CASCADE,
+    CREATE TABLE IF NOT EXISTS list_item_overrides (
+      item_id INTEGER NOT NULL REFERENCES list_items(id) ON DELETE CASCADE,
       store TEXT NOT NULL,
       product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-      PRIMARY KEY (list_item_id, store)
+      PRIMARY KEY (item_id, store)
     );
 
     CREATE TABLE IF NOT EXISTS scrape_runs (
