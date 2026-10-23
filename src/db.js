@@ -175,6 +175,10 @@ function migrate(d) {
   migratePerStorePrices(d);
   migrateAccountsAndShopping(d);
   migrateNoteItems(d);
+  // An item can be pinned to one shop ("always get this at Coles") instead of the cheapest.
+  if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'pinned_store')) {
+    d.exec('ALTER TABLE list_items ADD COLUMN pinned_store TEXT');
+  }
   // The order a shopper ticks things off at each shop, to learn its layout.
   d.exec(`CREATE TABLE IF NOT EXISTS tick_log (
       id INTEGER PRIMARY KEY,

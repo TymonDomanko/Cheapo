@@ -869,3 +869,44 @@ test('admin data health', async () => {
   assert.ok(Array.isArray(hh.alerts));
   assert.equal((await client()('GET', '/api/admin/health')).status, 401);
 });
+
+test('an item can be pinned to one shop instead of the cheapest', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'pinner@example.com', password: 'password123' });
+  const list = (await api('GET', `/api/lists`)).body[0];
+  const milk = await productId(api, 'milk', 'woolworths');
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  const item = v.items[0].id;
+  assert.equal(v.items[0].cheapest, 'aldi', '$2.99 at ALDI is cheapest');
+  assert.equal(v.items[0].pin, null);
+
+  assert.equal((await api('PATCH', `/api/items/${item}`, { pinnedStore: 'nowhere' })).status, 400);
+  await api('PATCH', `/api/items/${item}`, { pinnedStore: 'woolworths' });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'woolworths');
+  const ww = v.items[0].perStore.woolworths.product.price;
+  const aldi = v.items[0].perStore.aldi.product.price;
+  assert.deepEqual(v.items[0].pin, { store: 'woolworths', honoured: true, cheapest: 'aldi', extra: Math.round((ww - aldi) * 100) / 100 });
+  assert.equal(v.plan.byStore.woolworths.items.length, 1, 'the shopping plan follows the pin');
+  assert.equal(v.plan.total, ww);
+
+  // Switch Woolworths off for the list: the pin can't apply, so it's bought at the cheapest shop.
+  await api('PATCH', `/api/lists/${list.id}`, { excludedStores: ['woolworths'] });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'aldi');
+  assert.deepEqual(v.items[0].pin, { store: 'woolworths', honoured: false, reason: 'shop-excluded' });
+  await api('PATCH', `/api/lists/${list.id}`, { excludedStores: [] });
+
+  // Saved shops remember the pin.
+  await api('POST', `/api/lists/${list.id}/snapshots`, { name: 'Weekly' });
+  await api('DELETE', `/api/items/${item}`);
+  const snap = (await api('GET', `/api/lists/${list.id}/snapshots`)).body[0];
+  await api('POST', `/api/lists/${list.id}/snapshots/${snap.id}/add`);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].pinnedStore, 'woolworths');
+
+  await api('PATCH', `/api/items/${v.items[0].id}`, { pinnedStore: null });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'aldi');
+});

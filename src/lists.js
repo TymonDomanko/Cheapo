@@ -202,9 +202,13 @@ function clampQty(q) {
   return Math.min(99, Math.max(1, Number(q) | 0 || 1));
 }
 
-export function updateItem(itemId, userId, { quantity, matchMode, note, productId }) {
+export function updateItem(itemId, userId, { quantity, matchMode, note, productId, pinnedStore }) {
   requireMember(itemListId(itemId), userId);
   const d = getDb();
+  if (pinnedStore !== undefined) {
+    if (pinnedStore !== null && !STORES.includes(pinnedStore)) throw httpError(400, 'Unknown shop');
+    d.prepare('UPDATE list_items SET pinned_store = ? WHERE id = ?').run(pinnedStore, itemId);
+  }
   if (note != null) d.prepare('UPDATE list_items SET note = ? WHERE id = ? AND product_id IS NULL').run(cleanNote(note), itemId);
   // Turn a note into a product once you've found the one you want.
   if (productId != null) {
@@ -290,7 +294,7 @@ export function resolveItems(listId, igaStore = null, memberships = []) {
     }
     return {
       id: item.id, quantity: item.quantity, matchMode: item.match_mode, addedBy: item.added_by_name,
-      checkedAt: item.checked_at, checkedBy: item.checked_by_name,
+      checkedAt: item.checked_at, checkedBy: item.checked_by_name, pinnedStore: item.pinned_store || null,
       anchor, perStore,
     };
   });
@@ -303,6 +307,8 @@ function buyable(ps) {
 const costAt = (item, s, memberships) => lineCost(item.perStore[s].product, item.quantity, memberships);
 
 function cheapestAmong(item, stores, memberships) {
+  // Pinned to a shop you're using that has it: buy it there, whatever the price.
+  if (item.pinnedStore && stores.includes(item.pinnedStore) && buyable(item.perStore[item.pinnedStore])) return item.pinnedStore;
   let best = null;
   for (const s of stores) {
     if (buyable(item.perStore[s]) && (!best || costAt(item, s, memberships) < costAt(item, best, memberships))) best = s;
@@ -370,6 +376,21 @@ export function storeImpact(items, included, memberships = []) {
   return out;
 }
 
+/**
+ * For an item pinned to a shop: whether it's being bought there, and if so
+ * what that costs compared with the cheapest shop; if not, why not.
+ */
+function pinInfo(it, chosen, included, memberships) {
+  if (!it.pinnedStore) return null;
+  const store = it.pinnedStore;
+  if (chosen !== store) {
+    return { store, honoured: false, reason: !included.includes(store) ? 'shop-excluded' : 'not-available' };
+  }
+  const free = cheapestAmong({ ...it, pinnedStore: null }, included, memberships);
+  const extra = free && free !== store ? round2(costAt(it, store, memberships) - costAt(it, free, memberships)) : 0;
+  return { store, honoured: true, cheapest: free, extra: Math.max(0, extra) };
+}
+
 /** Everything the list page needs in one go. */
 export function listView(listId, userId) {
   const summary = getListSummary(listId, userId);
@@ -397,6 +418,7 @@ export function listView(listId, userId) {
         lineTotal: chosen ? costAt(it, chosen, memberships) : null,
         // A different pack size that's cheaper per kg / L / item, if there is one.
         betterValue: chosen ? betterValue(it.perStore[chosen].product, { igaStore: summary.igaStoreId, stores: included, memberships }) : null,
+        pin: pinInfo(it, chosen, included, memberships),
         // Is now a good time to buy it? (From its price history.)
         priceInsight: chosen ? productInsight(it.perStore[chosen].product, summary.igaStoreId) : null,
       };
@@ -422,7 +444,7 @@ export function setChecked(itemId, userId, checked) {
 export function finishShop(listId, userId) {
   requireMember(listId, userId);
   const d = getDb();
-  const ticked = d.prepare('SELECT product_id, note, quantity, match_mode FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').all(listId);
+  const ticked = d.prepare('SELECT product_id, note, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').all(listId);
   if (!ticked.length) throw httpError(400, 'Tick off what you bought first');
   const name = `Shop on ${new Date().toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}`;
   const spent = shopCost(listId, userId);
@@ -494,7 +516,7 @@ export function spending(listId, userId) {
 function saveSnapshot(listId, userId, name, kind, rows) {
   const items = rows.map((r) => (r.product_id == null
     ? { note: r.note, quantity: r.quantity }
-    : { productId: r.product_id, quantity: r.quantity, matchMode: r.match_mode }));
+    : { productId: r.product_id, quantity: r.quantity, matchMode: r.match_mode, pinnedStore: r.pinned_store || undefined }));
   return getDb().prepare('INSERT INTO list_snapshots (list_id, name, kind, items_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(listId, name, kind, JSON.stringify(items), userId, nowIso()).lastInsertRowid;
 }
@@ -502,7 +524,7 @@ function saveSnapshot(listId, userId, name, kind, rows) {
 /** Save what's on the list now as a "regular shop" you can add again any time. */
 export function saveRegularShop(listId, userId, name) {
   requireMember(listId, userId);
-  const rows = getDb().prepare('SELECT product_id, note, quantity, match_mode FROM list_items WHERE list_id = ?').all(listId);
+  const rows = getDb().prepare('SELECT product_id, note, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ?').all(listId);
   if (!rows.length) throw httpError(400, 'The list is empty');
   return { id: saveSnapshot(listId, userId, cleanName(name), 'saved', rows) };
 }
@@ -531,8 +553,8 @@ export function addSnapshot(listId, userId, snapshotId) {
     }
     if (!getProduct(it.productId)) continue;
     if (d.prepare('SELECT 1 FROM list_items WHERE list_id = ? AND product_id = ?').get(listId, it.productId)) continue;
-    d.prepare(`INSERT INTO list_items (list_id, product_id, quantity, match_mode, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(listId, it.productId, it.quantity, it.matchMode || 'similar', userId, nowIso());
+    d.prepare(`INSERT INTO list_items (list_id, product_id, quantity, match_mode, pinned_store, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(listId, it.productId, it.quantity, it.matchMode || 'similar', STORES.includes(it.pinnedStore) ? it.pinnedStore : null, userId, nowIso());
     added++;
   }
   return { added };

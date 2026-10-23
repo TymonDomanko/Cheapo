@@ -10,7 +10,7 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
 - **Choose your shops.** Each list has a card per supermarket that you can tick or untick:
   - A shop you use says what it's **saving you** (how much more the list would cost without it), and warns if it's the only place you can get some items.
   - A shop you've excluded says what it's **costing you** (how much including it would save).
-- **Order the cheapest.** Splits your list so each item comes from its cheapest shop. You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
+- **Order the cheapest.** Splits your list so each item comes from its cheapest shop (or the shop you've pinned it to: "always buy this at Coles", with what that costs you). You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
 - **Price history.** Each product has a step chart of its price over time, alongside the matching products at the other shops. A "Price changes" tab lists the biggest recent rises and drops.
 - **Is this a good price?** Products and list items say when today's price is the lowest in months, or when something regularly goes on special ("about every 6 weeks, next one likely in ~2 weeks") so you can wait.
 - **Barcode matching.** Woolworths and Coles products are matched exactly by barcode, which catches products whose names differ. Anyone can press **Wrong match?**; an admin confirms it and the fix applies for everyone.

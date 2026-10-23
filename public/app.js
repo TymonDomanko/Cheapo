@@ -694,6 +694,18 @@ function priceCell(store, match, cheapest, anchor) {
 }
 
 /** "3L is 18% cheaper per litre" line. */
+/** What pinning an item to one shop is doing. */
+function pinNote(it) {
+  const p = it.pin;
+  if (!p) return '';
+  const shop = esc(storeName(p.store));
+  if (!p.honoured) {
+    const why = p.reason === 'shop-excluded' ? `${shop} is switched off for this list` : `${shop} doesn’t have it at the moment`;
+    return `<div class="pin-note warn">📌 Set to always buy at ${shop}, but ${why} — getting it at the cheapest shop instead.</div>`;
+  }
+  return `<div class="pin-note">📌 Always bought at ${shop}${p.extra > 0.004 ? ` — <strong>${money(p.extra)} more</strong> than at ${esc(storeName(p.cheapest))}` : p.cheapest === p.store ? ' (the cheapest anyway)' : ''}.</div>`;
+}
+
 /** "Is this a good price?" from the product's history. Nothing for ordinary prices unless `always`. */
 function insightNote(ins, { always = false } = {}) {
   if (!ins || ins.verdict === 'unknown' && !always) return '';
@@ -1633,9 +1645,14 @@ function renderItem(it) {
         <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
         <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
       </select>
+      <select data-pin aria-label="Which shop to buy it at">
+        <option value="" ${!it.pinnedStore ? 'selected' : ''}>Buy at: cheapest shop</option>
+        ${state.allStores.map((s) => `<option value="${s}" ${it.pinnedStore === s ? 'selected' : ''}>Always buy at ${esc(storeName(s))}</option>`).join('')}
+      </select>
       <button class="small ghost" data-remove>Remove</button>
     </div>
     <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
+    ${pinNote(it)}
     ${insightNote(it.priceInsight)}
     ${valueHint(it.betterValue)}
   </div>`;
@@ -1654,7 +1671,7 @@ function renderPick(it, store, enabled) {
   return `<div class="pick ${win ? 'win' : ''} ${ps.excluded || !enabled ? 'excluded' : ''}">
     <div class="ph"><span class="store">${dot(store)}${esc(storeName(store))}</span>
       <span class="price">${p && !ps.excluded ? money(lineCost(p, it.quantity)) : '—'}</span></div>
-    <span class="pname" title="${esc(p?.name || '')}">${!enabled ? 'Shop excluded' : ps.excluded ? 'Excluded' : p ? `${esc(p.name)}${win ? ' · <strong class="saving">cheapest</strong>' : ''}` : 'No match found'}</span>
+    <span class="pname" title="${esc(p?.name || '')}">${!enabled ? 'Shop excluded' : ps.excluded ? 'Excluded' : p ? `${esc(p.name)}${win ? (it.pin?.honoured && it.pinnedStore === store ? ' · <strong>📌 buying here</strong>' : ' · <strong class="saving">cheapest</strong>') : ''}` : 'No match found'}</span>
     ${p && !ps.excluded ? dealBadges(p) : ''}
     ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">Wrong match?</button>` : ''}
     <select data-pick="${store}" aria-label="${esc(storeName(store))} product">${opts.join('')}</select>
@@ -1729,6 +1746,7 @@ $('#list-root').addEventListener('change', async (e) => {
     const id = item.dataset.item;
     if (t.matches('[data-qty]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { quantity: Number(t.value) } });
     else if (t.matches('[data-mode]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { matchMode: t.value } });
+    else if (t.matches('[data-pin]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { pinnedStore: t.value || null } });
     else if (t.matches('[data-pick]')) {
       const v = t.value;
       await api(`/api/items/${id}/stores/${t.dataset.pick}`, {
