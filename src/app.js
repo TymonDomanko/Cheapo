@@ -15,6 +15,9 @@ import * as lists from './lists.js';
 import * as iga from './iga.js';
 import { siteUrl, mailConfigured, siteName } from './mailer.js';
 import * as backup from './backup.js';
+import * as alerts from './alerts.js';
+import * as matchfix from './matchfix.js';
+import { backfillColesBarcodes, barcodeStatus, colesBarcodeProgress } from './barcodes.js';
 import { scrapeAll, scrapeStatus, serverStores, startRun, getRun, recordBatch, finishRun } from './scrapers/index.js';
 import crypto from 'node:crypto';
 import { startOrder, orderStatus } from './order/index.js';
@@ -124,6 +127,7 @@ export function createApp() {
       store,
       stores: req.user?.preferredStores,
       igaStore: igaFor(req),
+      memberships: req.user?.memberships || [],
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
       limit: Math.min(Number(req.query.limit) || 30, 60),
@@ -304,6 +308,50 @@ export function createApp() {
     lists.removeMember(id(req.params.id), req.user.id, id(req.params.userId));
   }));
 
+  // ------------------------------------------------------------ in the shop & saved shops
+
+  app.put('/api/items/:id/checked', requireUser, h((req) => lists.setChecked(id(req.params.id), req.user.id, !!req.body?.checked)));
+  app.post('/api/lists/:id/finish', requireUser, h((req) => lists.finishShop(id(req.params.id), req.user.id)));
+  app.get('/api/lists/:id/snapshots', requireUser, h((req) => lists.listSnapshots(id(req.params.id), req.user.id)));
+  app.post('/api/lists/:id/snapshots', requireUser, h((req) => lists.saveRegularShop(id(req.params.id), req.user.id, req.body?.name)));
+  app.post('/api/lists/:id/snapshots/:sid/add', requireUser, h((req) => lists.addSnapshot(id(req.params.id), req.user.id, id(req.params.sid))));
+  app.delete('/api/lists/:id/snapshots/:sid', requireUser, h((req) => lists.deleteSnapshot(id(req.params.id), req.user.id, id(req.params.sid))));
+
+  // ------------------------------------------------------------ price alerts
+
+  app.get('/api/watches', requireUser, h((req) => alerts.listWatches(req.user.id)));
+  app.put('/api/watches/:productId', requireUser, h((req) => alerts.setWatch(req.user.id, id(req.params.productId), req.body?.targetPrice ?? null)));
+  app.delete('/api/watches/:productId', requireUser, h((req) => alerts.removeWatch(req.user.id, id(req.params.productId))));
+
+  // One-click unsubscribe from email links (GET from a browser, POST from mail apps).
+  const unsubscribe = (req, res) => {
+    const q = { ...req.query, ...(req.body || {}) };
+    try {
+      alerts.unsubscribe(Number(q.u), String(q.k), String(q.s));
+      res.type('html').send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unsubscribed</title>
+        <body style="font-family:system-ui;max-width:480px;margin:60px auto;padding:0 16px"><h1>You’re unsubscribed</h1>
+        <p>You won’t get ${q.k === 'weekly' ? 'the weekly specials email' : 'price alert emails'} any more. You can turn ${q.k === 'weekly' ? 'it' : 'them'} back on in <a href="/settings">Settings</a>.</p></body>`);
+    } catch (e) {
+      res.status(400).type('text').send(e.message);
+    }
+  };
+  app.get('/api/unsubscribe', unsubscribe);
+  app.post('/api/unsubscribe', express.urlencoded({ extended: false }), unsubscribe);
+
+  // ------------------------------------------------------------ wrong matches
+
+  app.post('/api/match-reports', requireUser, h((req) => {
+    const { anchorId, productId, kind, note } = req.body || {};
+    return matchfix.report({ userId: req.user.id, isAdmin: req.user.isAdmin, anchorId: id(anchorId), productId: id(productId), kind, note });
+  }));
+  app.get('/api/admin/match-reports', requireAdmin, h(() => ({ open: matchfix.openReports(), rules: matchfix.listRules() })));
+  app.post('/api/admin/match-reports/:id', requireAdmin, h((req) => {
+    const decision = req.body?.decision;
+    if (!['accept', 'dismiss'].includes(decision)) throw bad('decision must be accept or dismiss');
+    return matchfix.resolve(id(req.params.id), decision, req.user.id);
+  }));
+  app.delete('/api/admin/match-rules/:a/:b', requireAdmin, h((req) => matchfix.removeRule(id(req.params.a), id(req.params.b))));
+
   // ------------------------------------------------------------ home collector
   // Stores that block cloud servers (Woolworths, ALDI) can be crawled from a
   // home connection by `npm run collect`, which sends the products here.
@@ -361,6 +409,8 @@ export function createApp() {
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
       scrapeCron: process.env.SCRAPE_CRON ?? '15 4 * * *',
       collectorEnabled: !!process.env.COLLECTOR_TOKEN,
+      barcodes: { ...colesBarcodeProgress(), status: barcodeStatus },
+      openMatchReports: getDb().prepare("SELECT COUNT(*) n FROM match_reports WHERE status = 'open'").get().n,
     };
   }));
 
@@ -370,6 +420,15 @@ export function createApp() {
     scrapeAll(stores).catch(() => {});
     return { started: stores };
   }));
+
+  app.post('/api/admin/barcodes', requireAdmin, h(() => {
+    backfillColesBarcodes().catch((e) => console.error(`barcodes: ${e.message}`));
+    return { started: true };
+  }));
+  app.post('/api/admin/send-alerts', requireAdmin, h(async (req) => ({
+    priceAlerts: await alerts.sendPriceAlerts({ baseUrl: siteUrl(req) }),
+    weekly: req.body?.weekly ? await alerts.sendWeeklyDigests({ baseUrl: siteUrl(req) }) : null,
+  })));
 
   app.delete('/api/admin/iga/:storeId', requireAdmin, h((req) => iga.untrack(req.params.storeId)));
   app.post('/api/admin/iga/check', requireAdmin, h(() => {

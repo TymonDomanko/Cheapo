@@ -2,7 +2,8 @@
 
 import { getDb } from './db.js';
 import { STORES } from './stores.js';
-import { nameTokens, rankMatches } from './matcher.js';
+import { nameTokens, rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
+import { unitPriceFor } from './promos.js';
 import { defaultStoreId } from './iga.js';
 
 // Chains where each store sets its own prices (IGA) keep one shared catalogue
@@ -17,7 +18,9 @@ const PRODUCT_COLS = `p.id, p.store, p.store_product_id, p.name, p.brand, p.size
   p.alt_size_qty, p.alt_size_unit, p.per_weight, p.category, p.image_url, p.product_url,
   ${priced('price')} AS price, ${priced('was_price')} AS was_price, ${priced('unit_price')} AS unit_price,
   ${priced('unit_price_text')} AS unit_price_text, ${priced('on_special', 0)} AS on_special,
-  ${priced('available', 0)} AS available, p.first_seen, p.last_seen, sp.location AS location`;
+  ${priced('available', 0)} AS available, ${priced('promo_text')} AS promo_text, ${priced('multi_qty')} AS multi_qty,
+  ${priced('multi_price')} AS multi_price, ${priced('member_price')} AS member_price, p.barcode,
+  p.first_seen, p.last_seen, sp.location AS location`;
 const AVAILABLE_SQL = `${priced('available', 0)} = 1`;
 const loc = (igaStore) => String(igaStore || defaultStoreId());
 
@@ -92,29 +95,101 @@ export function findEquivalents(anchor, mode = 'similar', igaStore = null) {
       WHERE products_fts MATCH ? AND ${AVAILABLE_SQL} AND (${conds.join(' OR ')})
       ORDER BY rank LIMIT 400`).all(loc(igaStore), ftsQuery(toks.join(' '), 'OR'), ...params);
   }
-  const ranked = rankMatches(anchor, candidates, mode);
+  const rules = matchRulesFor(anchor.id);
+  let ranked = rankMatches(anchor, candidates, mode).filter((m) => {
+    const p = m.product;
+    if (rules.never.has(p.id)) return false;
+    // Same brand and size but a different barcode: a different variant the name didn't reveal.
+    if (anchor.barcode && p.barcode && anchor.barcode !== p.barcode && sameBrand(anchor, p)) return false;
+    return true;
+  });
+  // Exact matches the name rules can't see: same barcode, or confirmed by an admin.
+  const sure = [];
+  if (anchor.barcode) {
+    sure.push(...d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE p.barcode = ? AND p.id != ? AND ${AVAILABLE_SQL}`)
+      .all(loc(igaStore), anchor.barcode, anchor.id).map((p) => ({ product: p, score: 1, via: 'barcode' })));
+  }
+  for (const pid of rules.always) {
+    const p = getProduct(pid, igaStore);
+    if (p?.available && (mode !== 'exact' || sameBrand(anchor, p))) sure.push({ product: p, score: 1, via: 'confirmed' });
+  }
+  if (sure.length) {
+    const ids = new Set(sure.map((m) => m.product.id));
+    ranked = [...sure.filter((m) => !rules.never.has(m.product.id)), ...ranked.filter((m) => !ids.has(m.product.id))];
+  }
   if (!ranked.some((m) => m.product.id === anchor.id)) ranked.unshift({ product: anchor, score: 1 });
   return ranked;
 }
 
+/** Admin-confirmed fixes involving this product: ids that are never / always the same item. */
+export function matchRulesFor(productId) {
+  const rows = getDb().prepare('SELECT a_id, b_id, kind FROM match_rules WHERE a_id = ? OR b_id = ?').all(productId, productId);
+  const out = { never: new Set(), always: new Set() };
+  for (const r of rows) out[r.kind].add(r.a_id === productId ? r.b_id : r.a_id);
+  return out;
+}
+
 /** Cheapest equivalent per store, e.g. { coles: {product, score}, aldi: {...} }. */
-export function bestPerStore(equivalents) {
+export function bestPerStore(equivalents, memberships = []) {
   const best = {};
   for (const m of equivalents) {
     const p = m.product;
     if (p.price == null || !p.available) continue;
     const cur = best[p.store];
-    if (!cur || p.price < cur.product.price) best[p.store] = m;
+    if (!cur || unitPriceFor(p, memberships) < unitPriceFor(cur.product, memberships)) best[p.store] = m;
   }
   return best;
 }
 
-function cheapestStore(best, stores = STORES) {
+function cheapestStore(best, memberships = []) {
   let out = null;
-  for (const s of stores) {
-    if (best[s] && (!out || best[s].product.price < best[out].product.price)) out = s;
+  for (const s of STORES) {
+    if (best[s] && (!out || unitPriceFor(best[s].product, memberships) < unitPriceFor(best[out].product, memberships))) out = s;
   }
   return out;
+}
+
+const UNIT_WORD = { g: 'kg', ml: 'L', ea: 'item' };
+const perUnit = (p, memberships) => {
+  const price = unitPriceFor(p, memberships);
+  if (price == null || !p.size_qty) return null;
+  // Price per kg / per litre / per item.
+  return p.size_unit === 'ea' ? price / p.size_qty : (price / p.size_qty) * 1000;
+};
+
+/**
+ * The same item in a different pack size that works out cheaper per kg,
+ * litre or item (by at least 10%), at the given stores. Strict matching never
+ * mixes sizes; this is a separate, clearly labelled hint.
+ */
+export function betterValue(product, { igaStore = null, stores = STORES, memberships = [] } = {}) {
+  if (!product?.size_unit || product.per_weight) return null;
+  const base = perUnit(product, memberships);
+  if (!base) return null;
+  const toks = [...nameTokens(product.name, product.brand)];
+  if (!toks.length) return null;
+  const allowed = storeSet(stores);
+  const candidates = getDb().prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
+      WHERE products_fts MATCH ? AND ${AVAILABLE_SQL} AND p.size_unit = ? AND p.per_weight = 0
+        AND p.size_qty BETWEEN ? AND ? AND ABS(p.size_qty - ?) > ? * 0.02
+      ORDER BY rank LIMIT 300`)
+    .all(loc(igaStore), ftsQuery(toks.join(' '), 'OR'), product.size_unit, product.size_qty / 4, product.size_qty * 4,
+      product.size_qty, product.size_qty);
+  let best = null;
+  for (const c of candidates) {
+    if (!allowed.includes(c.store)) continue;
+    if (matchScore(product, c, 'similar', { ignoreSize: true }) < MATCH_THRESHOLD) continue;
+    const pu = perUnit(c, memberships);
+    if (pu && pu < base * 0.9 && (!best || pu < best.perUnit)) best = { product: c, perUnit: pu };
+  }
+  if (!best) return null;
+  return {
+    product: best.product,
+    savingPct: Math.round((1 - best.perUnit / base) * 100),
+    perUnit: Math.round(best.perUnit * 100) / 100,
+    basePerUnit: Math.round(base * 100) / 100,
+    unit: UNIT_WORD[product.size_unit],
+  };
 }
 
 /**
@@ -130,11 +205,13 @@ export function compareSearch(q, opts = {}) {
     if (seen.has(p.id)) continue;
     const eq = findEquivalents(p, opts.mode || 'similar', opts.igaStore).filter((m) => stores.includes(m.product.store));
     for (const m of eq) seen.add(m.product.id);
-    const best = bestPerStore(eq);
+    const best = bestPerStore(eq, opts.memberships);
+    const cheapest = cheapestStore(best, opts.memberships);
     groups.push({
       anchor: p,
       best,
-      cheapest: cheapestStore(best),
+      cheapest,
+      betterValue: cheapest ? betterValue(best[cheapest].product, { igaStore: opts.igaStore, stores, memberships: opts.memberships }) : null,
       members: eq.map((m) => ({ ...m.product, score: m.score })).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)),
     });
   }

@@ -100,9 +100,10 @@ export function sameBrand(a, b) {
  * the same product (different sizes, or brand mismatch in 'exact' mode).
  * @param {'similar'|'exact'} mode
  */
-export function matchScore(anchor, candidate, mode = 'similar') {
+/** @param {{ignoreSize?: boolean}} opts  ignoreSize: same item in any pack size (for "better value" hints) */
+export function matchScore(anchor, candidate, mode = 'similar', { ignoreSize = false } = {}) {
   if (anchor.id != null && anchor.id === candidate.id) return 1;
-  if (!samePack(anchor, candidate)) return 0;
+  if (!ignoreSize && !samePack(anchor, candidate)) return 0;
   if (mode === 'exact' && !sameBrand(anchor, candidate)) return 0;
   const a = anchor._tokens || nameTokens(anchor.name, anchor.brand);
   const c = candidate._tokens || nameTokens(candidate.name, candidate.brand);

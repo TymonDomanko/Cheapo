@@ -96,6 +96,8 @@ export function mapProduct(p, categoryName) {
     was_price: p.WasPrice && p.WasPrice > (p.Price ?? 0) ? p.WasPrice : null,
     unit_price_text: p.CupString || null,
     on_special: !!p.IsOnSpecial || !!p.IsHalfPrice,
+    barcode: /^\d{8,14}$/.test(String(p.Barcode || '')) ? String(p.Barcode) : null,
+    ...promotions(p),
     available: p.IsAvailable !== false && p.IsPurchasable !== false && p.Price != null,
   };
 }
@@ -108,4 +110,20 @@ function safeFirst(jsonText) {
   } catch {
     return null;
   }
+}
+
+/** Multi-buy ("5 for $9.00") and Everyday Rewards member prices. */
+function promotions(p) {
+  const tag = p.CentreTag || {};
+  const multi = tag.MultibuyData;
+  const memberData = tag.MemberPriceData || tag.FFPVMemberPriceData;
+  const member = Number(memberData?.MemberPrice ?? memberData?.Price ?? (p.IsEdrSpecial ? p.EdrSpecialPrice : NaN));
+  const text = String(tag.TagContentText || '').trim();
+  return {
+    multi_qty: multi?.Quantity >= 2 ? multi.Quantity : null,
+    multi_price: multi?.Quantity >= 2 && multi.Price > 0 ? multi.Price : null,
+    member_price: Number.isFinite(member) && member > 0 ? member : null,
+    // Only deals worth showing; "Was $3.30 - 25/08/2026" is already covered by was_price.
+    promo_text: multi || Number.isFinite(member) ? text.replace(/\s*-\s*\$[\d.]+\s*\/.*$/, '') || null : null,
+  };
 }

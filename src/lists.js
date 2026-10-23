@@ -4,7 +4,9 @@
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
 import { STORES } from './stores.js';
-import { getProduct, findEquivalents, bestPerStore } from './compare.js';
+import { getProduct, findEquivalents, betterValue } from './compare.js';
+import { lineCost, unitPriceFor } from './promos.js';
+import { getUser } from './auth.js';
 import { getStore, defaultStoreId } from './iga.js';
 import { matchScore } from './matcher.js';
 
@@ -217,16 +219,24 @@ export function setItemStore(itemId, userId, store, productId) {
 // ---------------------------------------------------------------- pricing the list
 
 /** For each item: what it would be at every store (matches + manual choices). */
-export function resolveItems(listId, igaStore = null) {
+export function resolveItems(listId, igaStore = null, memberships = []) {
   const d = getDb();
-  const items = d.prepare(`SELECT i.*, u.name AS added_by_name FROM list_items i LEFT JOIN users u ON u.id = i.added_by
+  const items = d.prepare(`SELECT i.*, u.name AS added_by_name, c.name AS checked_by_name FROM list_items i
+    LEFT JOIN users u ON u.id = i.added_by LEFT JOIN users c ON c.id = i.checked_by
     WHERE i.list_id = ? ORDER BY i.added_at, i.id`).all(listId);
   const overrides = d.prepare(`SELECT o.* FROM list_item_overrides o JOIN list_items i ON i.id = o.item_id
     WHERE i.list_id = ?`).all(listId);
   return items.map((item) => {
     const anchor = getProduct(item.product_id, igaStore);
     const eq = findEquivalents(anchor, item.match_mode, igaStore);
-    const best = bestPerStore(eq);
+    // Cheapest equivalent at each store *for this quantity* (multi-buys and member prices count).
+    const best = {};
+    for (const m of eq) {
+      const p = m.product;
+      if (!p.available || p.price == null) continue;
+      const cost = lineCost(p, item.quantity, memberships);
+      if (!best[p.store] || cost < best[p.store].cost) best[p.store] = { ...m, cost };
+    }
     const perStore = {};
     for (const s of STORES) {
       const ov = overrides.find((o) => o.item_id === item.id && o.store === s);
@@ -243,6 +253,7 @@ export function resolveItems(listId, igaStore = null) {
     }
     return {
       id: item.id, quantity: item.quantity, matchMode: item.match_mode, addedBy: item.added_by_name,
+      checkedAt: item.checked_at, checkedBy: item.checked_by_name,
       anchor, perStore,
     };
   });
@@ -252,30 +263,35 @@ function buyable(ps) {
   return ps?.product && !ps.excluded && ps.product.available && ps.product.price != null;
 }
 
-function cheapestAmong(item, stores) {
+const costAt = (item, s, memberships) => lineCost(item.perStore[s].product, item.quantity, memberships);
+
+function cheapestAmong(item, stores, memberships) {
   let best = null;
   for (const s of stores) {
-    const ps = item.perStore[s];
-    if (buyable(ps) && (!best || ps.product.price < item.perStore[best].product.price)) best = s;
+    if (buyable(item.perStore[s]) && (!best || costAt(item, s, memberships) < costAt(item, best, memberships))) best = s;
   }
   return best;
 }
 
 /** Split resolved items across `stores`, each item going to its cheapest store. */
-export function planFor(items, stores) {
+export function planFor(items, stores, memberships = []) {
   const byStore = Object.fromEntries(stores.map((s) => [s, { items: [], total: 0 }]));
   const unavailable = [];
   const choice = {};
   for (const it of items) {
-    const s = cheapestAmong(it, stores);
+    const s = cheapestAmong(it, stores, memberships);
     choice[it.id] = s;
     if (!s) {
       unavailable.push({ id: it.id, name: it.anchor.name });
       continue;
     }
     const p = it.perStore[s].product;
-    const lineTotal = round2(p.price * it.quantity);
-    byStore[s].items.push({ itemId: it.id, quantity: it.quantity, product: p, lineTotal });
+    const lineTotal = costAt(it, s, memberships);
+    const plain = round2(p.price * it.quantity);
+    byStore[s].items.push({
+      itemId: it.id, quantity: it.quantity, product: p, lineTotal, unitPrice: unitPriceFor(p, memberships),
+      dealSaving: plain > lineTotal ? round2(plain - lineTotal) : 0, // from a multi-buy or member price
+    });
     byStore[s].total = round2(byStore[s].total + lineTotal);
   }
   const total = round2(Object.values(byStore).reduce((n, s) => n + s.total, 0));
@@ -288,18 +304,18 @@ export function planFor(items, stores) {
  * adding it back would save. Items that can only be bought at that store are
  * counted separately rather than folded into the dollar figure.
  */
-export function storeImpact(items, included) {
-  const current = planFor(items, included);
+export function storeImpact(items, included, memberships = []) {
+  const current = planFor(items, included, memberships);
   const out = {};
   for (const s of STORES) {
     const isIn = included.includes(s);
-    const alt = planFor(items, isIn ? included.filter((x) => x !== s) : [...included, s]);
+    const alt = planFor(items, isIn ? included.filter((x) => x !== s) : [...included, s], memberships);
     let delta = 0; // alt - current, over items buyable in both scenarios
     let onlyHere = 0; // items available in one scenario but not the other
     for (const it of items) {
       const a = current.choice[it.id];
       const b = alt.choice[it.id];
-      if (a && b) delta += (it.perStore[b].product.price - it.perStore[a].product.price) * it.quantity;
+      if (a && b) delta += costAt(it, b, memberships) - costAt(it, a, memberships);
       else if (a || b) onlyHere++;
     }
     delta = round2(delta);
@@ -313,20 +329,103 @@ export function storeImpact(items, included) {
 /** Everything the list page needs in one go. */
 export function listView(listId, userId) {
   const summary = getListSummary(listId, userId);
-  const items = resolveItems(listId, summary.igaStoreId);
+  // Member prices are personal: each person on a shared list sees their own.
+  const memberships = getUser(userId)?.memberships || [];
+  const items = resolveItems(listId, summary.igaStoreId, memberships);
   const included = STORES.filter((s) => !summary.excludedStores.includes(s));
-  const plan = planFor(items, included);
+  const plan = planFor(items, included, memberships);
   const singleStore = Object.fromEntries(STORES.map((s) => {
-    const p = planFor(items, [s]);
+    const p = planFor(items, [s], memberships);
     return [s, { total: p.total, missing: p.unavailable.length }];
   }));
   return {
     ...summary,
     igaStore: getStore(summary.igaStoreId),
+    memberships,
     included,
-    items: items.map((it) => ({ ...it, cheapest: plan.choice[it.id] })),
+    items: items.map((it) => {
+      const chosen = plan.choice[it.id];
+      return {
+        ...it,
+        cheapest: chosen,
+        lineTotal: chosen ? costAt(it, chosen, memberships) : null,
+        // A different pack size that's cheaper per kg / L / item, if there is one.
+        betterValue: chosen ? betterValue(it.perStore[chosen].product, { igaStore: summary.igaStoreId, stores: included, memberships }) : null,
+      };
+    }),
     plan: { byStore: plan.byStore, total: plan.total, unavailable: plan.unavailable },
-    impact: storeImpact(items, included),
+    impact: storeImpact(items, included, memberships),
     singleStore,
   };
+}
+
+// ---------------------------------------------------------------- in the shop
+
+/** Tick an item off (or un-tick it) while shopping; everyone on the list sees it. */
+export function setChecked(itemId, userId, checked) {
+  requireMember(itemListId(itemId), userId);
+  getDb().prepare('UPDATE list_items SET checked_at = ?, checked_by = ? WHERE id = ?')
+    .run(checked ? nowIso() : null, checked ? userId : null, itemId);
+}
+
+/** Finished shopping: remember what was bought (to repeat later) and take it off the list. */
+export function finishShop(listId, userId) {
+  requireMember(listId, userId);
+  const d = getDb();
+  const ticked = d.prepare('SELECT product_id, quantity, match_mode FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').all(listId);
+  if (!ticked.length) throw httpError(400, 'Tick off what you bought first');
+  const name = `Shop on ${new Date().toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}`;
+  d.transaction(() => {
+    saveSnapshot(listId, userId, name, 'history', ticked);
+    d.prepare('DELETE FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').run(listId);
+    // Keep the last 12 finished shops per list.
+    d.prepare(`DELETE FROM list_snapshots WHERE list_id = ? AND kind = 'history' AND id NOT IN
+      (SELECT id FROM list_snapshots WHERE list_id = ? AND kind = 'history' ORDER BY id DESC LIMIT 12)`).run(listId, listId);
+  })();
+  return { name, items: ticked.length };
+}
+
+// ---------------------------------------------------------------- saved & past shops
+
+function saveSnapshot(listId, userId, name, kind, rows) {
+  const items = rows.map((r) => ({ productId: r.product_id, quantity: r.quantity, matchMode: r.match_mode }));
+  return getDb().prepare('INSERT INTO list_snapshots (list_id, name, kind, items_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(listId, name, kind, JSON.stringify(items), userId, nowIso()).lastInsertRowid;
+}
+
+/** Save what's on the list now as a "regular shop" you can add again any time. */
+export function saveRegularShop(listId, userId, name) {
+  requireMember(listId, userId);
+  const rows = getDb().prepare('SELECT product_id, quantity, match_mode FROM list_items WHERE list_id = ?').all(listId);
+  if (!rows.length) throw httpError(400, 'The list is empty');
+  return { id: saveSnapshot(listId, userId, cleanName(name), 'saved', rows) };
+}
+
+export function listSnapshots(listId, userId) {
+  requireMember(listId, userId);
+  return getDb().prepare(`SELECT id, name, kind, items_json, created_at FROM list_snapshots WHERE list_id = ?
+    ORDER BY kind = 'saved' DESC, id DESC`).all(listId)
+    .map((r) => ({ id: r.id, name: r.name, kind: r.kind, createdAt: r.created_at, items: JSON.parse(r.items_json).length }));
+}
+
+/** Add a saved or past shop's items to the list (skipping things already on it). */
+export function addSnapshot(listId, userId, snapshotId) {
+  requireMember(listId, userId);
+  const d = getDb();
+  const snap = d.prepare('SELECT * FROM list_snapshots WHERE id = ? AND list_id = ?').get(snapshotId, listId);
+  if (!snap) throw httpError(404, 'Not found');
+  let added = 0;
+  for (const it of JSON.parse(snap.items_json)) {
+    if (!getProduct(it.productId)) continue;
+    if (d.prepare('SELECT 1 FROM list_items WHERE list_id = ? AND product_id = ?').get(listId, it.productId)) continue;
+    d.prepare(`INSERT INTO list_items (list_id, product_id, quantity, match_mode, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(listId, it.productId, it.quantity, it.matchMode || 'similar', userId, nowIso());
+    added++;
+  }
+  return { added };
+}
+
+export function deleteSnapshot(listId, userId, snapshotId) {
+  requireMember(listId, userId);
+  getDb().prepare('DELETE FROM list_snapshots WHERE id = ? AND list_id = ?').run(snapshotId, listId);
 }

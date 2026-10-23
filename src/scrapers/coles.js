@@ -2,6 +2,7 @@
 // at /_next/data/<buildId>/en/browse/<slug>.json?page=N (48 products a page).
 
 import { createClient } from './http.js';
+import { parseMultiBuy } from '../promos.js';
 
 const ORIGIN = 'https://www.coles.com.au';
 const IMAGE_BASE = 'https://cdn.productimages.coles.com.au/productimages';
@@ -64,5 +65,17 @@ export function mapProduct(x, categoryName) {
     unit_price_text: pr.comparable || null,
     on_special: !!(pr.was && pr.was > pr.now) || !!pr.onlineSpecial || pr.promotionType === 'SPECIAL',
     available: x.availability !== false && pr.now != null,
+    ...promotions(pr),
+  };
+}
+
+/** Coles multi-buys ("Pick any 5 for $10"). Barcodes aren't in listings; see src/barcodes.js. */
+function promotions(pr) {
+  const deal = pr.multiBuyPromotion ? parseMultiBuy(pr.offerDescription) : null;
+  return {
+    multi_qty: deal?.qty ?? null,
+    multi_price: deal?.total ?? null,
+    member_price: null,
+    promo_text: pr.offerDescription || null,
   };
 }

@@ -3,6 +3,7 @@
 // catalogue at a time (opts.location = IGA's retailerStoreId).
 
 import { createClient } from './http.js';
+import { parseMultiBuy } from '../promos.js';
 
 const ORIGIN = 'https://www.igashop.com.au';
 const PAGE_SIZE = 100;
@@ -68,5 +69,9 @@ export function mapProduct(p, categoryName) {
     unit_price_text: p.pricePerUnit || null,
     on_special: p.priceSource && p.priceSource !== 'regular',
     available: p.available !== false && p.priceNumeric != null,
+    // IGA shows deals like "2 for $5" in priceLabel.
+    multi_qty: parseMultiBuy(p.priceLabel)?.qty ?? null,
+    multi_price: parseMultiBuy(p.priceLabel)?.total ?? null,
+    promo_text: p.priceLabel || null,
   };
 }

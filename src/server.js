@@ -4,6 +4,8 @@ import { createApp } from './app.js';
 import { scrapeAll, scrapeStatus, serverStores } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
+import { backfillColesBarcodes } from './barcodes.js';
+import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
 import { ensureDefaultTracked, ensureDirectory, checkOnlineStores, checkIsDue } from './iga.js';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -24,10 +26,17 @@ if (SCRAPE_CRON) {
     console.log('Scheduled refresh starting');
     // First update which IGA stores have prices online, so today's fetch covers the right ones.
     await checkOnlineStores().catch(() => {});
-    scrapeAll(serverStores().filter((s) => !scrapeStatus[s].running)).catch(() => {});
+    await scrapeAll(serverStores().filter((s) => !scrapeStatus[s].running)).catch(() => {});
+    // Then fill in more Coles barcodes for matching (a daily budget of product pages).
+    if (serverStores().includes('coles')) await backfillColesBarcodes().catch((e) => console.error(`barcodes: ${e.message}`));
+    await sendPriceAlerts().catch((e) => console.error(`price alerts: ${e.message}`));
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
+// Weekly "on special this week" email: Wednesday morning, when the big chains' specials change.
+cron.schedule(process.env.DIGEST_CRON || '0 8 * * 3', () => {
+  sendWeeklyDigests().catch((e) => console.error(`weekly digest: ${e.message}`));
+}, { timezone: process.env.TZ || undefined });
 // Daily database snapshot (kept BACKUP_KEEP_DAYS, default 7).
 cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
   try {

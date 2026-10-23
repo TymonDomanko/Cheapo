@@ -412,24 +412,27 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
   const insert = d.prepare(`
     INSERT INTO products (store, store_product_id, name, brand, size_text, size_qty, size_unit, alt_size_qty, alt_size_unit, per_weight,
       category, image_url, product_url, price, was_price, unit_price, unit_price_text, on_special, available,
-      location_priced, first_seen, last_seen)
+      promo_text, multi_qty, multi_price, member_price, barcode, location_priced, first_seen, last_seen)
     VALUES (@store, @store_product_id, @name, @brand, @size_text, @size_qty, @size_unit, @alt_size_qty, @alt_size_unit, @per_weight,
       @category, @image_url, @product_url, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available,
-      @location_priced, @seen, @seen)`);
+      @promo_text, @multi_qty, @multi_price, @member_price, @barcode, @location_priced, @seen, @seen)`);
   const update = d.prepare(`
     UPDATE products SET name=@name, brand=@brand, size_text=@size_text, size_qty=@size_qty, size_unit=@size_unit,
       alt_size_qty=@alt_size_qty, alt_size_unit=@alt_size_unit, per_weight=@per_weight, category=COALESCE(@category, category), image_url=COALESCE(@image_url, image_url),
       product_url=COALESCE(@product_url, product_url), price=@price, was_price=@was_price, unit_price=@unit_price,
       unit_price_text=@unit_price_text, on_special=@on_special, available=@available, location_priced=@location_priced,
-      last_seen=@seen
+      promo_text=@promo_text, multi_qty=@multi_qty, multi_price=@multi_price, member_price=@member_price,
+      barcode=COALESCE(@barcode, barcode), last_seen=@seen
     WHERE id=@id`);
   const upsertStorePrice = d.prepare(`
     INSERT INTO store_prices (product_id, location, price, was_price, unit_price, unit_price_text, on_special, available,
-      first_seen, last_seen)
-    VALUES (@id, @location, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available, @seen, @seen)
+      promo_text, multi_qty, multi_price, member_price, first_seen, last_seen)
+    VALUES (@id, @location, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available,
+      @promo_text, @multi_qty, @multi_price, @member_price, @seen, @seen)
     ON CONFLICT (product_id, location) DO UPDATE SET price=excluded.price, was_price=excluded.was_price,
       unit_price=excluded.unit_price, unit_price_text=excluded.unit_price_text, on_special=excluded.on_special,
-      available=excluded.available, last_seen=excluded.last_seen`);
+      available=excluded.available, promo_text=excluded.promo_text, multi_qty=excluded.multi_qty,
+      multi_price=excluded.multi_price, member_price=excluded.member_price, last_seen=excluded.last_seen`);
   const lastPrice = d.prepare(`SELECT price, on_special FROM price_history WHERE product_id = ? AND location IS ?
     ORDER BY recorded_at DESC, id DESC LIMIT 1`);
   const addHistory = d.prepare(
@@ -449,6 +452,10 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
         unit_price_text: raw.unit_price_text || null,
         on_special: raw.on_special ? 1 : 0,
         available: raw.available === false || num(raw.price) == null ? 0 : 1,
+        promo_text: raw.promo_text ? String(raw.promo_text).slice(0, 120) : null,
+        multi_qty: Number(raw.multi_qty) >= 2 && num(raw.multi_price) > 0 ? Math.round(Number(raw.multi_qty)) : null,
+        multi_price: Number(raw.multi_qty) >= 2 && num(raw.multi_price) > 0 ? num(raw.multi_price) : null,
+        member_price: num(raw.member_price) > 0 ? num(raw.member_price) : null,
       };
       const row = {
         store,
@@ -466,8 +473,10 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
         product_url: raw.product_url || null,
         // Catalogue rows of per-store chains carry no price of their own.
         ...(perStore
-          ? { price: null, was_price: null, unit_price: null, unit_price_text: null, on_special: 0, available: 1 }
+          ? { price: null, was_price: null, unit_price: null, unit_price_text: null, on_special: 0, available: 1,
+            promo_text: null, multi_qty: null, multi_price: null, member_price: null }
           : price),
+        barcode: /^\d{8,14}$/.test(String(raw.barcode || '')) ? String(raw.barcode) : null,
         location_priced: perStore ? 1 : 0,
         seen: seenAt,
       };

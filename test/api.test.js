@@ -339,3 +339,111 @@ test('home collector: token-protected ingest with complete runs', async () => {
   assert.equal(done.body.priceChanges, 1, 'ALDI milk 2.99 → 2.89 recorded');
   assert.equal((await post(`/api/ingest/runs/${run.runId}/items`, { items: [] })).status, 409, 'finished runs take no more data');
 });
+
+test('multi-buys and member prices change what a list costs', async () => {
+  // Woolworths: $2.90 each, or 5 for $9. Coles: $1.95 each.
+  upsertProducts('woolworths', [{ store_product_id: 'y1', name: 'Farmers Union Greek Yoghurt Pouch Vanilla 130g', brand: 'Farmers Union',
+    size_text: '130g', price: 2.9, multi_qty: 5, multi_price: 9, promo_text: '5 for $9.00', barcode: '9300658408045' }]);
+  upsertProducts('coles', [{ store_product_id: 'y1', name: 'Farmers Union Greek Yoghurt Pouch Vanilla', brand: 'Farmers Union',
+    size_text: '130g', price: 1.95 }]);
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'yog@example.com', password: 'password123', preferredStores: ['woolworths', 'coles'] });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const ww = (await api('GET', '/api/search?q=farmers+union+pouch&store=woolworths')).body[0].anchor.id;
+  await api('POST', `/api/lists/${list.id}/items`, { productId: ww, quantity: 4 });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'coles', '4 × $1.95 = $7.80 beats 4 × $2.90');
+  const item = v.items[0].id;
+  await api('PATCH', `/api/items/${item}`, { quantity: 5 });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'woolworths', '5 for $9 beats 5 × $1.95 = $9.75');
+  assert.equal(v.plan.total, 9);
+  assert.equal(v.plan.byStore.woolworths.items[0].dealSaving, 5.5);
+});
+
+test('member prices only count for members', async () => {
+  upsertProducts('woolworths', [{ store_product_id: 'm1', name: 'Arnotts Tim Tam Original 200g', brand: 'Arnotts', size_text: '200g', price: 5, member_price: 3.5 }]);
+  upsertProducts('coles', [{ store_product_id: 'm1', name: 'Arnotts Tim Tam Original', brand: 'Arnotts', size_text: '200g', price: 4 }]);
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'member@example.com', password: 'password123', preferredStores: ['woolworths', 'coles'] });
+  const cheapestFor = async () => (await api('GET', '/api/search?q=tim+tam')).body.find((g) => g.best.coles)?.cheapest;
+  assert.equal(await cheapestFor(), 'coles');
+  await api('PATCH', '/api/me', { memberships: ['woolworths'] });
+  assert.equal(await cheapestFor(), 'woolworths');
+});
+
+test('barcodes match products the names miss; same brand + different barcode does not match', async () => {
+  upsertProducts('woolworths', [{ store_product_id: 'b1', name: 'Pauls Plus+ Protein Flavoured Milk Chocolate 400mL', brand: 'Pauls', size_text: '400mL', price: 4, barcode: '9300601999991' },
+    { store_product_id: 'b2', name: 'Pauls Plus+ Protein Milk Chocolate Smooth 400mL', brand: 'Pauls', size_text: '400mL', price: 4, barcode: '9300601999992' }]);
+  upsertProducts('coles', [{ store_product_id: 'b1', name: 'Pauls Plus+ Protein Chocolate Low Fat Nas Milk', brand: 'Pauls', size_text: '400mL', price: 3.6, barcode: '9300601999991' }]);
+  const anon = client();
+  const g = (await anon('GET', '/api/search?q=protein+chocolate+low+fat+nas')).body[0];
+  assert.equal(g.best.woolworths?.product.store_product_id, 'b1', 'matched by barcode');
+  assert.ok(!g.members.some((m) => m.store_product_id === 'b2'), 'different barcode, same brand: not the same');
+});
+
+test('wrong-match reports: admin accepts, rule applies to everyone', async () => {
+  const user = client();
+  await user('POST', '/api/auth/login', { email: 'pat@example.com', password: 'password123' });
+  const g = (await user('GET', '/api/search?q=milk&store=woolworths')).body[0];
+  const other = g.members.find((m) => m.store === 'aldi');
+  assert.ok(other, 'ALDI milk is matched to begin with');
+  const r = await user('POST', '/api/match-reports', { anchorId: g.anchor.id, productId: other.id, kind: 'not_same', note: 'different milk' });
+  assert.equal(r.body.status, 'open');
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const queue = (await admin('GET', '/api/admin/match-reports')).body.open;
+  assert.equal(queue.length, 1);
+  await admin('POST', `/api/admin/match-reports/${queue[0].id}`, { decision: 'accept' });
+  const after = (await client()('GET', '/api/search?q=milk&store=woolworths')).body[0];
+  assert.ok(!after.members.some((m) => m.id === other.id), 'no longer matched for anyone');
+  await admin('DELETE', `/api/admin/match-rules/${Math.min(g.anchor.id, other.id)}/${Math.max(g.anchor.id, other.id)}`);
+});
+
+test('watch a price; alert email once per drop; one-click unsubscribe', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const { sendPriceAlerts } = await import('../src/alerts.js');
+  const { getDb } = await import('../src/db.js');
+  const api = client();
+  const u = (await api('POST', '/api/auth/signup', { email: 'watcher@example.com', password: 'password123' })).body.user;
+  getDb().prepare('UPDATE users SET email_verified_at = ? WHERE id = ?').run(new Date().toISOString(), u.id);
+  upsertProducts('coles', [{ store_product_id: 'w1', name: 'Coles Rolled Oats', brand: 'Coles', size_text: '750g', price: 3 }]);
+  const pid = (await api('GET', '/api/search?q=rolled+oats&store=coles')).body[0].anchor.id;
+  await api('PUT', `/api/watches/${pid}`, { targetPrice: 2.5 });
+  await sendPriceAlerts({ baseUrl: base });
+  assert.ok(!capturedMail.some((m) => m.to === 'watcher@example.com' && m.kind === 'price-alert'), 'no alert above target');
+  upsertProducts('coles', [{ store_product_id: 'w1', name: 'Coles Rolled Oats', brand: 'Coles', size_text: '750g', price: 2.4 }]);
+  await sendPriceAlerts({ baseUrl: base });
+  await sendPriceAlerts({ baseUrl: base });
+  const sent = capturedMail.filter((m) => m.to === 'watcher@example.com' && m.kind === 'price-alert');
+  assert.equal(sent.length, 1, 'one email per drop');
+  const link = sent[0].text.match(/(\/api\/unsubscribe\?[^\s]+)/)[1];
+  assert.equal((await fetch(base + link)).status, 200);
+  assert.equal((await api('GET', '/api/config')).body.user.alertsPrice, false);
+  assert.equal((await fetch(base + link.replace(/s=[^&]+/, 's=forged'))).status, 400);
+});
+
+test('tick off in the shop, finish, repeat a past shop', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'shopper@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const milk = (await api('GET', '/api/search?q=milk&store=coles')).body[0].anchor.id;
+  const oats = (await api('GET', '/api/search?q=rolled+oats&store=coles')).body[0].anchor.id;
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk, quantity: 2 });
+  await api('POST', `/api/lists/${list.id}/items`, { productId: oats });
+  await api('POST', `/api/lists/${list.id}/snapshots`, { name: 'Weekly basics' });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  await api('PUT', `/api/items/${v.items[0].id}/checked`, { checked: true });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(v.items[0].checkedAt);
+  const done = (await api('POST', `/api/lists/${list.id}/finish`)).body;
+  assert.equal(done.items, 1);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 1, 'bought item removed');
+  const snaps = (await api('GET', `/api/lists/${list.id}/snapshots`)).body;
+  assert.deepEqual(snaps.map((x) => x.kind).sort(), ['history', 'saved']);
+  const added = (await api('POST', `/api/lists/${list.id}/snapshots/${snaps.find((x) => x.kind === 'saved').id}/add`)).body;
+  assert.equal(added.added, 1, 'adds back what is missing, skips what is already there');
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.find((i) => i.anchor.id === milk).quantity, 2);
+});

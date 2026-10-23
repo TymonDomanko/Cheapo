@@ -14,6 +14,7 @@
     "seed:demo": "node src/cli/seed-demo.js",
     "admin": "node src/cli/admin.js",
     "collect": "node src/cli/collect.js",
+    "capture": "node src/cli/capture.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
