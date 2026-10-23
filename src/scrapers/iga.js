@@ -52,8 +52,10 @@ const UNIT_ABBR = { g: 'g', kg: 'kg', ml: 'mL', l: 'L', ea: 'each' };
 export function mapProduct(p, categoryName) {
   // Names don't include the pack size; it comes separately as unitOfSize.
   const u = p.unitOfSize || {};
-  const abbr = UNIT_ABBR[String(u.abbreviation || '').toLowerCase()] ?? u.abbreviation;
-  const size = u.size && abbr ? `${u.size}${abbr}` : null;
+  const abbr = UNIT_ABBR[String(u.abbreviation || '').toLowerCase()] || u.abbreviation;
+  // Counted items ("14 pads", "a dozen eggs") come with type "each" and no abbreviation.
+  const counted = String(u.type || '').toLowerCase() === 'each';
+  const size = !u.size ? null : abbr ? `${u.size}${abbr}` : counted ? (u.size > 1 ? `${u.size} pack` : 'each') : null;
   const perKg = String(p.sellBy || '').toLowerCase() === 'weight';
   const slug = String(p.name || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return {

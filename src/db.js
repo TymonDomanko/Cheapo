@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseSizeFrom, altSize, unitPrice } from './units.js';
+import { parseSizeFrom, altSize, unitPrice, formatSize } from './units.js';
 
 export { STORES } from './stores.js';
 
@@ -500,7 +500,8 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
         store_product_id: String(raw.store_product_id),
         name: raw.name.trim(),
         brand: raw.brand || null,
-        size_text: raw.size_text || null,
+        // Some shops only give the size in the name ("Nutcracker 200g"); show it either way.
+        size_text: raw.size_text || (size && !size.perWeight ? formatSize(size.qty, size.unit) : size?.perWeight ? 'per kg' : null),
         size_qty: size?.qty ?? null,
         size_unit: size?.unit ?? null,
         alt_size_qty: alt?.qty ?? null,

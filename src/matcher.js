@@ -86,7 +86,16 @@ function sizesOf(p) {
 
 /** Same pack if any way of measuring the two packs agrees. */
 export function samePack(a, b) {
-  return sizesOf(a).some((x) => sizesOf(b).some((y) => sameSize(x, y)));
+  const sa = sizesOf(a);
+  const sb = sizesOf(b);
+  // When both have a weight (or both a volume), that decides: a dozen 600g eggs
+  // aren't a dozen 700g eggs. A count only matches when one side has no weight.
+  for (const unit of ['g', 'ml']) {
+    const x = sa.filter((s) => s.unit === unit);
+    const y = sb.filter((s) => s.unit === unit);
+    if (x.length && y.length) return x.some((p) => y.some((q) => sameSize(p, q)));
+  }
+  return sa.some((x) => sb.some((y) => sameSize(x, y)));
 }
 
 export function sameBrand(a, b) {

@@ -4,6 +4,7 @@ import { getDb } from './db.js';
 import { STORES } from './stores.js';
 import { nameTokens, rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
 import { unitPriceFor } from './promos.js';
+import { parseSizeFrom, SIZE_TOKEN_RE } from './units.js';
 import { defaultStoreId } from './iga.js';
 
 // Chains where each store sets its own prices (IGA) keep one shared catalogue
@@ -42,7 +43,20 @@ function storeSet(stores) {
   return s.length ? s : STORES;
 }
 
-export function searchProducts(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false } = {}) {
+export function searchProducts(q, opts = {}) {
+  // A size in the search ("coke 1.25l", "rice 5kg") is matched against each
+  // product's size rather than its name: most shops don't put it in the name.
+  const size = parseSizeFrom(q);
+  if (size) {
+    const text = String(q).replace(SIZE_TOKEN_RE, ' ');
+    const sized = runSearch(text, { ...opts, size });
+    // Nothing that size: show the closest thing rather than nothing.
+    return sized.length ? sized : runSearch(text, opts);
+  }
+  return runSearch(q, opts);
+}
+
+function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false, size = null } = {}) {
   const d = getDb();
   const match = ftsQuery(q);
   const where = [AVAILABLE_SQL];
@@ -53,6 +67,12 @@ export function searchProducts(q, { store, stores, igaStore, limit = 30, offset 
     params.push(...allowed);
   }
   if (specialsOnly) where.push(`${priced('on_special', 0)} = 1`);
+  if (size) {
+    // Same size within 1%, by either of a product's sizes (e.g. 12 pack / 700g eggs).
+    where.push(`((p.size_unit = ? AND abs(p.size_qty - ?) <= ?) OR (p.alt_size_unit = ? AND abs(p.alt_size_qty - ?) <= ?))`);
+    const tol = size.qty * 0.01;
+    params.push(size.unit, size.qty, tol, size.unit, size.qty, tol);
+  }
   const at = loc(igaStore);
   if (!match) {
     return d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE ${where.join(' AND ')}
@@ -60,7 +80,7 @@ export function searchProducts(q, { store, stores, igaStore, limit = 30, offset 
   }
   const stmt = d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
     WHERE products_fts MATCH ? AND ${where.join(' AND ')}
-    ORDER BY bm25(products_fts, 10.0, 3.0, 1.0) LIMIT ? OFFSET ?`);
+    ORDER BY bm25(products_fts, 10.0, 1.0, 8.0) LIMIT ? OFFSET ?`);
   // Whole-word matches first, then prefix matches ("egg" → "eggplant") to fill up.
   const exact = stmt.all(at, ftsQuery(q, 'AND', false), ...params, limit, offset);
   if (exact.length >= limit) return exact;

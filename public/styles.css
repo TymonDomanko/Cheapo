@@ -371,3 +371,4 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .data.health td.ok { color: var(--good); }
 .data.health td.bad { color: var(--bad, #c0392b); font-weight: 600; }
 .warn-box { border-color: var(--special); }
+.nowrap { white-space: nowrap; }

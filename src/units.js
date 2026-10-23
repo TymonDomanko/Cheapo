@@ -74,6 +74,8 @@ export function altSize(sizeText, name, primary) {
   if (!primary) return null;
   const text = `${sizeText || ''} ${name || ''}`;
   for (const m of text.matchAll(SIZE_TOKEN_RE)) {
+    // A multipack ("10 x 375mL") is also that many items.
+    if (m[1] && primary.unit !== 'ea' && parseFloat(m[1]) >= 2) return { qty: parseFloat(m[1]), unit: 'ea', perWeight: false };
     const s = parseSize(m[0]);
     if (s && s.unit !== primary.unit && !s.perWeight) return s;
   }

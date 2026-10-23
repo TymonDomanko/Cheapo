@@ -1221,8 +1221,8 @@ async function openSpending() {
     ${sp.months.length > 1 ? '<h3>By month</h3><div class="chart-wrap short"><canvas id="spending-chart" aria-label="Spending by month"></canvas></div>' : ''}
     <h3>Shops</h3>
     <div class="table-scroll"><table class="data">
-      <thead><tr><th>Shop</th><th>Where</th><th class="num">Items</th><th class="num">Cost</th><th class="num">Saved</th></tr></thead>
-      <tbody>${sp.shops.map((x) => `<tr><td>${esc(x.name)}</td>
+      <thead><tr><th>Date</th><th>Where</th><th class="num">Items</th><th class="num">Cost</th><th class="num">Saved</th></tr></thead>
+      <tbody>${sp.shops.map((x) => `<tr><td class="nowrap">${fmtDate(x.at)}</td>
         <td>${Object.keys(x.byStore).map((st) => `${dot(st)}${esc(storeName(st))}`).join(' ')}</td>
         <td class="num">${x.items}</td><td class="num">${money(x.spent)}</td>
         <td class="num">${x.oneShop ? `<span class="saving" title="${esc(`All at ${storeName(x.oneShop.store)}: ${money(x.oneShop.total)}`)}">${money(x.saved)}</span>` : '—'}</td></tr>`).join('')}</tbody>
