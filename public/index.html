@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grocery Price Compare</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'%3E$%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/chart.js/chart.umd.js" defer></script>
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Grocery Price Compare</h1>
+      <span class="sub">Woolworths · Coles · ALDI</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="compare" aria-selected="true">Compare</button>
+      <button role="tab" data-tab="list">Shopping list <span id="list-count" class="pill">0</span></button>
+      <button role="tab" data-tab="changes">Price changes</button>
+      <button role="tab" data-tab="data">Data</button>
+    </nav>
+  </header>
+
+  <div id="demo-banner" class="banner" hidden>
+    Showing <strong>demo data</strong> with made-up prices. Run a real scrape from the <a href="#" data-goto="data">Data</a> tab, then remove the demo with <code>npm run seed:demo -- --clear</code>.
+  </div>
+
+  <main>
+    <!-- Compare -->
+    <section id="tab-compare" class="tab">
+      <form id="search-form" class="search">
+        <input id="q" type="search" placeholder="Search products, e.g. full cream milk 2L" autocomplete="off" autofocus>
+        <select id="store-filter" aria-label="Store">
+          <option value="">All stores</option>
+          <option value="woolworths">Woolworths</option>
+          <option value="coles">Coles</option>
+          <option value="aldi">ALDI</option>
+        </select>
+        <select id="mode-filter" aria-label="Matching">
+          <option value="similar">Match any brand, same size</option>
+          <option value="exact">Match same brand only</option>
+        </select>
+        <label class="check"><input id="specials" type="checkbox"> Specials only</label>
+      </form>
+      <p class="hint">Products are treated as the same item when the pack size matches exactly and the name is similar (brand ignored). Click a row for the price history.</p>
+      <div id="results" class="results"></div>
+    </section>
+
+    <!-- Shopping list -->
+    <section id="tab-list" class="tab" hidden>
+      <div class="list-head">
+        <div class="store-toggles" id="list-stores">
+          <span>Buy from:</span>
+          <label class="check"><input type="checkbox" value="woolworths" checked> <i class="dot woolworths"></i>Woolworths</label>
+          <label class="check"><input type="checkbox" value="coles" checked> <i class="dot coles"></i>Coles</label>
+          <label class="check"><input type="checkbox" value="aldi" checked> <i class="dot aldi"></i>ALDI <small>(in-store)</small></label>
+        </div>
+        <div class="actions">
+          <button id="clear-list" class="ghost">Clear list</button>
+          <button id="order-btn" class="primary">Order cheapest</button>
+        </div>
+      </div>
+      <div id="list"></div>
+      <div id="list-summary" class="summary"></div>
+    </section>
+
+    <!-- Price changes -->
+    <section id="tab-changes" class="tab" hidden>
+      <div class="list-head">
+        <h2>Biggest price moves</h2>
+        <div class="actions">
+        <select id="changes-dir" aria-label="Direction">
+          <option value="">Rises and drops</option>
+          <option value="down">Price drops</option>
+          <option value="up">Price rises</option>
+        </select>
+        <select id="changes-days" aria-label="Period">
+          <option value="1">Last 24 hours</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+        </div>
+      </div>
+      <div id="changes"></div>
+    </section>
+
+    <!-- Data -->
+    <section id="tab-data" class="tab" hidden>
+      <h2>Product data</h2>
+      <div id="store-stats" class="stat-grid"></div>
+      <p><button id="scrape-btn" class="primary">Refresh prices now</button>
+        <span class="hint" id="cron-hint"></span></p>
+      <p class="hint">A full refresh of all three stores fetches ~50,000 products and takes 20–40 minutes. Each run records any price changes for the history graphs.</p>
+    </section>
+  </main>
+
+  <!-- Product detail -->
+  <dialog id="product-dialog">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <div id="product-detail"></div>
+  </dialog>
+
+  <!-- Order -->
+  <dialog id="order-dialog">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <div id="order-detail"></div>
+  </dialog>
+</body>
+</html>

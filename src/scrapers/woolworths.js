@@ -1,0 +1,111 @@
+// Woolworths: the website calls JSON endpoints under /apis/ui/. Category pages
+// POST to /apis/ui/browse/category; the category tree comes from
+// /apis/ui/PiesCategoriesWithSpecials. Woolworths uses Akamai bot protection,
+// so this generally only works from a residential connection (or with
+// SCRAPE_MODE=browser).
+
+import { createClient } from './http.js';
+
+const ORIGIN = 'https://www.woolworths.com.au';
+const PAGE_SIZE = 36;
+const SKIP = new Set(
+  (process.env.WOOLWORTHS_SKIP_CATEGORIES ??
+    // Seasonal/duplicate groupings, plus third-party marketplace departments (hundreds of thousands of listings).
+    'specials,everyday-market,healthylife,halloween,christmas,easter,container-bonus-credits,back-to-school,dinner,lunch-box,gift-ideas,electronics,home-lifestyle,front-of-store')
+    .split(',').map((s) => s.trim()).filter(Boolean),
+);
+
+export const store = 'woolworths';
+
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
+  const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.WOOLWORTHS_DELAY_MS ?? 600) });
+  await client.init();
+  try {
+    const tree = await client.getJson(`${ORIGIN}/apis/ui/PiesCategoriesWithSpecials`);
+    let cats = (tree.Categories || tree.categories || [])
+      .map((c) => ({
+        id: c.NodeId ?? c.nodeId,
+        name: c.Description ?? c.description,
+        slug: c.UrlFriendlyName ?? c.urlFriendlyName,
+      }))
+      .filter((c) => c.id && c.slug && !SKIP.has(c.slug) && !/special/i.test(c.slug));
+    if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
+    log(`woolworths: ${cats.length} categories`);
+
+    for (const cat of cats) {
+      let page = 1;
+      let pages = 1;
+      do {
+        const json = await client.postJson(`${ORIGIN}/apis/ui/browse/category`, {
+          categoryId: cat.id,
+          pageNumber: page,
+          pageSize: PAGE_SIZE,
+          sortType: 'TraderRelevance',
+          url: `/shop/browse/${cat.slug}`,
+          location: `/shop/browse/${cat.slug}`,
+          formatObject: JSON.stringify({ name: cat.name }),
+          isSpecial: false,
+          isBundle: false,
+          isMobile: false,
+          filters: [],
+          token: '',
+          gpBoost: 0,
+          isHideUnavailableProducts: false,
+          isRegisteredRewardCardPromotion: false,
+          enableAdReRanking: false,
+          groupEdmVariants: true,
+          categoryVersion: 'v2',
+        });
+        const total = json.TotalRecordCount ?? json.totalRecordCount ?? 0;
+        pages = Math.ceil(total / PAGE_SIZE);
+        const items = extractProducts(json).map((p) => mapProduct(p, cat.name));
+        log(`woolworths: ${cat.slug} page ${page}/${pages} (${items.length})`);
+        yield items;
+        if (!items.length) break;
+        page++;
+      } while (page <= pages && page <= maxPagesPerCategory);
+    }
+  } finally {
+    await client.close();
+  }
+}
+
+/** Products arrive grouped in "bundles" (variants); flatten them. */
+export function extractProducts(json) {
+  const bundles = json.Bundles || json.bundles || json.Products || [];
+  const out = [];
+  for (const b of bundles) {
+    const inner = b.Products || b.products;
+    if (Array.isArray(inner)) out.push(...inner);
+    else if (b.Stockcode) out.push(b);
+  }
+  return out;
+}
+
+export function mapProduct(p, categoryName) {
+  const stockcode = p.Stockcode ?? p.stockcode;
+  return {
+    store_product_id: stockcode,
+    name: p.DisplayName || p.Name,
+    brand: p.Brand || null,
+    size_text: p.PackageSize || null,
+    category: safeFirst(p.AdditionalAttributes?.piessubcategorynamesjson) || categoryName,
+    image_url: p.MediumImageFile || p.SmallImageFile || null,
+    product_url: `${ORIGIN}/shop/productdetails/${stockcode}/${p.UrlFriendlyName || ''}`,
+    price: p.Price ?? p.InstorePrice ?? null,
+    was_price: p.WasPrice && p.WasPrice > (p.Price ?? 0) ? p.WasPrice : null,
+    unit_price_text: p.CupString || null,
+    on_special: !!p.IsOnSpecial || !!p.IsHalfPrice,
+    available: p.IsAvailable !== false && p.IsPurchasable !== false && p.Price != null,
+  };
+}
+
+function safeFirst(jsonText) {
+  if (!jsonText) return null;
+  try {
+    const v = JSON.parse(jsonText);
+    return Array.isArray(v) ? v[0] : null;
+  } catch {
+    return null;
+  }
+}
