@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseSizeFrom, altSize, unitPrice } from './units.js';
+import { parseSizeFrom, altSize, unitPrice, formatSize } from './units.js';
 
 export { STORES } from './stores.js';
 
@@ -10,6 +10,20 @@ const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'supermarket.db');
 export const DB_FILE = DB_PATH;
 
 let db;
+
+// A list item is a product, or a free-text note ("birthday card") with no product.
+const LIST_ITEMS_COLUMNS = `
+      id INTEGER PRIMARY KEY,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+      note TEXT,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      match_mode TEXT NOT NULL DEFAULT 'similar', -- similar | exact | this
+      added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      added_at TEXT NOT NULL,
+      checked_at TEXT,
+      checked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      CHECK (product_id IS NOT NULL OR note IS NOT NULL)`;
 
 export function getDb() {
   if (db) return db;
@@ -117,15 +131,7 @@ function migrate(d) {
       expires_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS list_items (
-      id INTEGER PRIMARY KEY,
-      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
-      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      quantity INTEGER NOT NULL DEFAULT 1,
-      match_mode TEXT NOT NULL DEFAULT 'similar', -- similar | exact | this
-      added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      added_at TEXT NOT NULL
-    );
+    CREATE TABLE IF NOT EXISTS list_items (${LIST_ITEMS_COLUMNS});
     CREATE INDEX IF NOT EXISTS idx_list_items_list ON list_items (list_id);
 
     -- Per-store manual choice for a list item. product_id NULL = never buy this item at that store.
@@ -168,6 +174,24 @@ function migrate(d) {
 
   migratePerStorePrices(d);
   migrateAccountsAndShopping(d);
+  migrateNoteItems(d);
+  // An item can be pinned to one shop ("always get this at Coles") instead of the cheapest.
+  if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'pinned_store')) {
+    d.exec('ALTER TABLE list_items ADD COLUMN pinned_store TEXT');
+  }
+  // The order a shopper ticks things off at each shop, to learn its layout.
+  d.exec(`CREATE TABLE IF NOT EXISTS tick_log (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      store TEXT NOT NULL,
+      aisle TEXT NOT NULL,
+      at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tick_log ON tick_log (user_id, store, at);`);
+  // What a finished shop cost (estimated from the prices at the time).
+  for (const [col, def] of [['spent', 'REAL'], ['spent_json', 'TEXT']]) {
+    if (!d.prepare('PRAGMA table_info(list_snapshots)').all().some((c) => c.name === col)) d.exec(`ALTER TABLE list_snapshots ADD COLUMN ${col} ${def}`);
+  }
 
   d.exec(`
     -- IGA's store directory (refreshed weekly from igashop.com.au).
@@ -302,6 +326,24 @@ function migratePerStorePrices(d) {
 }
 
 /** Email, alerts, barcodes, promotions, match fixes, in-store ticking, saved shops. */
+/** Older databases required a product on every list item; rebuild the table to allow notes. */
+function migrateNoteItems(d) {
+  if (d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'note')) return;
+  const cols = 'id, list_id, product_id, quantity, match_mode, added_by, added_at, checked_at, checked_by';
+  d.pragma('foreign_keys = OFF');
+  try {
+    d.transaction(() => {
+      d.exec(`CREATE TABLE list_items_new (${LIST_ITEMS_COLUMNS});
+        INSERT INTO list_items_new (${cols}) SELECT ${cols} FROM list_items;
+        DROP TABLE list_items;
+        ALTER TABLE list_items_new RENAME TO list_items;
+        CREATE INDEX IF NOT EXISTS idx_list_items_list ON list_items (list_id);`);
+    })();
+  } finally {
+    d.pragma('foreign_keys = ON');
+  }
+}
+
 function migrateAccountsAndShopping(d) {
   const cols = (t) => d.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
   const add = (table, col, def) => {
@@ -405,7 +447,13 @@ const nowIso = () => new Date().toISOString();
  *   catalogue row; the price goes into store_prices for that store.
  * @returns {{upserted:number, priceChanges:number}}
  */
+// Bumped whenever products change, so in-memory indexes know to rebuild.
+let version = 0;
+export const catalogueVersion = () => version;
+export const catalogueChanged = () => version++;
+
 export function upsertProducts(store, items, seenAt = nowIso(), location = null) {
+  catalogueChanged();
   const d = getDb();
   const perStore = location != null;
   const getExisting = d.prepare('SELECT id FROM products WHERE store = ? AND store_product_id = ?');
@@ -462,7 +510,8 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
         store_product_id: String(raw.store_product_id),
         name: raw.name.trim(),
         brand: raw.brand || null,
-        size_text: raw.size_text || null,
+        // Some shops only give the size in the name ("Nutcracker 200g"); show it either way.
+        size_text: raw.size_text || (size && !size.perWeight ? formatSize(size.qty, size.unit) : size?.perWeight ? 'per kg' : null),
         size_qty: size?.qty ?? null,
         size_unit: size?.unit ?? null,
         alt_size_qty: alt?.qty ?? null,
@@ -505,6 +554,7 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
 
 /** After a complete crawl, anything not seen in it is no longer sold (at that store, for per-store chains). */
 export function markUnseenUnavailable(store, since, location = null) {
+  catalogueChanged();
   const d = getDb();
   if (location != null) {
     return d.prepare(`UPDATE store_prices SET available = 0 WHERE location = ? AND last_seen < ?

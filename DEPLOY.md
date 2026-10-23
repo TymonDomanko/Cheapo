@@ -48,6 +48,13 @@ docker compose up -d
 
 Open http://localhost:3000, sign up with your admin email, then go to **Admin** and press **Refresh all prices**. The first full refresh takes 20–60 minutes.
 
+**Ports.** Set these in `.env` if 3000 is taken or you want something else:
+- `HOST_PORT=8080`: the port on your machine (the site is then at http://localhost:8080).
+- `HOST_BIND=127.0.0.1`: only this machine can reach it, e.g. when your own nginx or Caddy sits in front.
+- `PORT`: the app's port inside the container. You rarely need to change it.
+
+Then run `docker compose up -d` again to apply.
+
 - **Update:** `docker compose pull && docker compose up -d`
 - **Logs:** `docker compose logs -f app`
 - **Back up:** copy the database out of the volume:
@@ -63,7 +70,9 @@ What you need:
 - a domain or subdomain with a DNS **A record** pointing at the server;
 - ports **80 and 443** open.
 
-The two files you need are in [`deploy/docker/`](deploy/docker):
+If 80 and 443 are already used on that machine, set `HTTP_PORT` and `HTTPS_PORT` in `.env` to other ports. Something in front, such as your router's port forwarding, still has to send the internet's ports 80 and 443 to them, because Let's Encrypt only checks the standard ports. Caddy finds the app automatically if you change `PORT`.
+
+The files you need are in [`deploy/docker/`](deploy/docker):
 
 ```bash
 mkdir grocery && cd grocery
@@ -224,6 +233,18 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 4. **Sends price alerts** to people whose watched products got cheaper.
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
+
+**How long it takes.** Measured on real crawls from a cloud server:
+- **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
+- **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
+- **ALDI and Harris Farm:** about a minute each.
+- **Coles:** about 30 minutes or more. Coles challenges a server after roughly every 30 requests however slowly they're made, and gets stricter as a crawl goes on. The crawler tries a fresh session first, then waits, and skips a department that stays blocked (the rest is saved). Coles is far more relaxed with home internet connections, so if Coles refreshes keep failing, let the home collector fetch Coles too.
+
+**When something goes wrong, admins hear about it.** Every admin is emailed when:
+- a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
+- the home collector hasn't sent prices for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).
+
+Each problem is emailed once, then at most daily while it lasts, and there's an "all good again" email when it's fixed. Open problems also show at the top of **Admin → Data health**, alongside how fresh each shop's data is and how much of it can be compared. These emails need email set up (above). Turn them off with `ADMIN_ALERTS=false`.
 
 ## Disk space
 

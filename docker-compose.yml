@@ -1,4 +1,4 @@
-# Run on your own machine or a home server: http://localhost:3000
+# Run on your own machine or a home server: http://localhost:3000 (or HOST_PORT in .env)
 #   cp .env.example .env   (set ADMIN_EMAILS; for plain http on a LAN set SECURE_COOKIES=false)
 #   docker compose up -d
 # Uses the published image; add `--build` (and keep `build: .`) to build from this checkout instead.
@@ -8,7 +8,9 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # HOST_PORT: the port on this machine (default 3000). PORT: the app's port inside the
+      # container. HOST_BIND=127.0.0.1 keeps it off the network (e.g. behind your own nginx).
+      - "${HOST_BIND:-0.0.0.0}:${HOST_PORT:-3000}:${PORT:-3000}"
     env_file: .env
     volumes:
       - grocery-data:/data

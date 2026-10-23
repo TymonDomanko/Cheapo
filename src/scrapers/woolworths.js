@@ -4,13 +4,14 @@
 // so this generally only works from a residential connection (or with
 // SCRAPE_MODE=browser).
 
-import { createClient } from './http.js';
+import { createClient, crawlInParallel } from './http.js';
 
 const ORIGIN = 'https://www.woolworths.com.au';
 const PAGE_SIZE = 36;
 const SKIP = new Set(
   (process.env.WOOLWORTHS_SKIP_CATEGORIES ??
-    // Seasonal/duplicate groupings, plus third-party marketplace departments (hundreds of thousands of listings).
+    // Seasonal/duplicate groupings, plus third-party marketplace departments. Marketplace listings
+    // inside the other departments are left out by the request (isHideEverydayMarketProducts).
     'specials,everyday-market,healthylife,halloween,christmas,easter,container-bonus-credits,back-to-school,dinner,lunch-box,gift-ideas,electronics,home-lifestyle,front-of-store')
     .split(',').map((s) => s.trim()).filter(Boolean),
 );
@@ -18,25 +19,46 @@ const SKIP = new Set(
 export const store = 'woolworths';
 
 export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
-  const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.WOOLWORTHS_DELAY_MS ?? 600) });
+  const delayMs = Number(process.env.WOOLWORTHS_DELAY_MS ?? 600);
+  const client = createClient({ origin: ORIGIN, delayMs });
   await client.init();
+  let cats;
   try {
     const tree = await client.getJson(`${ORIGIN}/apis/ui/PiesCategoriesWithSpecials`);
-    let cats = (tree.Categories || tree.categories || [])
+    cats = (tree.Categories || tree.categories || [])
       .map((c) => ({
         id: c.NodeId ?? c.nodeId,
         name: c.Description ?? c.description,
         slug: c.UrlFriendlyName ?? c.urlFriendlyName,
       }))
       .filter((c) => c.id && c.slug && !SKIP.has(c.slug) && !/special/i.test(c.slug));
-    if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
-    log(`woolworths: ${cats.length} categories`);
+  } finally {
+    await client.close();
+  }
+  if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
+  // Two departments at a time, each in its own session. A session that has made
+  // hundreds of requests gets slowed right down, so each department starts a fresh one.
+  const workers = Math.max(1, Number(process.env.WOOLWORTHS_CONCURRENCY) || 2);
+  log(`woolworths: ${cats.length} categories, ${workers} at a time`);
 
-    for (const cat of cats) {
+  yield* crawlInParallel('woolworths', cats, {
+    workers,
+    log,
+    newClient: async () => {
+      const c = createClient({ origin: ORIGIN, delayMs });
+      await c.init();
+      return c;
+    },
+    crawl: async function* (c, cat) {
+      if (c.cookies) {
+        // A fresh session (browser mode keeps its one browser).
+        c.cookies.clear();
+        await c.init();
+      }
       let page = 1;
       let pages = 1;
       do {
-        const json = await client.postJson(`${ORIGIN}/apis/ui/browse/category`, {
+        const json = await c.postJson(`${ORIGIN}/apis/ui/browse/category`, {
           categoryId: cat.id,
           pageNumber: page,
           pageSize: PAGE_SIZE,
@@ -55,19 +77,24 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
           enableAdReRanking: false,
           groupEdmVariants: true,
           categoryVersion: 'v2',
+          // Leave out Everyday Market (third-party sellers): ~90% of listings, none of them groceries.
+          isHideEverydayMarketProducts: true,
         });
         const total = json.TotalRecordCount ?? json.totalRecordCount ?? 0;
         pages = Math.ceil(total / PAGE_SIZE);
-        const items = extractProducts(json).map((p) => mapProduct(p, cat.name));
+        const items = ownRange(extractProducts(json)).map((p) => mapProduct(p, cat.name));
         log(`woolworths: ${cat.slug} page ${page}/${pages} (${items.length})`);
         yield items;
         if (!items.length) break;
         page++;
       } while (page <= pages && page <= maxPagesPerCategory);
-    }
-  } finally {
-    await client.close();
-  }
+    },
+  });
+}
+
+/** Woolworths' own range: no Everyday Market (third-party marketplace) listings. */
+export function ownRange(products) {
+  return products.filter((p) => !p.IsMarketProduct);
 }
 
 /** Products arrive grouped in "bundles" (variants); flatten them. */

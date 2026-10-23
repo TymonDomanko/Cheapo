@@ -87,3 +87,20 @@ test('long life milk is not fresh milk', () => {
   const uht = product('aldi', 'Farmdale Lactose Free Light Long Life Milk 1L', 'Farmdale', '1L');
   assert.equal(matchScore(fresh, uht), 0);
 });
+
+test('weight decides over pack count; multipacks count their items', async () => {
+  const { samePack } = await import('../src/matcher.js');
+  const { parseSizeFrom, altSize } = await import('../src/units.js');
+  const prod = (size_text, name = '') => {
+    const p = parseSizeFrom(size_text, name);
+    const a = altSize(size_text, name, p);
+    return { size_qty: p?.qty, size_unit: p?.unit, alt_size_qty: a?.qty ?? null, alt_size_unit: a?.unit ?? null };
+  };
+  const eggs700 = prod('700g', 'Free Range Eggs 12 Pack');
+  assert.equal(samePack(eggs700, prod('600g', 'Large Free Range Eggs 12 Pack')), false, 'a dozen 600g eggs isn’t a dozen 700g eggs');
+  assert.equal(samePack(eggs700, prod('12 Pack', 'Free Range Eggs')), true, 'no weight given: the count decides');
+  assert.equal(samePack(eggs700, prod('700g', 'Free Range Eggs')), true);
+  assert.equal(altSize('10 x 375mL', 'Coca-Cola Cans', parseSizeFrom('10 x 375mL')).qty, 10);
+  assert.equal(samePack(prod('10 x 375mL'), prod('3.75L')), true);
+  assert.equal(samePack(prod('10 x 375mL'), prod('10 x 250mL')), false);
+});

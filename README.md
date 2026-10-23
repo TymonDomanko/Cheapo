@@ -2,7 +2,8 @@
 
 A grocery price comparison site for Australian supermarkets: **Woolworths, Coles, ALDI, IGA and Harris Farm**. It can run publicly with accounts and shared household lists, or just on your own computer.
 
-- **Every product and price** from each chain (about 60,000 products), refreshed daily.
+- **Every product and price** from each chain (about 75,000 products), refreshed daily. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
+- **Deals on the home page.** Your regulars (things you buy often or have on your lists) that are on special, a multi-buy or a member price at one of your shops, even if it's a different brand of the same thing. Plus **unusual deals**: specials that break a product's normal pattern, like its first special in months or cheaper than its specials usually get. The every-few-weeks half-price cycles aren't included.
 - **Search and compare.** Each result shows the cheapest equivalent at every store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand.
 - **Sign-up, log-in and settings pages.** At `/signup` you pick the shops you use. At `/settings` you change those shops, your name and your password, or delete your account. Search only compares your shops, and new lists start with them.
 - **Choose your IGA.** Every IGA sets its own prices, so people pick their store by suburb, postcode, or "Near me". You can do this from the compare page, at sign-up, in settings, or per shared list. Only IGAs that publish their prices online (on igashop.com.au) can be picked, and the picker says so. Which stores qualify is re-checked every day: IGA's store list is reloaded and each store is asked for a product, so stores that start publishing prices appear and ones that stop are hidden. The first time anyone picks a store, its prices are fetched in the background (about 2 minutes) and then refreshed daily.
@@ -10,19 +11,23 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
 - **Choose your shops.** Each list has a card per supermarket that you can tick or untick:
   - A shop you use says what it's **saving you** (how much more the list would cost without it), and warns if it's the only place you can get some items.
   - A shop you've excluded says what it's **costing you** (how much including it would save).
-- **Order the cheapest.** Splits your list so each item comes from its cheapest shop. You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
+- **Order the cheapest.** Splits your list so each item comes from its cheapest shop (or the shop you've pinned it to: "always buy this at Coles", with what that costs you). You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
 - **Price history.** Each product has a step chart of its price over time, alongside the matching products at the other shops. A "Price changes" tab lists the biggest recent rises and drops.
+- **Is this a good price?** Products and list items say when today's price is the lowest in months, or when something regularly goes on special ("about every 6 weeks, next one likely in ~2 weeks") so you can wait.
 - **Barcode matching.** Woolworths and Coles products are matched exactly by barcode, which catches products whose names differ. Anyone can press **Wrong match?**; an admin confirms it and the fix applies for everyone.
 - **Deals that change the maths.** Multi-buys ("5 for $9") and Everyday Rewards member prices are counted. Each shopper ticks their memberships in Settings, and list totals work out the real cost of the quantity you need.
 - **Better-value sizes.** If the same item in another pack size is at least 10% cheaper per kg, litre or item, you see a hint ("3L is 18% cheaper per litre").
 - **Alerts.** Watch any product for a target price or any drop. There's also a Wednesday email of what's on special from your lists.
-- **In the shop.** Tick things off on your phone, grouped by shop and section. Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Anything on the list.** Add products, or plain notes like "birthday card". **Paste a list** ("milk, bread, 2 x chips") and confirm what each line matches.
+- **In the shop.** A checklist per shop, sorted by section in the order you walk the store. It learns your own shop's layout from the order you tick things off. Tap to cross items out, or **scan a barcode** to tick it (or to see what it costs elsewhere). Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Spending.** Each finished shop records what it cost and how much splitting it across shops saved, with a monthly chart.
 - **Home collector, one click.** For stores that block cloud servers, the Admin page has download buttons for the home collector. Each download is already set up for your site.
   - On Windows and Linux (including a Raspberry Pi), it's a single program to run, with nothing to install.
   - On a Mac, it's a zip that runs with Node.js.
   - It updates itself, and the Admin page shows whether it's connected and current.
 - **Accounts done properly.** Email confirmation, password reset, a privacy page, and data export and deletion in Settings.
-- **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button.
+- **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button. A **data health** panel shows how fresh and comparable each shop's data is.
+- **Problems come to you.** Admins are emailed when a refresh fails or finds far fewer products than usual, when the home collector goes quiet, and again when things recover.
 
 ## Run it on your computer
 

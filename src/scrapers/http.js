@@ -33,21 +33,32 @@ export class HttpError extends Error {
 }
 
 // Bot protection sometimes answers with an HTML challenge page (status 200)
-// instead of JSON. Back off and try again a few times before giving up.
+// instead of JSON. A fresh session often gets straight through (Coles limits
+// each IP to a burst of requests, then challenges); if not, back off and try
+// again a few times before giving up.
 const SOFT_BLOCK_WAITS = [15000, 45000, 120000];
 
-async function requestJson(client, url, opts) {
-  for (let attempt = 0; ; attempt++) {
+export async function requestJson(client, url, opts) {
+  let renewed = false;
+  for (let attempt = 0; ; ) {
     const text = await client.request(url, opts);
     await sleep(client.delayMs);
     try {
       return JSON.parse(text);
     } catch {
+      const host = new URL(url).host;
+      if (!renewed && client.renew) {
+        renewed = true;
+        console.warn(`Got non-JSON response from ${host}; trying a fresh session`);
+        await client.renew();
+        continue;
+      }
       if (attempt >= SOFT_BLOCK_WAITS.length) {
         throw new Error(`Expected JSON from ${url} but got ${text.trim().startsWith('<') ? 'an HTML page (likely a bot check)' : 'invalid data'}`);
       }
-      console.warn(`Got non-JSON response from ${new URL(url).host}; backing off ${SOFT_BLOCK_WAITS[attempt] / 1000}s`);
-      await sleep(SOFT_BLOCK_WAITS[attempt]);
+      console.warn(`Got non-JSON response from ${host}; backing off ${SOFT_BLOCK_WAITS[attempt] / 1000}s`);
+      await sleep(SOFT_BLOCK_WAITS[attempt++]);
+      renewed = false; // after waiting, a fresh session is worth another try
     }
   }
 }
@@ -74,6 +85,12 @@ class FetchClient {
     } catch {
       /* non-fatal: some APIs work without cookies */
     }
+  }
+
+  /** Start a new session: forget cookies and collect fresh ones. */
+  async renew() {
+    this.cookies.clear();
+    await this.init();
   }
 
   cookieHeader() {
@@ -203,4 +220,94 @@ class BrowserClient {
   async close() {
     await this.browser?.close();
   }
+}
+
+/**
+ * Crawl each category with `crawl(cat)` (an async generator of batches). A
+ * category that keeps failing (say a bot check that won't clear) is skipped so
+ * the rest of the shop is still saved; the run then ends with an error naming
+ * what was missed, so it isn't treated as complete. Three failures in a row
+ * means the whole site is blocking us, so it stops there.
+ */
+export async function* eachCategory(store, cats, log, crawl) {
+  const failed = [];
+  let streak = 0;
+  for (const cat of cats) {
+    const name = cat.slug || cat.seoToken || cat.name;
+    try {
+      yield* crawl(cat);
+      streak = 0;
+    } catch (e) {
+      failed.push(name);
+      log(`${store}: skipped ${name} — ${e.message}`);
+      if (++streak >= 3) throw new Error(`stopped after ${streak} categories in a row failed (last: ${e.message})`);
+    }
+  }
+  if (failed.length) throw new Error(`couldn't fetch ${failed.length} of ${cats.length} categories (${failed.join(', ')}); everything else was saved`);
+}
+
+/**
+ * Like eachCategory, but crawls several categories at once, each worker with
+ * its own client (its own session). Batches are yielded as they arrive. A
+ * category that keeps failing is skipped; three failures with no category
+ * finishing in between stop the crawl.
+ * @param {{workers?: number, log: Function, newClient: () => Promise<object>, crawl: (client, cat) => AsyncIterable}} opts
+ */
+export async function* crawlInParallel(store, cats, { workers = 2, log, newClient, crawl }) {
+  const queue = [...cats];
+  const ready = [];
+  const failed = [];
+  let streak = 0;
+  let fatal = null;
+  let finished = false;
+  let wake = null;
+  const notify = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
+  async function worker() {
+    let client;
+    try {
+      client = await newClient();
+      while (queue.length && !fatal) {
+        const cat = queue.shift();
+        const name = cat.slug || cat.seoToken || cat.name;
+        try {
+          for await (const batch of crawl(client, cat)) {
+            if (fatal) return;
+            ready.push(batch);
+            notify();
+          }
+          streak = 0;
+        } catch (e) {
+          failed.push(name);
+          log(`${store}: skipped ${name} — ${e.message}`);
+          if (++streak >= 3) fatal = new Error(`stopped after ${streak} categories failed in a row (last: ${e.message})`);
+        }
+      }
+    } catch (e) {
+      fatal ||= e;
+    } finally {
+      await client?.close?.();
+      notify();
+    }
+  }
+  const all = Promise.all(Array.from({ length: Math.max(1, Math.min(workers, cats.length)) }, worker)).then(() => {
+    finished = true;
+    notify();
+  });
+  while (true) {
+    if (ready.length) {
+      yield ready.shift();
+      continue;
+    }
+    if (finished) break;
+    await new Promise((resolve) => {
+      wake = resolve;
+    });
+  }
+  await all;
+  if (fatal) throw fatal;
+  if (failed.length) throw new Error(`couldn't fetch ${failed.length} of ${cats.length} categories (${failed.join(', ')}); everything else was saved`);
 }

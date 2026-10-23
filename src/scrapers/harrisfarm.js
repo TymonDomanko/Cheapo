@@ -27,8 +27,12 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
   }
 }
 
+// Not groceries: delivery and service fees, delivery passes and gift cards are in the shop's catalogue too.
+const NOT_GROCERIES = /^(delivery (fee|pass)|service fee)\b|gift ?card|e-?gift|gift voucher/i;
+
 /** One Shopify product can have several variants (sizes); each becomes a product. */
 export function mapProduct(p) {
+  if (NOT_GROCERIES.test(p.title || '') || /delivery$/i.test(p.product_type || '')) return [];
   const variants = p.variants || [];
   return variants.map((v) => {
     const multi = variants.length > 1 && v.title && v.title !== 'Default Title';

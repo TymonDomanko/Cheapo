@@ -134,7 +134,7 @@ test('signup page shop choice and settings: preferred shops filter search and ne
   const r = await api('POST', '/api/auth/signup', { email: 'lee@example.com', password: 'password123', preferredStores: ['coles', 'aldi'] });
   assert.deepEqual(r.body.user.preferredStores, ['coles', 'aldi']);
   const groups = (await api('GET', '/api/search?q=milk')).body;
-  const stores = new Set(groups.flatMap((g) => g.members.map((m) => m.store)));
+  const stores = new Set(groups.flatMap((g) => Object.keys(g.best)));
   assert.ok(!stores.has('woolworths'), 'Woolworths hidden from search');
   const list = (await api('GET', '/api/lists')).body[0];
   assert.deepEqual((await api('GET', `/api/lists/${list.id}`)).body.included, ['coles', 'aldi']);
@@ -359,6 +359,10 @@ test('multi-buys and member prices change what a list costs', async () => {
   assert.equal(v.items[0].cheapest, 'woolworths', '5 for $9 beats 5 × $1.95 = $9.75');
   assert.equal(v.plan.total, 9);
   assert.equal(v.plan.byStore.woolworths.items[0].dealSaving, 5.5);
+  // The in-the-shop checklist knows which section of the shop each item is in.
+  assert.equal(v.plan.byStore.woolworths.items[0].aisle, 'dairy', 'yoghurt pouches are in the fridges');
+  assert.equal(v.items[0].aisle, 'dairy');
+  assert.equal(v.aisles[0].key, 'produce', 'sections in walking order');
 });
 
 test('member prices only count for members', async () => {
@@ -379,14 +383,16 @@ test('barcodes match products the names miss; same brand + different barcode doe
   const anon = client();
   const g = (await anon('GET', '/api/search?q=protein+chocolate+low+fat+nas')).body[0];
   assert.equal(g.best.woolworths?.product.store_product_id, 'b1', 'matched by barcode');
-  assert.ok(!g.members.some((m) => m.store_product_id === 'b2'), 'different barcode, same brand: not the same');
+  const eq = (await anon('GET', `/api/products/${g.anchor.id}`)).body.equivalents;
+  assert.ok(!eq.some((m) => m.store_product_id === 'b2'), 'different barcode, same brand: not the same');
 });
 
 test('wrong-match reports: admin accepts, rule applies to everyone', async () => {
   const user = client();
   await user('POST', '/api/auth/login', { email: 'pat@example.com', password: 'password123' });
   const g = (await user('GET', '/api/search?q=milk&store=woolworths')).body[0];
-  const other = g.members.find((m) => m.store === 'aldi');
+  const equivalents = async (api, id) => (await api('GET', `/api/products/${id}`)).body.equivalents;
+  const other = (await equivalents(user, g.anchor.id)).find((m) => m.store === 'aldi');
   assert.ok(other, 'ALDI milk is matched to begin with');
   const r = await user('POST', '/api/match-reports', { anchorId: g.anchor.id, productId: other.id, kind: 'not_same', note: 'different milk' });
   assert.equal(r.body.status, 'open');
@@ -395,8 +401,7 @@ test('wrong-match reports: admin accepts, rule applies to everyone', async () =>
   const queue = (await admin('GET', '/api/admin/match-reports')).body.open;
   assert.equal(queue.length, 1);
   await admin('POST', `/api/admin/match-reports/${queue[0].id}`, { decision: 'accept' });
-  const after = (await client()('GET', '/api/search?q=milk&store=woolworths')).body[0];
-  assert.ok(!after.members.some((m) => m.id === other.id), 'no longer matched for anyone');
+  assert.ok(!(await equivalents(client(), g.anchor.id)).some((m) => m.id === other.id), 'no longer matched for anyone');
   await admin('DELETE', `/api/admin/match-rules/${Math.min(g.anchor.id, other.id)}/${Math.max(g.anchor.id, other.id)}`);
 });
 
@@ -651,4 +656,304 @@ test('home collector code needs no npm packages (so it can run as a single progr
       assert.ok(spec.startsWith('.') || spec.startsWith('node:'), `${p} imports ${spec}`);
     }
   }
+});
+
+test('notes and pasting a list', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'notes@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  // A free-text note, added twice: one item, quantity 2.
+  await api('POST', `/api/lists/${list.id}/items`, { note: '  Birthday   card ' });
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'birthday card' });
+  assert.equal((await api('POST', `/api/lists/${list.id}/items`, { note: '   ' })).status, 400);
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 1);
+  assert.equal(v.items[0].note, 'Birthday card');
+  assert.equal(v.items[0].quantity, 2);
+  assert.equal(v.plan.notes.length, 1);
+  assert.equal(v.plan.unavailable.length, 0, 'a note isn’t a missing product');
+  assert.equal(v.plan.total, 0);
+
+  // Paste: each line gets product suggestions; "milk" is confident, nonsense isn't.
+  const preview = (await api('POST', `/api/lists/${list.id}/paste-preview`, { text: '2 x milk\nzzqx widget' })).body;
+  assert.equal(preview[0].quantity, 2);
+  assert.ok(preview[0].confident);
+  assert.match(preview[0].options[0].name, /milk/i);
+  assert.equal(preview[1].confident, false);
+  const r = (await api('POST', `/api/lists/${list.id}/paste`, {
+    lines: [{ productId: preview[0].options[0].productId, quantity: 2 }, { note: 'zzqx widget', quantity: 1 }],
+  })).body;
+  assert.equal(r.added, 2);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 3);
+  assert.ok(v.plan.total > 0, 'the milk is priced');
+
+  // A note can become a product once you find it.
+  const widget = v.items.find((it) => it.note === 'zzqx widget');
+  await api('PATCH', `/api/items/${widget.id}`, { productId: preview[0].options[0].productId });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.filter((it) => it.note != null).length, 1);
+
+  // Finishing a shop keeps notes in "past shops", and adding it back brings them back.
+  const card = v.items.find((it) => it.note === 'Birthday card');
+  await api('PUT', `/api/items/${card.id}/checked`, { checked: true });
+  await api('POST', `/api/lists/${list.id}/finish`);
+  const snaps = (await api('GET', `/api/lists/${list.id}/snapshots`)).body;
+  await api('POST', `/api/lists/${list.id}/snapshots/${snaps[0].id}/add`);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(v.items.some((it) => it.note === 'Birthday card'));
+});
+
+test('older databases are migrated to allow notes', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const Database = (await import('better-sqlite3')).default;
+  const file = path.join(dir, 'old.db');
+  // A current database, with list_items swapped back to the old definition (product required).
+  const make = spawnSync(process.execPath, ['-e', "const { getDb } = await import('./src/db.js'); getDb();"],
+    { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, DB_PATH: file }, encoding: 'utf8', input: '' });
+  assert.equal(make.status, 0, make.stderr);
+  const old = new Database(file);
+  old.exec(`DROP TABLE list_items;
+    CREATE TABLE list_items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, quantity INTEGER NOT NULL DEFAULT 1,
+      match_mode TEXT NOT NULL DEFAULT 'similar', added_by INTEGER, added_at TEXT NOT NULL, checked_at TEXT, checked_by INTEGER);
+    INSERT INTO products (id, store, store_product_id, name, first_seen, last_seen) VALUES (1, 'coles', 'x', 'Milk', 'now', 'now');
+    INSERT INTO users (id, email, password_hash, name, created_at) VALUES (1, 'o@example.com', 'x', 'O', 'now');
+    INSERT INTO lists (id, name, created_by, created_at) VALUES (1, 'L', 1, 'now');
+    INSERT INTO list_items (list_id, product_id, quantity, added_at) VALUES (1, 1, 3, '2026-01-01');`);
+  old.close();
+  const r = spawnSync(process.execPath, ['-e', `
+    const { getDb } = await import('./src/db.js');
+    const d = getDb();
+    d.prepare("INSERT INTO list_items (list_id, note, added_at) VALUES (1, 'card', 'now')").run();
+    console.log(JSON.stringify(d.prepare('SELECT product_id, note, quantity FROM list_items ORDER BY id').all()));
+  `], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, DB_PATH: file }, encoding: 'utf8', input: '' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), [
+    { product_id: 1, note: null, quantity: 3 }, { product_id: null, note: 'card', quantity: 1 },
+  ]);
+});
+
+test('admins are emailed when a refresh fails or shrinks, and when it recovers', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const { checkCollector } = await import('../src/admin-alerts.js');
+  const saved = process.env.COLLECTOR_TOKEN;
+  process.env.COLLECTOR_TOKEN = 'collector-secret-alerts';
+  const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer collector-secret-alerts' }, body: JSON.stringify(body) }).then((r) => r.json());
+  const items = (n) => Array.from({ length: n }, (_, i) => ({ store_product_id: `al${i}`, name: `Alert Test Product ${i}`, size_text: '1kg', price: 2 + i / 100 }));
+  const run = async ({ n = 0, error } = {}) => {
+    const { runId } = await post('/api/ingest/runs', { store: 'harrisfarm' });
+    if (n) await post(`/api/ingest/runs/${runId}/items`, { items: items(n) });
+    await post(`/api/ingest/runs/${runId}/finish`, error ? { error } : { complete: true });
+    await new Promise((r) => setTimeout(r, 50)); // alerts are sent in the background
+  };
+  const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
+  const before = alerts().length;
+
+  await run({ n: 20 });
+  assert.equal(alerts().length, before, 'a normal refresh sends nothing');
+  await run({ error: 'HTTP 403 for https://example' });
+  assert.equal(alerts().length, before + 1);
+  assert.equal(alerts().at(-1).to, 'admin@example.com');
+  assert.match(alerts().at(-1).subject, /Harris Farm prices didn’t refresh/);
+  assert.match(alerts().at(-1).text, /HTTP 403/);
+  await run({ error: 'again' });
+  assert.equal(alerts().length, before + 1, 'not repeated within a day');
+  await run({ n: 20 });
+  assert.match(alerts().at(-1).subject, /refreshing again/, 'tells admins it’s fixed');
+  await run({ n: 5 });
+  assert.match(alerts().at(-1).subject, /far fewer products/);
+  assert.match(alerts().at(-1).text, /found 5 products; the one before found 20/);
+  await run({ n: 20 });
+
+  // The collector check: Harris Farm is collected from home here, and it's been sending.
+  const { getDb } = await import('../src/db.js');
+  const stores = () => ['woolworths', 'coles', 'aldi', 'iga'];
+  assert.equal(await checkCollector({ serverStores: stores }), false, 'nothing to report');
+  getDb().prepare("UPDATE scrape_runs SET finished_at = '2020-01-01T00:00:00Z' WHERE source = 'collector'").run();
+  assert.equal(await checkCollector({ serverStores: stores }), true);
+  assert.match(alerts().at(-1).subject, /home collector has gone quiet/);
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
+  if (saved) process.env.COLLECTOR_TOKEN = saved;
+  else delete process.env.COLLECTOR_TOKEN;
+});
+
+test('product details and list items say whether it’s a good price', async () => {
+  const { getDb } = await import('../src/db.js');
+  upsertProducts('coles', [{ store_product_id: 'ins1', name: 'Insight Test Coffee Beans 1kg', brand: 'Insight', size_text: '1kg', price: 20 }]);
+  const d = getDb();
+  const p = d.prepare("SELECT id FROM products WHERE store_product_id = 'ins1'").get();
+  // Its history: $40 for months, then dropped to $20 today.
+  d.prepare('DELETE FROM price_history WHERE product_id = ?').run(p.id);
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  d.prepare('INSERT INTO price_history (product_id, price, on_special, recorded_at) VALUES (?, 40, 0, ?), (?, 20, 1, ?)').run(p.id, ago(150), p.id, ago(1));
+  const api = client();
+  const detail = (await api('GET', `/api/products/${p.id}`)).body;
+  assert.equal(detail.insight.verdict, 'great');
+  assert.match(detail.insight.headline, /Lowest price/);
+  await api('POST', '/api/auth/signup', { email: 'insight@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  await api('POST', `/api/lists/${list.id}/items`, { productId: p.id, matchMode: 'this' });
+  const v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].priceInsight.verdict, 'great');
+});
+
+test('finished shops record what they cost and what splitting saved', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'spend@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  assert.deepEqual((await api('GET', `/api/lists/${list.id}/spending`)).body.shops, []);
+  const milk = await productId(api, 'milk', 'woolworths');
+  const eggs = await productId(api, 'eggs', 'coles');
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk, quantity: 2 });
+  await api('POST', `/api/lists/${list.id}/items`, { productId: eggs });
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'card' });
+  const v = (await api('GET', `/api/lists/${list.id}`)).body;
+  for (const it of v.items) await api('PUT', `/api/items/${it.id}/checked`, { checked: true });
+  await api('POST', `/api/lists/${list.id}/finish`);
+  const sp = (await api('GET', `/api/lists/${list.id}/spending`)).body;
+  assert.equal(sp.shops.length, 1);
+  assert.equal(sp.shops[0].spent, v.plan.total, 'the planned cost of what was ticked');
+  assert.equal(sp.shops[0].items, 2, 'notes aren’t counted');
+  assert.equal(sp.last30, v.plan.total);
+  assert.equal(sp.months.length, 1);
+  // Eggs are only at Coles, so Coles is the one shop with everything: 2 × $3.10 + $6.90.
+  assert.deepEqual(sp.shops[0].oneShop, { store: 'coles', total: 13.1 });
+  assert.equal(sp.shops[0].saved, Math.round((13.1 - v.plan.total) * 100) / 100);
+});
+
+test('learns the order you walk a shop from your ticks', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'walker@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'x' });
+  const item = (await api('GET', `/api/lists/${list.id}`)).body.items[0].id;
+  // Two trips where this shopper does the freezers first and fruit & veg last.
+  const tripAt = (hoursAgo, i) => new Date(Date.now() - hoursAgo * 3600000 + i * 60000).toISOString();
+  for (const hoursAgo of [30, 6]) {
+    for (const [i, aisle] of ['frozen', 'dairy', 'pantry', 'produce'].entries()) {
+      await api('PUT', `/api/items/${item}/checked`, { checked: true, store: 'coles', aisle, at: tripAt(hoursAgo, i) });
+    }
+  }
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.layouts.coles.trips, 2);
+  assert.equal(v.layouts.coles.ranks.frozen, 0);
+  assert.equal(v.layouts.coles.ranks.produce, 1);
+  assert.ok(!v.layouts.woolworths, 'nothing learned about other shops');
+  // Bad input is ignored, and the layout can be reset.
+  assert.equal((await api('PUT', `/api/items/${item}/checked`, { checked: true, store: 'nope', aisle: 'frozen' })).status, 200);
+  await api('DELETE', '/api/me/shop-layouts/coles');
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(!v.layouts.coles);
+});
+
+test('looking up a scanned barcode finds the product and its prices elsewhere', async () => {
+  upsertProducts('woolworths', [{ store_product_id: 'bc1', name: 'Barcode Test Crackers 250g', brand: 'Barcode', size_text: '250g', price: 3.5, barcode: '9300000000017' }]);
+  upsertProducts('coles', [{ store_product_id: 'bc2', name: 'Barcode Test Crackers', brand: 'Barcode', size_text: '250g', price: 3.2 }]);
+  const api = client();
+  const r = (await api('GET', '/api/barcode/09300000000017')).body; // leading zero, like a UPC reader gives
+  assert.equal(r.found, true);
+  assert.match(r.anchor.name, /Barcode Test Crackers/);
+  assert.equal(r.cheapest, 'coles');
+  assert.equal((await api('GET', '/api/barcode/123')).status, 400);
+  assert.equal((await api('GET', '/api/barcode/9399999999999')).body.found, false);
+});
+
+test('admin data health', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const hh = (await admin('GET', '/api/admin/health?refresh=1')).body;
+  const coles = hh.stores.find((x) => x.store === 'coles');
+  assert.ok(coles.available > 0);
+  assert.ok(coles.matching.sampled > 0);
+  assert.ok(coles.matching.matchedPct >= 0 && coles.matching.matchedPct <= 100);
+  assert.ok(Array.isArray(hh.alerts));
+  assert.equal((await client()('GET', '/api/admin/health')).status, 401);
+});
+
+test('an item can be pinned to one shop instead of the cheapest', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'pinner@example.com', password: 'password123' });
+  const list = (await api('GET', `/api/lists`)).body[0];
+  const milk = await productId(api, 'milk', 'woolworths');
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  const item = v.items[0].id;
+  assert.equal(v.items[0].cheapest, 'aldi', '$2.99 at ALDI is cheapest');
+  assert.equal(v.items[0].pin, null);
+
+  assert.equal((await api('PATCH', `/api/items/${item}`, { pinnedStore: 'nowhere' })).status, 400);
+  await api('PATCH', `/api/items/${item}`, { pinnedStore: 'woolworths' });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'woolworths');
+  const ww = v.items[0].perStore.woolworths.product.price;
+  const aldi = v.items[0].perStore.aldi.product.price;
+  assert.deepEqual(v.items[0].pin, { store: 'woolworths', honoured: true, cheapest: 'aldi', extra: Math.round((ww - aldi) * 100) / 100 });
+  assert.equal(v.plan.byStore.woolworths.items.length, 1, 'the shopping plan follows the pin');
+  assert.equal(v.plan.total, ww);
+
+  // Switch Woolworths off for the list: the pin can't apply, so it's bought at the cheapest shop.
+  await api('PATCH', `/api/lists/${list.id}`, { excludedStores: ['woolworths'] });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'aldi');
+  assert.deepEqual(v.items[0].pin, { store: 'woolworths', honoured: false, reason: 'shop-excluded' });
+  await api('PATCH', `/api/lists/${list.id}`, { excludedStores: [] });
+
+  // Saved shops remember the pin.
+  await api('POST', `/api/lists/${list.id}/snapshots`, { name: 'Weekly' });
+  await api('DELETE', `/api/items/${item}`);
+  const snap = (await api('GET', `/api/lists/${list.id}/snapshots`)).body[0];
+  await api('POST', `/api/lists/${list.id}/snapshots/${snap.id}/add`);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].pinnedStore, 'woolworths');
+
+  await api('PATCH', `/api/items/${v.items[0].id}`, { pinnedStore: null });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].cheapest, 'aldi');
+});
+
+test('home page: unusual deals for everyone, and your regulars on sale', async () => {
+  const { getDb } = await import('../src/db.js');
+  const { clearDealsCache } = await import('../src/deals.js');
+  const d = getDb();
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  // Olive oil: $12 for 7 months, $7.20 today (on special for the first time).
+  upsertProducts('woolworths', [{ store_product_id: 'home1', name: 'Homepage Olive Oil Extra Virgin 1L', brand: 'Homepage', size_text: '1L', price: 7.2, was_price: 12, on_special: true }]);
+  const oil = d.prepare("SELECT id FROM products WHERE store_product_id = 'home1'").get().id;
+  d.prepare('DELETE FROM price_history WHERE product_id = ?').run(oil);
+  d.prepare('INSERT INTO price_history (product_id, price, on_special, recorded_at) VALUES (?, 12, 0, ?), (?, 7.2, 1, ?)').run(oil, ago(210), oil, ago(1));
+  // Pasta sauce: on your list at Coles; Woolworths has the same jar on a multi-buy.
+  upsertProducts('coles', [{ store_product_id: 'home2', name: 'Homepage Pasta Sauce Basil 500g', brand: 'Homepage', size_text: '500g', price: 4 }]);
+  upsertProducts('woolworths', [{ store_product_id: 'home3', name: 'Homepage Pasta Sauce Basil 500g', brand: 'Homepage', size_text: '500g', price: 4, multi_qty: 2, multi_price: 6, promo_text: '2 for $6' }]);
+  clearDealsCache();
+
+  const anon = (await client()('GET', '/api/home')).body;
+  assert.equal(anon.regulars, null, 'regulars need an account');
+  const found = anon.unusual.find((x) => x.product.id === oil);
+  assert.ok(found, 'the first special in months is unusual');
+  assert.equal(found.deal.kind, 'rare');
+  assert.equal(found.deal.pctOff, 40);
+
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'homepage@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const sauce = d.prepare("SELECT id FROM products WHERE store_product_id = 'home2'").get().id;
+  await api('POST', `/api/lists/${list.id}/items`, { productId: sauce });
+  const home = (await api('GET', '/api/home')).body;
+  const r = home.regulars.find((x) => x.anchor.id === sauce);
+  assert.ok(r, 'something on your list that’s on a deal');
+  assert.equal(r.product.store, 'woolworths');
+  assert.equal(r.deal.kind, 'multi');
+  assert.equal(r.deal.unit, 3);
+  assert.equal(r.deal.pctOff, 25);
+});
+
+test('responses are compressed and search results stay small', async () => {
+  const res = await fetch(base + '/api/search?q=milk', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(res.headers.get('content-encoding'), 'gzip');
+  const groups = await res.json();
+  assert.ok(groups.length && groups.every((g) => typeof g.memberCount === 'number' && !g.members), 'counts, not every equivalent');
+  assert.ok(!JSON.stringify(groups).includes('_tokens'), 'no internal fields');
+  const js = await fetch(base + '/app.js', { headers: { 'Accept-Encoding': 'gzip' } });
+  assert.equal(js.headers.get('content-encoding'), 'gzip');
 });

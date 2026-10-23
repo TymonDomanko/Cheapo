@@ -10,7 +10,6 @@
   <meta name="theme-color" content="#2a78d6">
   <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/styles.css">
-  <script src="/vendor/chart.js/chart.umd.js" defer></script>
   <script src="/app.js" type="module"></script>
 </head>
 <body>
@@ -49,6 +48,7 @@
           <option value="exact">Match same brand only</option>
         </select>
         <label class="check"><input id="specials" type="checkbox"> Specials only</label>
+        <button type="button" class="small" id="compare-scan" title="Scan a barcode">📷 Scan</button>
       </form>
       <p class="hint">Products count as the same item when the pack size matches exactly and the name is similar, ignoring brand. Click a product to see its price history.</p>
       <p id="iga-notice" class="notice" role="status" hidden></p>
@@ -264,6 +264,28 @@
       <button class="primary" type="submit">Report wrong match</button>
       <p class="hint">An admin checks reports. Once confirmed, these two won’t be compared for anyone.</p>
     </form>
+  </dialog>
+
+  <dialog id="paste-dialog">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <div id="paste-detail"></div>
+  </dialog>
+
+  <dialog id="scan-dialog" class="narrow">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <h2>Scan a barcode</h2>
+    <div class="scan-view"><video id="scan-video" playsinline muted></video><div class="scan-frame"></div></div>
+    <p id="scan-status" class="hint" role="status">Point the camera at a barcode.</p>
+    <div id="scan-result"></div>
+    <form id="scan-manual" class="copy-row">
+      <input name="code" inputmode="numeric" pattern="[0-9]*" placeholder="Or type the barcode number" aria-label="Barcode number">
+      <button class="small" type="submit">Look up</button>
+    </form>
+  </dialog>
+
+  <dialog id="spending-dialog">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <div id="spending-detail"></div>
   </dialog>
 
   <dialog id="snapshots-dialog" class="narrow">

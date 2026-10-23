@@ -2,10 +2,11 @@
 // lists behind a login, and admin-only data management.
 
 import express from 'express';
+import compression from 'compression';
 import path from 'node:path';
 import { getDb } from './db.js';
 import { STORES, STORE_INFO } from './stores.js';
-import { compareSearch, productDetail } from './compare.js';
+import { compareSearch, productDetail, lookupBarcode } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
   sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
@@ -19,6 +20,11 @@ import * as settings from './settings.js';
 import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
+import { previewPaste } from './paste.js';
+import { productInsight } from './insights.js';
+import { logTick, resetLayout } from './layouts.js';
+import { dataHealth } from './health.js';
+import { unusualDeals, regularsOnSale } from './deals.js';
 import { COLLECTOR_CODE } from './collector-files.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
@@ -64,6 +70,8 @@ export function createApp() {
   const tp = process.env.TRUST_PROXY;
   if (tp) app.set('trust proxy', /^\d+$/.test(tp) ? Number(tp) : tp === 'true' ? 1 : tp);
   app.disable('x-powered-by');
+  // Gzip responses: search results and lists shrink 5-10x, which matters on phones.
+  app.use(compression());
 
   app.use((req, res, next) => {
     res.set({
@@ -80,7 +88,11 @@ export function createApp() {
   const bigJson = express.json({ limit: '5mb' });
   app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
   app.use(express.static(path.resolve('public')));
-  app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist')));
+  // Libraries only change when the app is upgraded, so browsers may keep them for a day.
+  const vendor = { maxAge: '1d' };
+  app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist'), vendor));
+  // Barcode reading for phones without a built-in barcode reader (iPhone Safari).
+  app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd'), vendor));
   // Pages handled by the single-page app.
   const spa = (req, res) => res.sendFile(path.resolve('public/index.html'));
   app.get(['/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
@@ -129,7 +141,7 @@ export function createApp() {
   const searchLimit = rateLimit({ windowMs: 60000, max: 90 });
   app.get('/api/search', searchLimit, h((req) => {
     const { q = '', store, specials, mode } = req.query;
-    return compareSearch(String(q).slice(0, 100), {
+    const groups = compareSearch(String(q).slice(0, 100), {
       store,
       stores: req.user?.preferredStores,
       igaStore: igaFor(req),
@@ -139,11 +151,30 @@ export function createApp() {
       limit: Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
+    // The page shows how many equivalents there are, not each one; leave them out to keep this small.
+    return groups.map(({ members, ...g }) => ({ ...g, memberCount: members.length }));
+  }));
+
+  // The home page: unusual deals for everyone, and your regulars that are on sale.
+  app.get('/api/home', searchLimit, h((req) => {
+    const stores = req.user?.preferredStores;
+    return {
+      unusual: unusualDeals({ stores }),
+      regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [] }) : null,
+    };
+  }));
+
+  // A barcode scanned in the shop.
+  app.get('/api/barcode/:code', searchLimit, h((req) => {
+    const out = lookupBarcode(req.params.code, { stores: req.user?.preferredStores, igaStore: igaFor(req), memberships: req.user?.memberships || [] });
+    if (!out) throw bad('That doesn’t look like a product barcode');
+    return out;
   }));
 
   app.get('/api/products/:id', h((req) => {
     const out = productDetail(id(req.params.id), req.user?.preferredStores, igaFor(req));
     if (!out) throw bad('Not found', 404);
+    out.insight = productInsight(out.product, igaFor(req));
     if (req.user) {
       out.watch = getDb().prepare('SELECT target_price, baseline_price FROM watches WHERE user_id = ? AND product_id = ?')
         .get(req.user.id, out.product.id) || null;
@@ -256,13 +287,16 @@ export function createApp() {
       alerts_price, memberships FROM users WHERE id = ?`).get(req.user.id);
     const myLists = lists.listsForUser(req.user.id).map((l) => ({
       ...l,
-      items: d.prepare(`SELECT p.store, p.name, p.size_text, i.quantity, i.match_mode, i.added_at FROM list_items i
-        JOIN products p ON p.id = i.product_id WHERE i.list_id = ?`).all(l.id),
+      items: d.prepare(`SELECT p.store, p.name, p.size_text, i.note, i.quantity, i.match_mode, i.added_at FROM list_items i
+        LEFT JOIN products p ON p.id = i.product_id WHERE i.list_id = ?`).all(l.id),
+      shops: d.prepare(`SELECT name, kind, items_json, spent, spent_json, created_at FROM list_snapshots WHERE list_id = ?`).all(l.id)
+        .map((x) => ({ ...x, items: JSON.parse(x.items_json), spentDetail: x.spent_json ? JSON.parse(x.spent_json) : null, items_json: undefined, spent_json: undefined })),
     }));
     const watches = d.prepare(`SELECT p.store, p.name, p.size_text, w.target_price, w.created_at FROM watches w
       JOIN products p ON p.id = w.product_id WHERE w.user_id = ?`).all(req.user.id);
     res.set('Content-Disposition', 'attachment; filename="my-grocery-data.json"');
-    return { exportedAt: new Date().toISOString(), account: u, lists: myLists, watches };
+    const ticks = d.prepare('SELECT store, aisle, at FROM tick_log WHERE user_id = ? ORDER BY at').all(req.user.id);
+    return { exportedAt: new Date().toISOString(), account: u, lists: myLists, watches, shopTicks: ticks };
   }));
 
   app.post('/api/me/password', requireUser, authLimit, h(async (req) => {
@@ -295,8 +329,32 @@ export function createApp() {
   app.delete('/api/lists/:id', requireUser, h((req) => lists.deleteList(id(req.params.id), req.user.id)));
 
   app.post('/api/lists/:id/items', requireUser, h((req) => {
-    const { productId, quantity = 1, matchMode = 'similar' } = req.body || {};
+    const { productId, note, quantity = 1, matchMode = 'similar' } = req.body || {};
+    if (productId == null && note != null) return { id: lists.addNote(id(req.params.id), req.user.id, note, quantity) };
     return { id: lists.addItem(id(req.params.id), req.user.id, id(productId), quantity, matchMode) };
+  }));
+
+  // Paste a typed list: first see what each line matches, then add the chosen ones.
+  app.post('/api/lists/:id/paste-preview', requireUser, searchLimit, h((req) => {
+    const listId = id(req.params.id);
+    const list = lists.getListSummary(listId, req.user.id);
+    const text = String(req.body?.text || '').slice(0, 5000);
+    return previewPaste(text, {
+      stores: STORES.filter((s) => !list.excludedStores.includes(s)),
+      igaStore: list.igaStoreId,
+      memberships: req.user.memberships || [],
+    });
+  }));
+  app.post('/api/lists/:id/paste', requireUser, h((req) => {
+    const listId = id(req.params.id);
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines.slice(0, 60) : [];
+    let added = 0;
+    for (const l of lines) {
+      if (l.productId != null) lists.addItem(listId, req.user.id, id(l.productId), l.quantity);
+      else lists.addNote(listId, req.user.id, l.note, l.quantity);
+      added++;
+    }
+    return { added };
   }));
   app.delete('/api/lists/:id/items', requireUser, h((req) => lists.clearItems(id(req.params.id), req.user.id)));
 
@@ -320,10 +378,17 @@ export function createApp() {
 
   // ------------------------------------------------------------ in the shop & saved shops
 
-  app.put('/api/items/:id/checked', requireUser, h((req) => lists.setChecked(id(req.params.id), req.user.id, !!req.body?.checked)));
+  app.put('/api/items/:id/checked', requireUser, h((req) => {
+    const { checked, store, aisle, at } = req.body || {};
+    lists.setChecked(id(req.params.id), req.user.id, !!checked);
+    // Ticks made in the shop teach us its layout.
+    if (checked && store && aisle) logTick(req.user.id, { store, aisle, at });
+  }));
+  app.delete('/api/me/shop-layouts/:store', requireUser, h((req) => resetLayout(req.user.id, req.params.store)));
   app.post('/api/lists/:id/finish', requireUser, h((req) => lists.finishShop(id(req.params.id), req.user.id)));
   app.get('/api/lists/:id/snapshots', requireUser, h((req) => lists.listSnapshots(id(req.params.id), req.user.id)));
   app.post('/api/lists/:id/snapshots', requireUser, h((req) => lists.saveRegularShop(id(req.params.id), req.user.id, req.body?.name)));
+  app.get('/api/lists/:id/spending', requireUser, h((req) => lists.spending(id(req.params.id), req.user.id)));
   app.post('/api/lists/:id/snapshots/:sid/add', requireUser, h((req) => lists.addSnapshot(id(req.params.id), req.user.id, id(req.params.sid))));
   app.delete('/api/lists/:id/snapshots/:sid', requireUser, h((req) => lists.deleteSnapshot(id(req.params.id), req.user.id, id(req.params.sid))));
 
@@ -432,6 +497,8 @@ export function createApp() {
       openMatchReports: getDb().prepare("SELECT COUNT(*) n FROM match_reports WHERE status = 'open'").get().n,
     };
   }));
+
+  app.get('/api/admin/health', requireAdmin, h((req) => dataHealth({ refresh: req.query.refresh === '1' })));
 
   app.post('/api/admin/scrape', requireAdmin, h((req) => {
     const wanted = Array.isArray(req.body?.stores) ? req.body.stores.filter((s) => serverStores().includes(s)) : serverStores();
