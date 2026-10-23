@@ -910,3 +910,39 @@ test('an item can be pinned to one shop instead of the cheapest', async () => {
   v = (await api('GET', `/api/lists/${list.id}`)).body;
   assert.equal(v.items[0].cheapest, 'aldi');
 });
+
+test('home page: unusual deals for everyone, and your regulars on sale', async () => {
+  const { getDb } = await import('../src/db.js');
+  const { clearDealsCache } = await import('../src/deals.js');
+  const d = getDb();
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  // Olive oil: $12 for 7 months, $7.20 today (on special for the first time).
+  upsertProducts('woolworths', [{ store_product_id: 'home1', name: 'Homepage Olive Oil Extra Virgin 1L', brand: 'Homepage', size_text: '1L', price: 7.2, was_price: 12, on_special: true }]);
+  const oil = d.prepare("SELECT id FROM products WHERE store_product_id = 'home1'").get().id;
+  d.prepare('DELETE FROM price_history WHERE product_id = ?').run(oil);
+  d.prepare('INSERT INTO price_history (product_id, price, on_special, recorded_at) VALUES (?, 12, 0, ?), (?, 7.2, 1, ?)').run(oil, ago(210), oil, ago(1));
+  // Pasta sauce: on your list at Coles; Woolworths has the same jar on a multi-buy.
+  upsertProducts('coles', [{ store_product_id: 'home2', name: 'Homepage Pasta Sauce Basil 500g', brand: 'Homepage', size_text: '500g', price: 4 }]);
+  upsertProducts('woolworths', [{ store_product_id: 'home3', name: 'Homepage Pasta Sauce Basil 500g', brand: 'Homepage', size_text: '500g', price: 4, multi_qty: 2, multi_price: 6, promo_text: '2 for $6' }]);
+  clearDealsCache();
+
+  const anon = (await client()('GET', '/api/home')).body;
+  assert.equal(anon.regulars, null, 'regulars need an account');
+  const found = anon.unusual.find((x) => x.product.id === oil);
+  assert.ok(found, 'the first special in months is unusual');
+  assert.equal(found.deal.kind, 'rare');
+  assert.equal(found.deal.pctOff, 40);
+
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'homepage@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const sauce = d.prepare("SELECT id FROM products WHERE store_product_id = 'home2'").get().id;
+  await api('POST', `/api/lists/${list.id}/items`, { productId: sauce });
+  const home = (await api('GET', '/api/home')).body;
+  const r = home.regulars.find((x) => x.anchor.id === sauce);
+  assert.ok(r, 'something on your list that’s on a deal');
+  assert.equal(r.product.store, 'woolworths');
+  assert.equal(r.deal.kind, 'multi');
+  assert.equal(r.deal.unit, 3);
+  assert.equal(r.deal.pctOff, 25);
+});

@@ -373,3 +373,17 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .warn-box { border-color: var(--special); }
 .nowrap { white-space: nowrap; }
 .pin-note { font-size: 14px; margin-top: 8px; }
+
+/* Home page deals */
+.home-section { margin: 8px 0 24px; }
+.home-section h2 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.deal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.deal-card { display: grid; grid-template-columns: 64px 1fr; grid-template-rows: 1fr auto; gap: 6px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.deal-card .thumb { width: 64px; height: 64px; grid-row: 1 / span 2; }
+.deal-card .add { justify-self: start; grid-column: 2; }
+.deal-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.deal-name { font-weight: 600; color: var(--text); text-decoration: none; }
+.deal-name:hover { text-decoration: underline; }
+.deal-why { font-size: 13px; color: var(--good); font-weight: 600; }
+.deal-card .price { font-size: 18px; font-weight: 700; }
+.deal-card .was { color: var(--muted); font-size: 13px; }

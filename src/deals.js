@@ -42,7 +42,7 @@ function allUnusual() {
   return unusualCache.list;
 }
 
-export function unusualDeals({ stores = STORES, limit = 12 } = {}) {
+export function unusualDeals({ stores = STORES, limit = 8 } = {}) {
   const allowed = stores?.length ? stores : STORES;
   const out = [];
   for (const deal of allUnusual()) {
@@ -95,7 +95,7 @@ function regulars(userId) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => ({ id, n }));
 }
 
-export function regularsOnSale(userId, { stores = STORES, igaStore = null, memberships = [], limit = 12 } = {}) {
+export function regularsOnSale(userId, { stores = STORES, igaStore = null, memberships = [], limit = 8 } = {}) {
   const allowed = stores?.length ? stores : STORES;
   const out = [];
   const seen = new Set();

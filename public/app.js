@@ -645,6 +645,8 @@ async function runSearch() {
     specials: $('#specials').checked ? '1' : '',
   });
   const box = $('#results');
+  // Nothing searched or filtered: the home page.
+  if (!params.get('q') && !params.get('store') && !params.get('specials')) return renderHome(seq);
   try {
     const groups = await api(withIga(`/api/search?${params}`));
     if (seq !== searchSeq) return;
@@ -659,6 +661,68 @@ async function runSearch() {
     box.innerHTML = `<div class="empty">Search failed: ${esc(e.message)}</div>`;
   }
 }
+
+// ------------------------------------------------------------------ home page
+// Before you search: your regulars that are on sale, and specials that are
+// out of the ordinary (not the usual every-few-weeks cycle).
+
+async function renderHome(seq) {
+  const box = $('#results');
+  let h;
+  try {
+    h = await api(withIga('/api/home'));
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Couldn’t load deals: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (seq !== searchSeq) return;
+  const regulars = h.regulars == null
+    ? `<p class="hint"><a href="/login">Log in</a> to see the things you buy often whenever they’re on sale.</p>`
+    : h.regulars.length ? `<div class="deal-grid">${h.regulars.map(regularCard).join('')}</div>`
+      : '<p class="hint">Nothing you buy often is on sale at your shops right now. This fills in as you use your lists and finish shops.</p>';
+  const unusual = h.unusual.length ? `<div class="deal-grid">${h.unusual.map(unusualCard).join('')}</div>`
+    : '<p class="hint">Nothing out of the ordinary today. Deals show up here when something is cheaper than its specials usually get, or on special for the first time in months.</p>';
+  const sections = [
+    `<section class="home-section"><h2>Your regulars on sale</h2>${regulars}</section>`,
+    `<section class="home-section"><h2>Unusual deals <span class="hint">specials that don’t come round often</span></h2>${unusual}</section>`,
+  ];
+  // Put whichever has something to show first.
+  if (!h.regulars?.length) sections.reverse();
+  box.innerHTML = `${sections.join('')}
+    <p><button type="button" class="small" id="browse-specials">Browse all specials</button></p>`;
+}
+
+function dealCardShell(p, inner) {
+  return `<article class="deal-card">
+    ${thumb(p)}
+    <div class="deal-body">${inner}</div>
+    <button class="add small" data-add="${p.id}">+ List</button>
+  </article>`;
+}
+
+function unusualCard({ product: p, deal }) {
+  return dealCardShell(p, `
+    <div class="deal-tag-row"><span class="badge special">−${deal.pctOff}%</span> <span class="deal-why">${esc(deal.headline)}</span></div>
+    <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
+    <div class="hint">${dot(p.store)}${esc(storeName(p.store))}${p.size_text ? ` · ${esc(p.size_text)}` : ''}</div>
+    <div><span class="price">${money(p.price)}</span> <span class="was">usually ${money(deal.usual)}</span></div>`);
+}
+
+function regularCard({ anchor, times, product: p, deal }) {
+  const same = p.id === anchor.id || p.name === anchor.name;
+  return dealCardShell(p, `
+    <div class="deal-tag-row"><span class="badge special">−${deal.pctOff}%</span> <span class="deal-why">${esc(deal.text)}</span></div>
+    <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
+    <div class="hint">${dot(p.store)}${esc(storeName(p.store))}${p.size_text ? ` · ${esc(p.size_text)}` : ''}${same ? '' : ` · instead of your ${esc(anchor.name)}`}</div>
+    <div><span class="price">${money(deal.unit)}</span>${deal.kind === 'multi' ? ' each' : ''} <span class="was">usually ${money(deal.regular)}</span></div>
+    <div class="hint">${times >= 3 ? 'You buy this often' : 'On your lists'}</div>`);
+}
+
+$('#results').addEventListener('click', (e) => {
+  if (e.target.id !== 'browse-specials') return;
+  $('#specials').checked = true;
+  runSearch();
+});
 
 function thumb(p) {
   return p.image_url
