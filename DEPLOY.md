@@ -62,6 +62,28 @@ Then run `docker compose up -d` again to apply.
 
 A home connection is the most reliable place to scrape from, because Woolworths and ALDI don't block residential IPs.
 
+### On Unraid
+
+Use the **Compose Manager** plugin (or Portainer) with this, swapping in your share's name. This example uses a share called `supermarket`:
+
+```yaml
+services:
+  app:
+    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    container_name: supermarket
+    restart: unless-stopped
+    ports:
+      - "3000:3000"        # or e.g. "8085:3000" if 3000 is taken
+    env_file: .env
+    environment:
+      PUID: "99"           # files in the share stay owned by nobody:users,
+      PGID: "100"          # like the rest of Unraid
+    volumes:
+      - /mnt/user/supermarket:/data
+```
+
+There's no `volumes:` section at the bottom: the data goes straight into the share. That folder then holds the database (`supermarket.db`), its daily backups and the cached collector programs. Back it up like any other share.
+
 ## 2. Docker on a server with your own domain
 
 What you need:
