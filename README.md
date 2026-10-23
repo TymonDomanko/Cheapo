@@ -4,6 +4,7 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
 
 - **Every product and price** from each chain (about 60,000 products), refreshed daily.
 - **Search and compare.** Each result shows the cheapest equivalent at every store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand.
+- **Sign-up, log-in and settings pages.** At `/signup` you pick the shops you use. At `/settings` you change those shops, your name and your password, or delete your account. Search only compares your shops, and new lists start with them.
 - **Accounts and shared lists.** Anyone can search. Signing up gives you a shopping list; you can make more lists and **share one with your household** using an invite link. Everyone on a shared list can add, change and remove items, and sees each other's changes.
 - **Choose your shops.** Each list has a card per supermarket that you can tick or untick:
   - A shop you use says what it's **saving you** (how much more the list would cost without it), and warns if it's the only place you can get some items.
@@ -32,18 +33,13 @@ Once you have real data, remove the demo products with `npm run seed:demo -- --c
 
 ## Host it publicly
 
-The repo includes a `Dockerfile` and `docker-compose.yml`. The database is one SQLite file on a persistent volume (`/data`).
+[DEPLOY.md](DEPLOY.md) has step-by-step guides for each way of running it:
 
-```bash
-cp .env.example .env     # set ADMIN_EMAILS and check the other settings
-docker compose up -d --build
-```
+- **Docker on your machine:** `cp .env.example .env && docker compose up -d`
+- **Docker on a server with your domain:** the files in `deploy/docker/` add automatic HTTPS (Caddy) and nightly updates (Watchtower).
+- **Cloud:** `fly.toml` for Fly.io (Sydney region) or `render.yaml` for a Render Blueprint.
 
-Put it behind a reverse proxy that handles HTTPS (Caddy, nginx, or your host's load balancer). In production, session cookies are HTTPS-only. Set `TRUST_PROXY` to the number of proxies in front of the app so client IPs (used for rate limiting) come through correctly. Sign up with the email in `ADMIN_EMAILS` to become the first admin.
-
-Any host that can run a Docker container with a persistent disk will work (a VPS, Fly.io, Railway, Render with a disk, and so on). Run **one** instance: SQLite and the in-process rate limiter and scheduler assume a single server. For more than one instance, move to PostgreSQL.
-
-**Scraping from a cloud server.** Coles, IGA and Harris Farm work from datacentre IPs. Woolworths and ALDI use Akamai bot protection that sometimes blocks cloud IPs. If their scrapes fail in the Admin page, run `npm run scrape -- woolworths aldi` from a home machine against the same database, or give the server a residential proxy through `HTTPS_PROXY`.
+A GitHub Action tests the app and publishes the image to `ghcr.io/tymondomanko/supermarket-tools` on every push to `main`.
 
 ### Security
 
@@ -70,6 +66,8 @@ See `.env.example`. The main settings:
 | `ALLOW_SIGNUPS` | `true` | Set to `false` to close registration |
 | `NODE_ENV` | — | `production` turns on HTTPS-only cookies |
 | `TRUST_PROXY` | — | Number of reverse proxies in front of the app |
+| `SECURE_COOKIES` | `true` in production | Set to `false` only when serving over plain http on a LAN |
+| `TZ` | server's | Time zone for the refresh schedule, e.g. `Australia/Sydney` |
 | `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices (server time); empty disables it |
 | `IGA_STORE_ID` | `32600` | Which IGA store's prices to track. IGA stores set their own prices; find IDs at `igashop.com.au/api/storefront/stores` |
 | `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |

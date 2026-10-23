@@ -8,7 +8,7 @@ import { STORES, STORE_INFO } from './stores.js';
 import { compareSearch, productDetail } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
-  sameOriginOnly, rateLimit,
+  sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
 } from './auth.js';
 import * as lists from './lists.js';
 import { scrapeAll, scrapeStatus } from './scrapers/index.js';
@@ -58,8 +58,14 @@ export function createApp() {
   app.use(express.json({ limit: '50kb' }));
   app.use(express.static(path.resolve('public')));
   app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist')));
-  // Invite links (/join/<token>) are handled by the single-page app.
-  app.get('/join/:token', (req, res) => res.sendFile(path.resolve('public/index.html')));
+  // Pages handled by the single-page app.
+  const spa = (req, res) => res.sendFile(path.resolve('public/index.html'));
+  app.get(['/login', '/signup', '/settings', '/join/:token'], spa);
+  // For load balancers / platform health checks.
+  app.get('/healthz', (req, res) => {
+    getDb().prepare('SELECT 1').get();
+    res.json({ ok: true });
+  });
 
   app.use('/api', loadUser, sameOriginOnly, rateLimit({ windowMs: 60000, max: 300 }));
 
@@ -89,6 +95,7 @@ export function createApp() {
     const { q = '', store, specials, mode } = req.query;
     return compareSearch(String(q).slice(0, 100), {
       store,
+      stores: req.user?.preferredStores,
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
       limit: Math.min(Number(req.query.limit) || 30, 60),
@@ -97,7 +104,7 @@ export function createApp() {
   }));
 
   app.get('/api/products/:id', h((req) => {
-    const out = productDetail(id(req.params.id));
+    const out = productDetail(id(req.params.id), req.user?.preferredStores);
     if (!out) throw bad('Not found', 404);
     return out;
   }));
@@ -120,9 +127,10 @@ export function createApp() {
 
   app.post('/api/auth/signup', authLimit, h(async (req, res) => {
     if (!ALLOW_SIGNUPS) throw bad('Sign-ups are closed', 403);
-    const { email, name, password } = req.body || {};
-    const user = await createUser({ email, name, password });
-    lists.createList(user.id, 'My list');
+    const { email, name, password, preferredStores } = req.body || {};
+    let user = await createUser({ email, name, password });
+    if (Array.isArray(preferredStores) && preferredStores.length) user = updateProfile(user.id, { preferredStores });
+    lists.createList(user.id, 'My list', user.preferredStores);
     startSession(res, user.id);
     return { user };
   }));
@@ -137,10 +145,28 @@ export function createApp() {
     endSession(req, res);
   }));
 
+  // ------------------------------------------------------------ your account
+
+  app.patch('/api/me', requireUser, h((req) => {
+    const { name, preferredStores, applyToLists } = req.body || {};
+    const user = updateProfile(req.user.id, { name, preferredStores });
+    if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
+    return { user };
+  }));
+
+  app.post('/api/me/password', requireUser, authLimit, h(async (req) => {
+    await changePassword(req.user.id, req.body?.currentPassword, req.body?.newPassword, sessionToken(req));
+  }));
+
+  app.delete('/api/me', requireUser, authLimit, h(async (req, res) => {
+    await deleteAccount(req.user.id, req.body?.password);
+    endSession(req, res);
+  }));
+
   // ------------------------------------------------------------ lists (logged in)
 
   app.get('/api/lists', requireUser, h((req) => lists.listsForUser(req.user.id)));
-  app.post('/api/lists', requireUser, h((req) => lists.createList(req.user.id, req.body?.name)));
+  app.post('/api/lists', requireUser, h((req) => lists.createList(req.user.id, req.body?.name, req.user.preferredStores)));
   app.get('/api/lists/:id', requireUser, h((req) => lists.listView(id(req.params.id), req.user.id)));
 
   app.patch('/api/lists/:id', requireUser, h((req) => {

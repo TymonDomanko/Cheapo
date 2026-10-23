@@ -155,6 +155,11 @@ function migrate(d) {
       log_json TEXT
     );
   `);
+  // Columns added after the first release.
+  const userCols = d.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!userCols.includes('preferred_stores')) {
+    d.exec('ALTER TABLE users ADD COLUMN preferred_stores TEXT'); // JSON array; NULL = all stores
+  }
 }
 
 const nowIso = () => new Date().toISOString();

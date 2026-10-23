@@ -1,12 +1,15 @@
+# Run on your own machine or a home server: http://localhost:3000
+#   cp .env.example .env   (set ADMIN_EMAILS; for plain http on a LAN set SECURE_COOKIES=false)
+#   docker compose up -d
+# Uses the published image; add `--build` (and keep `build: .`) to build from this checkout instead.
 services:
   app:
+    image: ghcr.io/tymondomanko/supermarket-tools:latest
     build: .
     restart: unless-stopped
     ports:
       - "3000:3000"
     env_file: .env
-    environment:
-      DATA_DIR: /data
     volumes:
       - grocery-data:/data
 

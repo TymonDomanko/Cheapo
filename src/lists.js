@@ -14,11 +14,13 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 // ---------------------------------------------------------------- lists & access
 
-export function createList(userId, name = 'My list') {
+export function createList(userId, name = 'My list', preferredStores = STORES) {
   const d = getDb();
+  // New lists start with the creator's preferred shops.
+  const excluded = STORES.filter((s) => !preferredStores.includes(s));
   const id = d.transaction(() => {
-    const listId = d.prepare('INSERT INTO lists (name, created_by, created_at) VALUES (?, ?, ?)')
-      .run(cleanName(name), userId, nowIso()).lastInsertRowid;
+    const listId = d.prepare('INSERT INTO lists (name, created_by, excluded_stores, created_at) VALUES (?, ?, ?, ?)')
+      .run(cleanName(name), userId, JSON.stringify(excluded), nowIso()).lastInsertRowid;
     d.prepare("INSERT INTO list_members (list_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)")
       .run(listId, userId, nowIso());
     return listId;
@@ -74,6 +76,13 @@ export function renameList(listId, userId, name) {
 export function deleteList(listId, userId) {
   requireMember(listId, userId, 'owner');
   getDb().prepare('DELETE FROM lists WHERE id = ?').run(listId);
+}
+
+/** Apply someone's preferred shops to every list they own. */
+export function applyPreferredToOwnedLists(userId, preferredStores) {
+  const excluded = JSON.stringify(STORES.filter((s) => !preferredStores.includes(s)));
+  getDb().prepare(`UPDATE lists SET excluded_stores = ? WHERE id IN
+    (SELECT list_id FROM list_members WHERE user_id = ? AND role = 'owner')`).run(excluded, userId);
 }
 
 export function setExcludedStores(listId, userId, stores) {

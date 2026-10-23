@@ -125,3 +125,32 @@ test('cross-site writes are rejected', async () => {
   });
   assert.equal(res.status, 403);
 });
+
+test('signup page shop choice and settings: preferred shops filter search and new lists', async () => {
+  const api = client();
+  const r = await api('POST', '/api/auth/signup', { email: 'lee@example.com', password: 'password123', preferredStores: ['coles', 'aldi'] });
+  assert.deepEqual(r.body.user.preferredStores, ['coles', 'aldi']);
+  const groups = (await api('GET', '/api/search?q=milk')).body;
+  const stores = new Set(groups.flatMap((g) => g.members.map((m) => m.store)));
+  assert.ok(!stores.has('woolworths'), 'Woolworths hidden from search');
+  const list = (await api('GET', '/api/lists')).body[0];
+  assert.deepEqual((await api('GET', `/api/lists/${list.id}`)).body.included, ['coles', 'aldi']);
+
+  // Change settings and apply to existing lists
+  await api('PATCH', '/api/me', { preferredStores: ['woolworths', 'coles'], applyToLists: true });
+  assert.deepEqual((await api('GET', `/api/lists/${list.id}`)).body.included, ['woolworths', 'coles']);
+  assert.equal((await api('PATCH', '/api/me', { preferredStores: [] })).status, 400);
+});
+
+test('change password signs out other sessions; delete account', async () => {
+  const a = client();
+  const b = client();
+  await a('POST', '/api/auth/signup', { email: 'max@example.com', password: 'password123' });
+  await b('POST', '/api/auth/login', { email: 'max@example.com', password: 'password123' });
+  assert.equal((await a('POST', '/api/me/password', { currentPassword: 'wrong', newPassword: 'newpassword1' })).status, 400);
+  assert.equal((await a('POST', '/api/me/password', { currentPassword: 'password123', newPassword: 'newpassword1' })).status, 200);
+  assert.equal((await a('GET', '/api/lists')).status, 200, 'this session stays signed in');
+  assert.equal((await b('GET', '/api/lists')).status, 401, 'other sessions are signed out');
+  assert.equal((await a('DELETE', '/api/me', { password: 'newpassword1' })).status, 200);
+  assert.equal((await client()('POST', '/api/auth/login', { email: 'max@example.com', password: 'newpassword1' })).status, 401);
+});

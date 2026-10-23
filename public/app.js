@@ -9,7 +9,8 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const state = {
   config: null, // { user, stores, allowSignups, trolleyFill }
-  stores: [], // ids in display order
+  allStores: [], // every shop id, in display order
+  stores: [], // the shops this user compares (their settings), in display order
   names: {},
   lists: [],
   listId: null,
@@ -41,11 +42,14 @@ function toast(msg) {
 
 async function loadConfig() {
   state.config = await api('/api/config');
-  state.stores = state.config.stores.map((s) => s.id);
+  state.allStores = state.config.stores.map((s) => s.id);
+  const pref = state.config.user?.preferredStores;
+  state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
   $('#store-names').textContent = state.config.stores.map((s) => s.name).join(' · ');
-  $('#store-filter').innerHTML = '<option value="">All stores</option>'
-    + state.config.stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  $('#store-filter').innerHTML = `<option value="">${state.stores.length < state.allStores.length ? 'All my shops' : 'All shops'}</option>`
+    + state.stores.map((s) => `<option value="${s}">${esc(storeName(s))}</option>`).join('');
+  $$('[data-shop-boxes]').forEach(renderShopBoxes);
   renderAccount();
 }
 
@@ -53,86 +57,236 @@ function renderAccount() {
   const u = user();
   $('#admin-tab').hidden = !u?.isAdmin;
   $('#account').innerHTML = u
-    ? `<span class="who">${esc(u.name)}</span> <button class="small ghost" id="logout">Log out</button>`
-    : '<button class="small" id="login-btn">Log in</button>'
-      + (state.config.allowSignups ? ' <button class="small primary" id="signup-btn">Sign up</button>' : '');
+    ? `<a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
+       <a href="/settings" data-link class="button small ghost">Settings</a>
+       <button class="small ghost" id="logout">Log out</button>`
+    : '<a href="/login" data-link class="button small">Log in</a>'
+      + (state.config.allowSignups ? ' <a href="/signup" data-link class="button small primary">Sign up</a>' : '');
   $('#logout')?.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.href = '/';
   });
-  $('#login-btn')?.addEventListener('click', () => openAuth('login'));
-  $('#signup-btn')?.addEventListener('click', () => openAuth('signup'));
 }
 
-// ================================================================== tabs
+// ================================================================== pages & routing
+// Tabs live at /#compare, /#list…; full pages at /login, /signup, /settings, /join/<token>.
+
+const TABS = ['compare', 'list', 'changes', 'admin'];
+const PAGES = ['login', 'signup', 'settings'];
 
 function showTab(name) {
   if (name === 'admin' && !user()?.isAdmin) name = 'compare';
-  $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
-  $$('.tab').forEach((t) => (t.hidden = t.id !== `tab-${name}`));
+  if (location.pathname !== '/') history.pushState(null, '', '/');
+  history.replaceState(null, '', `/#${name}`);
+  show(name);
   if (name === 'list') loadList();
   if (name === 'changes') loadChanges();
   if (name === 'admin') loadAdmin();
-  if (location.pathname === '/') history.replaceState(null, '', `#${name}`);
 }
+
+function show(name) {
+  $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  $$('.tab').forEach((t) => (t.hidden = t.id !== `tab-${name}`));
+  window.scrollTo(0, 0);
+}
+
+function navigate(path) {
+  history.pushState(null, '', path);
+  route();
+}
+
+/** Show whatever the current URL points at. */
+async function route() {
+  const path = location.pathname;
+  const join = path.match(/^\/join\/([\w-]+)$/);
+  if (join) return handleJoin(join[1]);
+  const page = path.slice(1);
+  if (PAGES.includes(page)) {
+    if (page === 'settings' && !user()) return goToAuth('login', 'Log in to change your settings.', { type: 'goto', path: '/settings' });
+    if (page !== 'settings' && user()) return navigate('/');
+    if (page === 'signup' && !state.config.allowSignups) return navigate('/login');
+    show(page);
+    if (page === 'settings') fillSettings();
+    else {
+      $(`#tab-${page} [data-auth-reason]`).textContent = sessionStorage.getItem('authReason') || '';
+      $('[data-signup-link]').hidden = !state.config.allowSignups;
+      $(`#tab-${page} input[name=${page === 'signup' ? 'name' : 'email'}]`).focus();
+    }
+    return;
+  }
+  const tab = location.hash.slice(1);
+  showTab(TABS.includes(tab) ? tab : 'compare');
+}
+
+window.addEventListener('popstate', route);
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 document.addEventListener('click', (e) => {
   const a = e.target.closest('[data-goto]');
   if (a) {
     e.preventDefault();
     showTab(a.dataset.goto);
+    return;
+  }
+  const link = e.target.closest('a[data-link]');
+  if (link && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault();
+    navigate(link.getAttribute('href'));
   }
 });
 const currentTab = () => $('.tabs [aria-selected="true"]')?.dataset.tab;
 
-// ================================================================== auth dialog
+// ================================================================== sign up / log in
 
-let authMode = 'login';
-let afterAuth = null;
-
-function openAuth(mode = 'login', reason = '', then = null) {
-  setAuthMode(state.config.allowSignups ? mode : 'login');
-  $('.auth-switch [data-auth="signup"]').hidden = !state.config.allowSignups;
-  $('#auth-reason').textContent = reason;
-  $('#auth-error').hidden = true;
-  afterAuth = then;
-  $('#auth-dialog').showModal();
+/**
+ * Send someone to the sign-up (or log-in) page, remembering what they were
+ * trying to do so it happens straight after (add an item, join a list…).
+ */
+function goToAuth(mode, reason, after) {
+  try {
+    sessionStorage.setItem('authReason', reason || '');
+    if (after) sessionStorage.setItem('afterAuth', JSON.stringify(after));
+  } catch {
+    /* storage blocked: they'll just land on the home page afterwards */
+  }
+  navigate(mode === 'signup' && state.config.allowSignups ? '/signup' : '/login');
 }
 
-function setAuthMode(mode) {
-  authMode = mode;
-  $$('.auth-switch button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.auth === mode)));
-  $$('[data-signup-only]').forEach((el) => (el.hidden = mode !== 'signup'));
-  $('#auth-submit').textContent = mode === 'signup' ? 'Create account' : 'Log in';
-  $('#auth-form [name=password]').autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+function requireLogin(reason, after) {
+  if (user()) return true;
+  goToAuth('signup', reason, after);
+  return false;
 }
-$$('.auth-switch button').forEach((b) => b.addEventListener('click', () => setAuthMode(b.dataset.auth)));
 
-$('#auth-form').addEventListener('submit', async (e) => {
+/** Tick boxes for each shop, pre-ticked with the user's choice (or all). */
+function renderShopBoxes(el) {
+  const chosen = user()?.preferredStores || state.allStores;
+  el.innerHTML = state.config.stores.map((s) => `<label class="check shop-box">
+    <input type="checkbox" name="shops" value="${s.id}" ${chosen.includes(s.id) ? 'checked' : ''}>
+    ${dot(s.id)} <span><strong>${esc(s.name)}</strong> <span class="hint">${esc(s.note || '')}</span></span></label>`).join('');
+}
+
+function formError(form, err) {
+  const el = $('[data-form-error]', form);
+  el.textContent = err ? err.message : '';
+  el.hidden = !err;
+}
+
+async function afterLogin() {
+  await loadConfig();
+  state.lists = [];
+  state.listId = null;
+  refreshListCount().catch(() => {});
+  let after = null;
+  try {
+    after = JSON.parse(sessionStorage.getItem('afterAuth') || 'null');
+    sessionStorage.removeItem('afterAuth');
+    sessionStorage.removeItem('authReason');
+  } catch {
+    /* ignore */
+  }
+  if (after?.type === 'join') return navigate(`/join/${after.token}`);
+  if (after?.type === 'goto') return navigate(after.path);
+  history.pushState(null, '', '/');
+  if (after?.type === 'add') {
+    await addToList(after.productId).catch((e) => toast(e.message));
+    return showTab('list');
+  }
+  toast(`Welcome, ${user().name}`);
+  showTab('compare');
+  runSearch();
+}
+
+$('#signup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const body = { email: f.get('email'), password: f.get('password'), name: f.get('name') };
+  const preferredStores = f.getAll('shops');
+  if (!preferredStores.length) return formError(e.target, new Error('Tick at least one shop'));
   try {
-    await api(`/api/auth/${authMode}`, { method: 'POST', body });
-    $('#auth-dialog').close();
+    await api('/api/auth/signup', {
+      method: 'POST',
+      body: { name: f.get('name'), email: f.get('email'), password: f.get('password'), preferredStores },
+    });
+    formError(e.target, null);
     e.target.reset();
-    await loadConfig();
-    state.lists = [];
-    state.listId = null;
-    if (afterAuth) await afterAuth();
-    else toast(`Welcome, ${user().name}`);
-    if (currentTab() === 'list') loadList();
+    await afterLogin();
   } catch (err) {
-    $('#auth-error').textContent = err.message;
-    $('#auth-error').hidden = false;
+    formError(e.target, err);
   }
 });
 
-function requireLogin(reason, then) {
-  if (user()) return true;
-  openAuth('signup', reason, then);
-  return false;
+$('#login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('/api/auth/login', { method: 'POST', body: { email: f.get('email'), password: f.get('password') } });
+    formError(e.target, null);
+    e.target.reset();
+    await afterLogin();
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+// ================================================================== settings
+
+function fillSettings() {
+  const u = user();
+  $('#profile-form [name=name]').value = u.name;
+  $('#profile-form [name=email]').value = u.email;
+  $$('#tab-settings form').forEach((f) => formError(f, null));
+  renderShopBoxes($('#shops-form [data-shop-boxes]'));
 }
+
+$('#profile-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/me', { method: 'PATCH', body: { name: new FormData(e.target).get('name') } });
+    await loadConfig();
+    formError(e.target, null);
+    toast('Profile saved');
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+$('#shops-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const preferredStores = f.getAll('shops');
+  try {
+    await api('/api/me', { method: 'PATCH', body: { preferredStores, applyToLists: f.get('applyToLists') === 'on' } });
+    await loadConfig();
+    formError(e.target, null);
+    toast('Shops saved');
+    runSearch();
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+$('#password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('/api/me/password', { method: 'POST', body: { currentPassword: f.get('currentPassword'), newPassword: f.get('newPassword') } });
+    e.target.reset();
+    formError(e.target, null);
+    toast('Password changed');
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+$('#delete-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!confirm('Delete your account for good?')) return;
+  try {
+    await api('/api/me', { method: 'DELETE', body: { password: new FormData(e.target).get('password') } });
+    location.href = '/';
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
 
 // ================================================================== compare / search
 
@@ -203,7 +357,7 @@ function renderGroup(g) {
 }
 
 async function addToList(productId) {
-  if (!requireLogin('Sign up or log in to keep a shopping list.', () => addToList(productId))) return;
+  if (!requireLogin('Create an account (or log in) to keep a shopping list.', { type: 'add', productId })) return;
   await ensureLists();
   const list = state.lists.find((l) => l.id === state.listId);
   await api(`/api/lists/${state.listId}/items`, { method: 'POST', body: { productId } });
@@ -373,7 +527,7 @@ async function loadList() {
     root.innerHTML = `<div class="empty">
       <p>Log in to build shopping lists. You can share a list with your household so everyone can add to it.</p>
       <p><button class="primary" id="list-login">Sign up or log in</button></p></div>`;
-    $('#list-login').addEventListener('click', () => openAuth('signup', '', loadList));
+    $('#list-login').addEventListener('click', () => goToAuth('signup', '', { type: 'goto', path: '/#list' }));
     return;
   }
   state.lists = await api('/api/lists');
@@ -423,11 +577,11 @@ function renderList() {
 function renderStorePanel(L) {
   if (!L.items.length) {
     return `<div class="store-panel"><h2>Where you shop</h2><div class="store-cards">
-      ${state.stores.map((s) => storeToggle(s, L.included.includes(s), '')).join('')}</div></div>`;
+      ${state.allStores.map((s) => storeToggle(s, L.included.includes(s), '')).join('')}</div></div>`;
   }
   return `<div class="store-panel"><h2>Where you shop</h2>
     <p class="hint">Untick a shop to stop buying from it. Each card shows what that shop is worth for this list.</p>
-    <div class="store-cards">${state.stores.map((s) => {
+    <div class="store-cards">${state.allStores.map((s) => {
       const im = L.impact[s];
       let note;
       if (im.included) {
@@ -468,7 +622,7 @@ function renderItem(it) {
       </select>
       <button class="small ghost" data-remove>Remove</button>
     </div>
-    <div class="store-picks">${state.stores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
+    <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
   </div>`;
 }
 
@@ -491,8 +645,8 @@ function renderPick(it, store, enabled) {
 }
 
 function renderSummary(L) {
-  const stores = state.stores.filter((s) => L.plan.byStore[s]?.items.length);
-  const singles = state.stores.map((s) => {
+  const stores = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
+  const singles = state.allStores.map((s) => {
     const x = L.singleStore[s];
     const diff = x.total - L.plan.total;
     return `<div class="tile"><div class="label">${dot(s)} Everything at ${esc(storeName(s))}</div>
@@ -520,7 +674,7 @@ $('#list-root').addEventListener('change', async (e) => {
     }
     if (t.matches('[data-store-toggle]')) {
       const excluded = $$('[data-store-toggle]').filter((c) => !c.checked).map((c) => c.dataset.storeToggle);
-      if (excluded.length === state.stores.length) {
+      if (excluded.length === state.allStores.length) {
         t.checked = true;
         return toast('Keep at least one shop');
       }
@@ -634,32 +788,23 @@ async function copyText(text) {
   }
 }
 
-/** /join/<token> → accept the invite (after logging in) and open that list. */
-async function handleJoinLink() {
-  const m = location.pathname.match(/^\/join\/([\w-]+)$/);
-  if (!m) return false;
-  const token = m[1];
-  const accept = async () => {
-    try {
-      const { listId } = await api(`/api/invites/${token}/accept`, { method: 'POST' });
-      selectList(listId);
-      state.lists = [];
-      history.replaceState(null, '', '/#list');
-      showTab('list');
-      toast('You’ve joined the list');
-    } catch (e) {
-      toast(e.message);
-    }
-  };
+/** /join/<token> → accept the invite (after signing up / logging in) and open that list. */
+async function handleJoin(token) {
   try {
     const inv = await api(`/api/invites/${token}`);
-    if (user()) await accept();
-    else openAuth('signup', `${inv.from || 'Someone'} invited you to the list “${inv.listName}”. Sign up or log in to join.`, accept);
+    if (!user()) {
+      return goToAuth('signup', `${inv.from || 'Someone'} invited you to the list “${inv.listName}”. Create an account or log in to join.`,
+        { type: 'join', token });
+    }
+    const { listId } = await api(`/api/invites/${token}/accept`, { method: 'POST' });
+    selectList(listId);
+    state.lists = [];
+    toast('You’ve joined the list');
+    showTab('list');
   } catch (e) {
-    history.replaceState(null, '', '/');
     toast(e.message);
+    showTab('compare');
   }
-  return true;
 }
 
 // ================================================================== ordering
@@ -670,7 +815,7 @@ function storeOnline(s) {
 
 function openOrder() {
   const L = state.list;
-  const stores = state.stores.filter((s) => L.plan.byStore[s]?.items.length);
+  const stores = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
   const plainList = (s) => L.plan.byStore[s].items.map((i) => `${i.quantity} × ${i.product.name}`).join('\n');
   $('#order-detail').innerHTML = `<h2>Order the cheapest — ${money(L.plan.total)}</h2>
     ${L.plan.unavailable.length ? `<p class="warn">Not available at your shops: ${L.plan.unavailable.map((u) => esc(u.name)).join(', ')}</p>` : ''}
@@ -762,7 +907,7 @@ async function loadAdmin() {
 
 $('#admin-root').addEventListener('click', async (e) => {
   const t = e.target;
-  const stores = t.id === 'scrape-all' ? state.stores : t.dataset.scrape ? [t.dataset.scrape] : null;
+  const stores = t.id === 'scrape-all' ? state.allStores : t.dataset.scrape ? [t.dataset.scrape] : null;
   if (!stores) return;
   await api('/api/admin/scrape', { method: 'POST', body: { stores } });
   toast('Refresh started');
@@ -789,8 +934,5 @@ api('/api/stats').then((s) => {
   $('#updated-hint').textContent = latest ? `Prices last updated ${fmtDate(latest)}.` : '';
 }).catch(() => {});
 if (user()) refreshListCount().catch(() => {});
-if (!(await handleJoinLink())) {
-  const initial = location.hash.slice(1);
-  showTab(['compare', 'list', 'changes', 'admin'].includes(initial) ? initial : 'compare');
-}
+await route();
 runSearch();

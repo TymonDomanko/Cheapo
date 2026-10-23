@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { getDb, nowIso } from './db.js';
+import { STORES } from './stores.js';
 
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'sid';
@@ -33,7 +34,67 @@ export async function verifyPassword(password, stored) {
 const tokenHash = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
 function publicUser(u) {
-  return u && { id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin };
+  return u && { id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin, preferredStores: parsePreferred(u.preferred_stores) };
+}
+
+/** The user's chosen shops (all shops if they haven't chosen). */
+function parsePreferred(json) {
+  try {
+    const list = JSON.parse(json || 'null');
+    const clean = Array.isArray(list) ? list.filter((s) => STORES.includes(s)) : [];
+    return clean.length ? clean : [...STORES];
+  } catch {
+    return [...STORES];
+  }
+}
+
+export function updateProfile(userId, { name, preferredStores }) {
+  const d = getDb();
+  if (name != null) {
+    const n = String(name).trim();
+    if (!n || n.length > 80) throw httpError(400, 'Name must be 1–80 characters');
+    d.prepare('UPDATE users SET name = ? WHERE id = ?').run(n, userId);
+  }
+  if (preferredStores != null) {
+    const clean = [...new Set((Array.isArray(preferredStores) ? preferredStores : []).filter((s) => STORES.includes(s)))];
+    if (!clean.length) throw httpError(400, 'Choose at least one shop');
+    d.prepare('UPDATE users SET preferred_stores = ? WHERE id = ?').run(JSON.stringify(clean), userId);
+  }
+  return publicUser(d.prepare('SELECT * FROM users WHERE id = ?').get(userId));
+}
+
+async function requirePassword(userId, password) {
+  const u = getDb().prepare('SELECT password_hash FROM users WHERE id = ?').get(userId);
+  if (!u || !(await verifyPassword(String(password || ''), u.password_hash))) throw httpError(400, 'Your current password is wrong');
+}
+
+/** Change password and sign out every other session. */
+export async function changePassword(userId, currentPassword, newPassword, keepTokenOf) {
+  await requirePassword(userId, currentPassword);
+  if (String(newPassword || '').length < MIN_PASSWORD) throw httpError(400, `New password must be at least ${MIN_PASSWORD} characters`);
+  const d = getDb();
+  d.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(newPassword), userId);
+  const keep = keepTokenOf ? tokenHash(keepTokenOf) : '';
+  d.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(userId, keep);
+}
+
+/** Delete the account. Lists they own and share with nobody go too; shared ones pass to another member. */
+export async function deleteAccount(userId, password) {
+  await requirePassword(userId, password);
+  const d = getDb();
+  d.transaction(() => {
+    const owned = d.prepare("SELECT list_id FROM list_members WHERE user_id = ? AND role = 'owner'").all(userId);
+    for (const { list_id: listId } of owned) {
+      const heir = d.prepare('SELECT user_id FROM list_members WHERE list_id = ? AND user_id != ? ORDER BY joined_at LIMIT 1').get(listId, userId);
+      if (heir) d.prepare("UPDATE list_members SET role = 'owner' WHERE list_id = ? AND user_id = ?").run(listId, heir.user_id);
+      else d.prepare('DELETE FROM lists WHERE id = ?').run(listId);
+    }
+    d.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  })();
+}
+
+export function sessionToken(req) {
+  return readCookie(req, COOKIE);
 }
 
 /** Emails listed in ADMIN_EMAILS become admins when they sign up. */

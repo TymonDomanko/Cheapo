@@ -20,14 +20,21 @@ export function getProduct(id) {
   return getDb().prepare(`SELECT ${PRODUCT_COLS} FROM products p WHERE p.id = ?`).get(id);
 }
 
-export function searchProducts(q, { store, limit = 30, offset = 0, specialsOnly = false } = {}) {
+/** Only keep known store ids; an empty or missing list means every store. */
+function storeSet(stores) {
+  const s = (stores || []).filter((x) => STORES.includes(x));
+  return s.length ? s : STORES;
+}
+
+export function searchProducts(q, { store, stores, limit = 30, offset = 0, specialsOnly = false } = {}) {
   const d = getDb();
   const match = ftsQuery(q);
   const where = ['p.available = 1'];
   const params = [];
-  if (store && STORES.includes(store)) {
-    where.push('p.store = ?');
-    params.push(store);
+  const allowed = store && STORES.includes(store) ? [store] : storeSet(stores);
+  if (allowed.length < STORES.length) {
+    where.push(`p.store IN (${allowed.map(() => '?').join(',')})`);
+    params.push(...allowed);
   }
   if (specialsOnly) where.push('p.on_special = 1');
   if (!match) {
@@ -101,12 +108,13 @@ function cheapestStore(best, stores = STORES) {
  * item with the cheapest equivalent at each store.
  */
 export function compareSearch(q, opts = {}) {
+  const stores = storeSet(opts.stores);
   const results = searchProducts(q, { ...opts, limit: opts.limit ?? 30 });
   const seen = new Set();
   const groups = [];
   for (const p of results) {
     if (seen.has(p.id)) continue;
-    const eq = findEquivalents(p, opts.mode || 'similar');
+    const eq = findEquivalents(p, opts.mode || 'similar').filter((m) => stores.includes(m.product.store));
     for (const m of eq) seen.add(m.product.id);
     const best = bestPerStore(eq);
     groups.push({
@@ -128,10 +136,11 @@ export function priceHistory(productIds) {
 }
 
 /** Product detail: itself, its cross-store equivalents and everyone's price history. */
-export function productDetail(id) {
+export function productDetail(id, stores) {
   const p = getProduct(id);
   if (!p) return null;
-  const eq = findEquivalents(p, 'similar');
+  const allowed = storeSet(stores);
+  const eq = findEquivalents(p, 'similar').filter((m) => m.product.id === p.id || allowed.includes(m.product.store));
   const best = bestPerStore(eq);
   // Chart the product itself plus the best match at each other store.
   const charted = [p, ...Object.values(best).map((m) => m.product).filter((x) => x.id !== p.id)];

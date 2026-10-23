@@ -15,7 +15,7 @@ if (SCRAPE_CRON) {
   cron.schedule(SCRAPE_CRON, () => {
     console.log('Scheduled scrape starting');
     scrapeAll(STORES.filter((s) => !scrapeStatus[s].running)).catch(() => {});
-  });
+  }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
 

@@ -1,0 +1,46 @@
+# Public server with automatic HTTPS (Caddy + Let's Encrypt).
+# Needs: a Linux server with Docker, a domain whose DNS points at it, ports 80 and 443 open.
+#   cp .env.example .env    # set DOMAIN and ADMIN_EMAILS
+#   docker compose up -d
+services:
+  app:
+    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: "1"
+    volumes:
+      - grocery-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # Optional: pull new images every night so updates roll out automatically.
+  # Remove this service if you'd rather update by hand (docker compose pull && docker compose up -d).
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --schedule "0 0 3 * * *" --cleanup
+
+volumes:
+  grocery-data:
+  caddy-data:
+  caddy-config:

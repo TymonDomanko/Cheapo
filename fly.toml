@@ -1,0 +1,43 @@
+# Fly.io — see DEPLOY.md. Quick start:
+#   fly launch --copy-config --no-deploy        (pick an app name; keep region syd)
+#   fly volumes create grocery_data --region syd --size 1
+#   fly secrets set ADMIN_EMAILS=you@example.com
+#   fly deploy
+app = "grocery-compare"
+primary_region = "syd"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  DATA_DIR = "/data"
+  PORT = "3000"
+  TRUST_PROXY = "1"
+  TZ = "Australia/Sydney"
+  SCRAPE_CRON = "15 4 * * *"
+
+# SQLite lives on this volume. Run exactly one machine.
+[[mounts]]
+  source = "grocery_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Keep it running so the daily price refresh fires.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
