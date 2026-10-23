@@ -178,8 +178,22 @@ function migrate(d) {
       postcode TEXT,
       lat REAL,
       lng REAL,
-      no_prices INTEGER NOT NULL DEFAULT 0, -- fetched once and had no products online
+      no_prices INTEGER NOT NULL DEFAULT 0, -- latest check found no products online
+      listed INTEGER NOT NULL DEFAULT 1,    -- still in IGA's online store directory
+      checked_at TEXT,                      -- when we last checked it has prices online
+      online_products INTEGER,              -- rough catalogue size seen at that check
       updated_at TEXT NOT NULL
+    );
+    -- Daily "which IGAs have prices online" checks, for the admin page.
+    CREATE TABLE IF NOT EXISTS iga_checks (
+      id INTEGER PRIMARY KEY,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      listed INTEGER,
+      with_prices INTEGER,
+      came_online INTEGER,
+      went_offline INTEGER,
+      error TEXT
     );
     -- IGA stores whose prices we collect (because someone picked them).
     CREATE TABLE IF NOT EXISTS iga_tracked (
@@ -225,6 +239,11 @@ function migratePerStorePrices(d) {
   const storeCols = cols('iga_stores');
   if (storeCols.length && !storeCols.includes('no_prices')) {
     d.exec('ALTER TABLE iga_stores ADD COLUMN no_prices INTEGER NOT NULL DEFAULT 0');
+  }
+  if (storeCols.length && !storeCols.includes('listed')) {
+    d.exec(`ALTER TABLE iga_stores ADD COLUMN listed INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE iga_stores ADD COLUMN checked_at TEXT;
+      ALTER TABLE iga_stores ADD COLUMN online_products INTEGER;`);
   }
 
   const legacyStore = process.env.IGA_STORE_ID || '32600';

@@ -6,7 +6,7 @@ import { getDb, nowIso } from './db.js';
 import { createClient } from './scrapers/http.js';
 
 const DIRECTORY_URL = 'https://www.igashop.com.au/api/storefront/stores';
-const DIRECTORY_MAX_AGE_DAYS = 7;
+const DIRECTORY_MAX_AGE_DAYS = 1;
 // How many IGA stores' prices to collect. Unset or 0 = no limit.
 const MAX_TRACKED = Number(process.env.IGA_MAX_STORES) > 0 ? Number(process.env.IGA_MAX_STORES) : Infinity;
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
@@ -39,18 +39,26 @@ export async function ensureDirectory() {
 async function refreshDirectory() {
   const client = createClient({ origin: 'https://www.igashop.com.au', delayMs: 0 });
   const json = await client.getJson(DIRECTORY_URL);
-  saveDirectory(json.items || []);
+  const items = json.items || [];
+  // An empty or tiny answer is more likely an API hiccup than IGA closing every store.
+  if (items.length < 50) throw new Error(`IGA store list looked wrong (${items.length} stores)`);
+  saveDirectory(items, { complete: true });
 }
 
-/** Store IGA's raw directory entries. Exported for tests. */
-export function saveDirectory(items) {
+/**
+ * Store IGA's raw directory entries. With complete: true, stores missing from
+ * the list are marked as no longer listed. Exported for tests.
+ */
+export function saveDirectory(items, { complete = false } = {}) {
   const d = getDb();
   const up = d.prepare(`INSERT INTO iga_stores (id, name, address, suburb, state, postcode, lat, lng, updated_at)
     VALUES (@id, @name, @address, @suburb, @state, @postcode, @lat, @lng, @updated_at)
     ON CONFLICT (id) DO UPDATE SET name=excluded.name, address=excluded.address, suburb=excluded.suburb,
-      state=excluded.state, postcode=excluded.postcode, lat=excluded.lat, lng=excluded.lng, updated_at=excluded.updated_at`);
+      state=excluded.state, postcode=excluded.postcode, lat=excluded.lat, lng=excluded.lng, listed=1,
+      updated_at=excluded.updated_at`);
   const now = nowIso();
   d.transaction(() => {
+    if (complete) d.prepare('UPDATE iga_stores SET listed = 0').run();
     for (const s of items) {
       if (s.status && s.status !== 'Active') continue;
       const id = String(s.retailerStoreId || '').trim();
@@ -77,16 +85,17 @@ function distanceKm(lat1, lng1, lat2, lng2) {
   return 6371 * 2 * Math.asin(Math.sqrt(a));
 }
 
-/** Store row plus whether we have its prices yet. */
 // The picker only offers stores that publish their prices on igashop.com.au:
-// those in IGA's online directory, minus any whose catalogue turned out empty.
-const LISTED = 'SELECT * FROM iga_stores WHERE no_prices = 0';
+// those in IGA's online directory whose latest daily check found prices.
+const ONLINE = 'listed = 1 AND no_prices = 0';
+const LISTED = `SELECT * FROM iga_stores WHERE ${ONLINE}`;
 
 /** How many IGA stores have prices online (for the picker's explanation). */
 export function onlineStoreCount() {
-  return getDb().prepare('SELECT COUNT(*) n FROM iga_stores WHERE no_prices = 0').get().n;
+  return getDb().prepare(`SELECT COUNT(*) n FROM iga_stores WHERE ${ONLINE}`).get().n;
 }
 
+/** Store row plus whether we have its prices yet. */
 function withStatus(s, extra = {}) {
   if (!s) return null;
   const t = getDb().prepare('SELECT last_scraped_at FROM iga_tracked WHERE store_id = ?').get(s.id);
@@ -97,6 +106,7 @@ function withStatus(s, extra = {}) {
     suburb: s.suburb,
     state: s.state,
     postcode: s.postcode,
+    online: !!s.listed && !s.no_prices,
     tracked: !!t,
     pricesReady: !!t?.last_scraped_at,
     updating: queue.includes(s.id) || current === s.id,
@@ -154,6 +164,95 @@ function nearest(rows, lat, lng, limit, boost = new Set()) {
     .map(({ s, km }) => withStatus(s, { distanceKm: Math.round(km * 10) / 10 }));
 }
 
+// ---------------------------------------------------------------- daily "who has prices online" check
+
+let checking = null;
+export const checkStatus = { running: false, done: 0, total: 0 };
+
+/**
+ * Once a day: reload IGA's store directory, then ask each listed store for
+ * one product. Stores with products are offered in the picker; stores without
+ * are hidden (and re-offered as soon as a later check finds prices again).
+ * Followed stores that go offline stop being fetched.
+ */
+export function checkOnlineStores({ log = console.log, probe = probeStore, loadDirectory = refreshDirectory } = {}) {
+  checking ||= runCheck(log, probe, loadDirectory).finally(() => {
+    checking = null;
+  });
+  return checking;
+}
+
+async function probeStore(client, id) {
+  const count = async (q) => {
+    const json = await client.getJson(`https://www.igashop.com.au/api/storefront/stores/${encodeURIComponent(id)}/search?q=${q}&take=1`);
+    // An error reply has no total: that's a failed check, not "no products".
+    if (typeof json?.total !== 'number') throw new Error('unexpected reply');
+    return json.total;
+  };
+  // Every IGA sells milk and bread. Only call a store offline if both come back empty,
+  // because a single empty answer occasionally happens even for stores with prices.
+  return (await count('milk')) || (await count('bread'));
+}
+
+async function runCheck(log, probe, loadDirectory) {
+  const d = getDb();
+  const runId = d.prepare('INSERT INTO iga_checks (started_at) VALUES (?)').run(nowIso()).lastInsertRowid;
+  Object.assign(checkStatus, { running: true, done: 0, total: 0 });
+  try {
+    await loadDirectory();
+    const stores = d.prepare('SELECT id, no_prices FROM iga_stores WHERE listed = 1').all();
+    checkStatus.total = stores.length;
+    const client = createClient({ origin: 'https://www.igashop.com.au', delayMs: Number(process.env.IGA_CHECK_DELAY_MS ?? 300) });
+    const save = d.prepare('UPDATE iga_stores SET no_prices = ?, online_products = ?, checked_at = ? WHERE id = ?');
+    let withPrices = 0;
+    let cameOnline = 0;
+    let wentOffline = 0;
+    let failures = 0;
+    for (const s of stores) {
+      let count;
+      try {
+        count = await probe(client, s.id);
+      } catch {
+        failures++; // leave this store as it was; try again tomorrow
+        checkStatus.done++;
+        continue;
+      }
+      const noPrices = count > 0 ? 0 : 1;
+      if (noPrices && !s.no_prices) wentOffline++;
+      if (!noPrices && s.no_prices) cameOnline++;
+      if (!noPrices) withPrices++;
+      save.run(noPrices, count, nowIso(), s.id);
+      checkStatus.done++;
+    }
+    // If most probes failed, IGA's API was down: don't trust this run.
+    if (failures > stores.length / 2) throw new Error(`${failures} of ${stores.length} store checks failed`);
+    // Stop fetching followed stores that no longer publish prices (the default stays, so the site has IGA prices).
+    const dropped = d.prepare(`DELETE FROM iga_tracked WHERE store_id != ? AND store_id IN
+      (SELECT id FROM iga_stores WHERE listed = 0 OR no_prices = 1)`).run(defaultStoreId()).changes;
+    d.prepare(`UPDATE iga_checks SET finished_at = ?, listed = ?, with_prices = ?, came_online = ?, went_offline = ?
+      WHERE id = ?`).run(nowIso(), stores.length, withPrices, cameOnline, wentOffline, runId);
+    log(`iga check: ${withPrices} of ${stores.length} listed IGAs have prices online`
+      + ` (${cameOnline} new, ${wentOffline} gone${dropped ? `, stopped following ${dropped}` : ''})`);
+    return { listed: stores.length, withPrices, cameOnline, wentOffline, failures };
+  } catch (e) {
+    d.prepare('UPDATE iga_checks SET finished_at = ?, error = ? WHERE id = ?').run(nowIso(), e.message, runId);
+    log(`iga check failed: ${e.message}`);
+    throw e;
+  } finally {
+    checkStatus.running = false;
+  }
+}
+
+export function lastCheck() {
+  return getDb().prepare('SELECT * FROM iga_checks ORDER BY id DESC LIMIT 1').get() || null;
+}
+
+/** True if no check has succeeded in the last day (e.g. the server was off at check time). */
+export function checkIsDue() {
+  const ok = getDb().prepare('SELECT MAX(finished_at) t FROM iga_checks WHERE error IS NULL AND finished_at IS NOT NULL').get().t;
+  return !ok || Date.parse(ok) < Date.now() - 23 * 3600000;
+}
+
 // ---------------------------------------------------------------- tracking & fetching prices
 
 export function trackedStores() {
@@ -168,9 +267,9 @@ export function trackedStores() {
 export async function useStore(storeId, userId = null) {
   await ensureDirectory();
   const id = String(storeId || '');
-  const known = getDb().prepare('SELECT no_prices FROM iga_stores WHERE id = ?').get(id);
+  const known = getDb().prepare('SELECT no_prices, listed FROM iga_stores WHERE id = ?').get(id);
   if (!known) throw httpError(400, 'Unknown IGA store');
-  if (known.no_prices) throw httpError(400, 'That IGA doesn’t publish its prices online, so we can’t compare it.');
+  if (known.no_prices || !known.listed) throw httpError(400, 'That IGA doesn’t publish its prices online, so we can’t compare it.');
   const d = getDb();
   if (!d.prepare('SELECT 1 FROM iga_tracked WHERE store_id = ?').get(id)) {
     const n = d.prepare('SELECT COUNT(*) n FROM iga_tracked').get().n;

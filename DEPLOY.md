@@ -116,6 +116,15 @@ Platforms without persistent disks, such as Vercel, Netlify and Heroku, would ne
 
 ---
 
+## The daily refresh
+
+At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
+
+1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
+2. **Refreshes prices** for every supermarket and every followed IGA store.
+
+If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
+
 ## Disk space
 
 The configs above create a **3 GB** disk. Most of the space goes on IGA, because each IGA store people pick keeps its own prices:

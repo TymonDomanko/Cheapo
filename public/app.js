@@ -432,6 +432,12 @@ async function chooseIga(store, { applyToLists = true } = {}) {
 let igaWatch = null;
 function watchIgaPrices() {
   const st = state.config.igaStore;
+  if (st && st.online === false && state.stores.includes('iga')) {
+    $('#iga-notice').hidden = false;
+    $('#iga-notice').innerHTML = `<strong>${esc(st.name)}</strong> no longer publishes its prices online, so IGA isn’t being compared.
+      <button type="button" class="linkish" data-change-iga>Choose another IGA</button>`;
+    return;
+  }
   const waiting = st && !st.pricesReady && state.stores.includes('iga');
   $('#iga-notice').hidden = !waiting;
   if (!waiting) return;
@@ -1099,6 +1105,14 @@ async function loadAdmin() {
         <div class="note">products · ${status}</div>
         <p><button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button></p></div>`;
     }).join('')}</div>
+    <h2 class="section">IGAs with prices online</h2>
+    <p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
+      ${o.iga.check.running ? `<span class="state pending">Checking now… ${o.iga.check.done} of ${o.iga.check.total}</span>`
+        : o.iga.lastCheck ? `<span class="hint">Last checked ${fmtDate(o.iga.lastCheck.started_at)}${o.iga.lastCheck.error
+          ? ` — <span class="warn">failed: ${esc(o.iga.lastCheck.error)}</span>`
+          : ` — ${o.iga.lastCheck.came_online} came online, ${o.iga.lastCheck.went_offline} went offline`}.</span>` : '<span class="hint">Not checked yet.</span>'}
+      <button class="small" id="iga-check" ${o.iga.check.running ? 'disabled' : ''}>Check now</button></p>
+    <p class="hint">Checked automatically every day before prices refresh: IGA’s store list is reloaded and each store is asked for one product.</p>
     <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed${o.iga.maxStores ? ` of ${o.iga.maxStores} allowed` : ' (no limit)'} — prices are collected only for stores people have picked</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
       ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
@@ -1112,12 +1126,17 @@ async function loadAdmin() {
         <td><input type="checkbox" data-admin-user="${u.id}" ${u.is_admin ? 'checked' : ''} ${u.id === user().id ? 'disabled' : ''} aria-label="Admin"></td></tr>`).join('')}
     </tbody></table></div>`;
   clearTimeout(adminTimer);
-  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current;
+  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running;
   if (busy && currentTab() === 'admin') adminTimer = setTimeout(loadAdmin, 3000);
 }
 
 $('#admin-root').addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.id === 'iga-check') {
+    await api('/api/admin/iga/check', { method: 'POST', body: {} });
+    toast('Checking IGA stores…');
+    return setTimeout(loadAdmin, 800);
+  }
   if (t.dataset.untrackIga) {
     if (!confirm('Stop collecting prices for this IGA store? People who picked it will see no IGA prices until it’s picked again.')) return;
     await api(`/api/admin/iga/${encodeURIComponent(t.dataset.untrackIga)}`, { method: 'DELETE' });

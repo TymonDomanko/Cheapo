@@ -232,3 +232,37 @@ test('IGA stores whose catalogue is empty online are hidden from the picker', as
   assert.match(r.body.error, /doesn’t publish its prices online/);
   assert.equal((await anon('GET', '/api/config')).body.igaOnlineStores, 2);
 });
+
+test('daily IGA check: hides stores that stop publishing prices, re-lists ones that start', async () => {
+  const iga = await import('../src/iga.js');
+  const { getDb } = await import('../src/db.js');
+  const directory = [
+    { retailerStoreId: '32600', name: 'IGA Erskine Park', city: 'Erskine Park', countyProvinceState: 'NSW', postCode: '2759', location: { latitude: -33.80, longitude: 150.80 } },
+    { retailerStoreId: '4647', name: 'IGA Waterloo', city: 'Waterloo', countyProvinceState: 'NSW', postCode: '2017', location: { latitude: -33.90, longitude: 151.20 } },
+    { retailerStoreId: '999', name: 'IGA Perth', city: 'Perth', countyProvinceState: 'WA', postCode: '6000', location: { latitude: -31.95, longitude: 115.86 } },
+  ];
+  let catalogue = { 32600: 500, 4647: 0, 999: 300 }; // Waterloo has gone dark; Perth is back
+  const run = () => iga.checkOnlineStores({
+    log() {},
+    loadDirectory: async () => iga.saveDirectory(directory, { complete: true }),
+    probe: async (client, id) => catalogue[id],
+  });
+
+  let r = await run();
+  assert.equal(r.withPrices, 2);
+  const names = async (q) => (await client()('GET', `/api/iga/stores?q=${q}`)).body.map((s) => s.id);
+  assert.deepEqual(await names('waterloo'), []);
+  assert.deepEqual(await names('perth'), ['999'], 'Perth is offered again now it has prices');
+  assert.equal(getDb().prepare("SELECT COUNT(*) n FROM iga_tracked WHERE store_id = '4647'").get().n, 0, 'stopped following Waterloo');
+  assert.equal(iga.getStore('4647').online, false, 'people who chose Waterloo can be told');
+
+  // Waterloo publishes prices again; Perth drops out of IGA's directory entirely.
+  catalogue = { 32600: 500, 4647: 800 };
+  directory.pop();
+  r = await run();
+  assert.equal(r.cameOnline, 1);
+  assert.deepEqual(await names('waterloo'), ['4647']);
+  assert.deepEqual(await names('perth'), []);
+  assert.equal(iga.lastCheck().with_prices, 2);
+  assert.equal(iga.checkIsDue(), false);
+});

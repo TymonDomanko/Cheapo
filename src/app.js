@@ -268,6 +268,9 @@ export function createApp() {
         queue: iga.queueStatus(),
         defaultStoreId: iga.defaultStoreId(),
         maxStores: Number(process.env.IGA_MAX_STORES) > 0 ? Number(process.env.IGA_MAX_STORES) : null,
+        onlineStores: iga.onlineStoreCount(),
+        lastCheck: iga.lastCheck(),
+        check: iga.checkStatus,
       },
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
@@ -283,6 +286,10 @@ export function createApp() {
   }));
 
   app.delete('/api/admin/iga/:storeId', requireAdmin, h((req) => iga.untrack(req.params.storeId)));
+  app.post('/api/admin/iga/check', requireAdmin, h(() => {
+    iga.checkOnlineStores().catch(() => {});
+    return { started: true };
+  }));
 
   app.get('/api/admin/users', requireAdmin, h(() => getDb().prepare(`
     SELECT u.id, u.email, u.name, u.is_admin, u.created_at,
