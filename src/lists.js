@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
 import { STORES } from './stores.js';
-import { getProduct, findEquivalents, bestPerStore, relocate } from './compare.js';
+import { getProduct, findEquivalents, bestPerStore } from './compare.js';
 import { getStore, defaultStoreId } from './iga.js';
 import { matchScore } from './matcher.js';
 
@@ -224,7 +224,7 @@ export function resolveItems(listId, igaStore = null) {
   const overrides = d.prepare(`SELECT o.* FROM list_item_overrides o JOIN list_items i ON i.id = o.item_id
     WHERE i.list_id = ?`).all(listId);
   return items.map((item) => {
-    const anchor = getProduct(item.product_id);
+    const anchor = getProduct(item.product_id, igaStore);
     const eq = findEquivalents(anchor, item.match_mode, igaStore);
     const best = bestPerStore(eq);
     const perStore = {};
@@ -234,8 +234,8 @@ export function resolveItems(listId, igaStore = null) {
       if (ov && ov.product_id == null) {
         perStore[s] = { excluded: true, candidates };
       } else if (ov) {
-        // A pinned IGA product follows the list to its current IGA store.
-        const p = relocate(getProduct(ov.product_id), igaStore);
+        // IGA products are priced at the list's IGA store.
+        const p = getProduct(ov.product_id, igaStore);
         perStore[s] = p ? { product: p, manual: true, score: matchScore(anchor, p), candidates } : { candidates };
       } else {
         perStore[s] = best[s] ? { product: best[s].product, score: best[s].score, candidates } : { candidates };

@@ -344,6 +344,8 @@ function pickIgaStore({ title = 'Choose your IGA', currentId = null } = {}) {
   $('#iga-q').value = '';
   $('#iga-results').innerHTML = '';
   $('#iga-msg').textContent = 'Type your suburb or postcode, or tap “Near me”.';
+  const n = state.config.igaOnlineStores;
+  $('#iga-count').textContent = n ? ` — ${n.toLocaleString()} stores` : '';
   $('#iga-dialog').showModal();
   $('#iga-q').focus();
   return new Promise((resolve) => {
@@ -363,7 +365,8 @@ async function findIga(params, waiting) {
     const list = await api(`/api/iga/stores?${new URLSearchParams(params)}`);
     if (seq !== igaSeq) return;
     igaFound = new Map(list.map((x) => [x.id, x]));
-    $('#iga-msg').textContent = list.length ? '' : 'No IGA stores found — try a nearby suburb or postcode.';
+    $('#iga-msg').textContent = list.length ? ''
+      : 'No IGA with online prices found there. Try a nearby suburb or postcode, or “Near me”.';
     $('#iga-results').innerHTML = list.map((x) => `<li><button type="button" data-iga-id="${esc(x.id)}" class="${x.id === igaCurrentId ? 'current' : ''}">
       <strong>${esc(x.name)}</strong>
       ${x.distanceKm != null ? `<span class="dist">${x.distanceKm < 1 ? `${Math.round(x.distanceKm * 1000)} m` : `${x.distanceKm.toFixed(1)} km`}</span>` : '<span></span>'}
@@ -1096,7 +1099,7 @@ async function loadAdmin() {
         <div class="note">products · ${status}</div>
         <p><button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button></p></div>`;
     }).join('')}</div>
-    <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed — prices are collected only for stores people have picked</span></h2>
+    <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed${o.iga.maxStores ? ` of ${o.iga.maxStores} allowed` : ' (no limit)'} — prices are collected only for stores people have picked</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
       ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
         <td>${fmtDate(t.added_at)}</td>

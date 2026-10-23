@@ -5,7 +5,7 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
 - **Every product and price** from each chain (about 60,000 products), refreshed daily.
 - **Search and compare.** Each result shows the cheapest equivalent at every store. Products count as equivalent when they have **exactly the same pack size** (weight, volume or count) and a similar name, ignoring brand.
 - **Sign-up, log-in and settings pages.** At `/signup` you pick the shops you use. At `/settings` you change those shops, your name and your password, or delete your account. Search only compares your shops, and new lists start with them.
-- **Choose your IGA.** Every IGA sets its own prices, so people pick their store by suburb, postcode, or "Near me". You can do this from the compare page, at sign-up, in settings, or per shared list. The first time anyone picks a store, its prices are fetched in the background (about 2 minutes) and then refreshed daily.
+- **Choose your IGA.** Every IGA sets its own prices, so people pick their store by suburb, postcode, or "Near me". You can do this from the compare page, at sign-up, in settings, or per shared list. Only IGAs that publish their prices online (on igashop.com.au) can be picked, and the picker says so. The first time anyone picks a store, its prices are fetched in the background (about 2 minutes) and then refreshed daily.
 - **Accounts and shared lists.** Anyone can search. Signing up gives you a shopping list; you can make more lists and **share one with your household** using an invite link. Everyone on a shared list can add, change and remove items, and sees each other's changes.
 - **Choose your shops.** Each list has a card per supermarket that you can tick or untick:
   - A shop you use says what it's **saving you** (how much more the list would cost without it), and warns if it's the only place you can get some items.
@@ -71,7 +71,7 @@ See `.env.example`. The main settings:
 | `TZ` | server's | Time zone for the refresh schedule, e.g. `Australia/Sydney` |
 | `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices (server time); empty disables it |
 | `IGA_STORE_ID` | `32600` | Default IGA store for visitors who haven't picked one |
-| `IGA_MAX_STORES` | `50` | Most IGA stores to collect prices for. Each takes 1–2 minutes a day to refresh |
+| `IGA_MAX_STORES` | no limit | Optional cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the daily refresh and about 2 MB of storage |
 | `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |
 | `ENABLE_TROLLEY_FILL` | `false` | Self-hosted trolley automation (see above) |
 | `DATA_DIR` / `DB_PATH` | `data/` | Where the SQLite database lives |

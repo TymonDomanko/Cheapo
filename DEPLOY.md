@@ -86,7 +86,7 @@ Install the [flyctl CLI](https://fly.io/docs/flyctl/install/), then from the rep
 
 ```bash
 fly launch --copy-config --no-deploy     # choose a unique app name when asked
-fly volumes create grocery_data --region syd --size 1
+fly volumes create grocery_data --region syd --size 3
 fly secrets set ADMIN_EMAILS=you@example.com
 fly deploy
 fly open
@@ -115,6 +115,15 @@ Any host that runs a Dockerfile with a persistent volume works: Railway, Digital
 Platforms without persistent disks, such as Vercel, Netlify and Heroku, would need the database moved to PostgreSQL.
 
 ---
+
+## Disk space
+
+The configs above create a **3 GB** disk. Most of the space goes on IGA, because each IGA store people pick keeps its own prices:
+
+- about **2 MB per IGA store**, on top of a shared IGA catalogue (~0.5 KB per product);
+- the four national chains together take roughly 30 MB.
+
+With no cap (the default), every one of the ~540 IGAs with online prices would come to about 1.1 GB, plus price history that grows slowly as prices change. Set `IGA_MAX_STORES` if you want to limit it. The Admin page shows how many IGA stores are being followed.
 
 ## Scraping from the cloud
 

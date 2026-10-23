@@ -48,7 +48,7 @@ export async function scrapeStore(storeName, opts = {}) {
     // Only a full, unrestricted crawl can tell us a product has disappeared.
     const complete = !opts.onlyCategories?.length && !Number.isFinite(opts.maxPagesPerCategory ?? Infinity);
     if (complete && products > 0) markUnseenUnavailable(storeName, startedAt, opts.location || null);
-    if (storeName === 'iga' && products > 0) igaStores.markScraped(opts.location);
+    if (storeName === 'iga' && (complete || products > 0)) igaStores.markScraped(opts.location, products);
     db.prepare("UPDATE scrape_runs SET finished_at=?, status='ok', products=?, price_changes=? WHERE id=?")
       .run(nowIso(), products, priceChanges, runId);
     log(`${storeName}: done — ${products} products, ${priceChanges} price changes`);

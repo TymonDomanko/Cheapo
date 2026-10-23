@@ -74,7 +74,6 @@ function migrate(d) {
       on_special INTEGER NOT NULL DEFAULT 0,
       recorded_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_history_product ON price_history (product_id, recorded_at);
 
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY,
@@ -166,16 +165,7 @@ function migrate(d) {
   const runCols = d.prepare('PRAGMA table_info(scrape_runs)').all().map((c) => c.name);
   if (!runCols.includes('location')) d.exec('ALTER TABLE scrape_runs ADD COLUMN location TEXT');
 
-  // Chains whose stores set their own prices (IGA) keep one row per product per
-  // store: `location` is that store's id and store_product_id is "<location>:<id>".
-  const productCols = d.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
-  if (!productCols.includes('location')) {
-    d.exec('ALTER TABLE products ADD COLUMN location TEXT');
-    const legacy = process.env.IGA_STORE_ID || '32600';
-    d.prepare(`UPDATE products SET location = ?, store_product_id = ? || ':' || store_product_id
-      WHERE store = 'iga' AND location IS NULL`).run(legacy, legacy);
-  }
-  d.exec('CREATE INDEX IF NOT EXISTS idx_products_location ON products (store, location)');
+  migratePerStorePrices(d);
 
   d.exec(`
     -- IGA's store directory (refreshed weekly from igashop.com.au).
@@ -188,6 +178,7 @@ function migrate(d) {
       postcode TEXT,
       lat REAL,
       lng REAL,
+      no_prices INTEGER NOT NULL DEFAULT 0, -- fetched once and had no products online
       updated_at TEXT NOT NULL
     );
     -- IGA stores whose prices we collect (because someone picked them).
@@ -200,36 +191,134 @@ function migrate(d) {
   `);
 }
 
+/**
+ * Chains whose stores each set their own prices (IGA) share one catalogue row
+ * per product in `products` (name, size, image… with location_priced = 1 and
+ * no price), and keep each store's price in `store_prices`. Price history rows
+ * carry the store too. National chains keep their price on the product row.
+ */
+function migratePerStorePrices(d) {
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS store_prices (
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      location TEXT NOT NULL,          -- e.g. IGA's store id
+      price REAL,
+      was_price REAL,
+      unit_price REAL,
+      unit_price_text TEXT,
+      on_special INTEGER NOT NULL DEFAULT 0,
+      available INTEGER NOT NULL DEFAULT 1,
+      first_seen TEXT NOT NULL,
+      last_seen TEXT NOT NULL,
+      PRIMARY KEY (product_id, location)
+    );
+  `);
+  // Not worth its space: the only query by location is a once-per-fetch scan.
+  d.exec('DROP INDEX IF EXISTS idx_store_prices_location');
+  const cols = (t) => d.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+  if (!cols('products').includes('location_priced')) {
+    d.exec('ALTER TABLE products ADD COLUMN location_priced INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!cols('price_history').includes('location')) d.exec('ALTER TABLE price_history ADD COLUMN location TEXT');
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_history_location ON price_history (product_id, location, recorded_at);
+    DROP INDEX IF EXISTS idx_history_product;`); // superseded by idx_history_location
+  const storeCols = cols('iga_stores');
+  if (storeCols.length && !storeCols.includes('no_prices')) {
+    d.exec('ALTER TABLE iga_stores ADD COLUMN no_prices INTEGER NOT NULL DEFAULT 0');
+  }
+
+  const legacyStore = process.env.IGA_STORE_ID || '32600';
+  d.transaction(() => {
+    // Interim layout: one products row per IGA store, store_product_id "<store>:<id>".
+    if (cols('products').includes('location')) {
+      d.exec(`
+        INSERT OR IGNORE INTO products (store, store_product_id, name, brand, size_text, size_qty, size_unit,
+          alt_size_qty, alt_size_unit, per_weight, category, image_url, product_url, available, first_seen, last_seen,
+          location_priced)
+        SELECT store, substr(store_product_id, instr(store_product_id, ':') + 1), name, brand, size_text, size_qty, size_unit,
+          alt_size_qty, alt_size_unit, per_weight, category, image_url, product_url, 1, first_seen, last_seen, 1
+        FROM products WHERE store = 'iga' AND location IS NOT NULL ORDER BY last_seen DESC;
+
+        CREATE TEMP TABLE iga_move AS
+        SELECT o.id AS old_id, n.id AS new_id, o.location
+        FROM products o JOIN products n ON n.store = 'iga' AND n.location IS NULL
+          AND n.store_product_id = substr(o.store_product_id, instr(o.store_product_id, ':') + 1)
+        WHERE o.store = 'iga' AND o.location IS NOT NULL;
+
+        INSERT OR REPLACE INTO store_prices (product_id, location, price, was_price, unit_price, unit_price_text,
+          on_special, available, first_seen, last_seen)
+        SELECT m.new_id, m.location, o.price, o.was_price, o.unit_price, o.unit_price_text, o.on_special, o.available,
+          o.first_seen, o.last_seen
+        FROM iga_move m JOIN products o ON o.id = m.old_id;
+
+        UPDATE price_history SET location = (SELECT location FROM iga_move WHERE old_id = product_id),
+          product_id = (SELECT new_id FROM iga_move WHERE old_id = product_id)
+        WHERE product_id IN (SELECT old_id FROM iga_move);
+        UPDATE list_items SET product_id = (SELECT new_id FROM iga_move WHERE old_id = product_id)
+          WHERE product_id IN (SELECT old_id FROM iga_move);
+        UPDATE list_item_overrides SET product_id = (SELECT new_id FROM iga_move WHERE old_id = product_id)
+          WHERE product_id IN (SELECT old_id FROM iga_move);
+        DELETE FROM products WHERE id IN (SELECT old_id FROM iga_move);
+        DROP TABLE iga_move;
+
+        DROP INDEX IF EXISTS idx_products_location;
+        ALTER TABLE products DROP COLUMN location;
+      `);
+    }
+    // Original layout: a single IGA store's prices on the product rows themselves.
+    const old = d.prepare("SELECT id FROM products WHERE store = 'iga' AND location_priced = 0 LIMIT 1").get();
+    if (old) {
+      d.prepare(`INSERT OR REPLACE INTO store_prices (product_id, location, price, was_price, unit_price, unit_price_text,
+          on_special, available, first_seen, last_seen)
+        SELECT id, ?, price, was_price, unit_price, unit_price_text, on_special, available, first_seen, last_seen
+        FROM products WHERE store = 'iga' AND location_priced = 0`).run(legacyStore);
+      d.prepare(`UPDATE price_history SET location = ? WHERE location IS NULL
+        AND product_id IN (SELECT id FROM products WHERE store = 'iga' AND location_priced = 0)`).run(legacyStore);
+      d.exec(`UPDATE products SET location_priced = 1, available = 1, price = NULL, was_price = NULL, unit_price = NULL,
+        unit_price_text = NULL, on_special = 0 WHERE store = 'iga' AND location_priced = 0`);
+    }
+  })();
+}
+
 const nowIso = () => new Date().toISOString();
 
 /**
  * Insert or update a batch of scraped products and append a price_history row
  * whenever the price (or special status) differs from the last recorded one.
+ * @param location  for chains whose stores set their own prices (IGA): which
+ *   store these prices are from. The product details go into the shared
+ *   catalogue row; the price goes into store_prices for that store.
  * @returns {{upserted:number, priceChanges:number}}
- */
-/**
- * @param location  for per-store chains (IGA): which store these prices are from
  */
 export function upsertProducts(store, items, seenAt = nowIso(), location = null) {
   const d = getDb();
+  const perStore = location != null;
   const getExisting = d.prepare('SELECT id FROM products WHERE store = ? AND store_product_id = ?');
   const insert = d.prepare(`
-    INSERT INTO products (store, location, store_product_id, name, brand, size_text, size_qty, size_unit, alt_size_qty, alt_size_unit, per_weight,
+    INSERT INTO products (store, store_product_id, name, brand, size_text, size_qty, size_unit, alt_size_qty, alt_size_unit, per_weight,
       category, image_url, product_url, price, was_price, unit_price, unit_price_text, on_special, available,
-      first_seen, last_seen)
-    VALUES (@store, @location, @store_product_id, @name, @brand, @size_text, @size_qty, @size_unit, @alt_size_qty, @alt_size_unit, @per_weight,
+      location_priced, first_seen, last_seen)
+    VALUES (@store, @store_product_id, @name, @brand, @size_text, @size_qty, @size_unit, @alt_size_qty, @alt_size_unit, @per_weight,
       @category, @image_url, @product_url, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available,
-      @seen, @seen)`);
+      @location_priced, @seen, @seen)`);
   const update = d.prepare(`
     UPDATE products SET name=@name, brand=@brand, size_text=@size_text, size_qty=@size_qty, size_unit=@size_unit,
       alt_size_qty=@alt_size_qty, alt_size_unit=@alt_size_unit, per_weight=@per_weight, category=COALESCE(@category, category), image_url=COALESCE(@image_url, image_url),
       product_url=COALESCE(@product_url, product_url), price=@price, was_price=@was_price, unit_price=@unit_price,
-      unit_price_text=@unit_price_text, on_special=@on_special, available=@available, last_seen=@seen
+      unit_price_text=@unit_price_text, on_special=@on_special, available=@available, location_priced=@location_priced,
+      last_seen=@seen
     WHERE id=@id`);
-  const lastPrice = d.prepare(
-    'SELECT price, on_special FROM price_history WHERE product_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1');
+  const upsertStorePrice = d.prepare(`
+    INSERT INTO store_prices (product_id, location, price, was_price, unit_price, unit_price_text, on_special, available,
+      first_seen, last_seen)
+    VALUES (@id, @location, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available, @seen, @seen)
+    ON CONFLICT (product_id, location) DO UPDATE SET price=excluded.price, was_price=excluded.was_price,
+      unit_price=excluded.unit_price, unit_price_text=excluded.unit_price_text, on_special=excluded.on_special,
+      available=excluded.available, last_seen=excluded.last_seen`);
+  const lastPrice = d.prepare(`SELECT price, on_special FROM price_history WHERE product_id = ? AND location IS ?
+    ORDER BY recorded_at DESC, id DESC LIMIT 1`);
   const addHistory = d.prepare(
-    'INSERT INTO price_history (product_id, price, was_price, on_special, recorded_at) VALUES (?, ?, ?, ?, ?)');
+    'INSERT INTO price_history (product_id, location, price, was_price, on_special, recorded_at) VALUES (?, ?, ?, ?, ?, ?)');
 
   let upserted = 0;
   let priceChanges = 0;
@@ -238,10 +327,17 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
       if (!raw || !raw.store_product_id || !raw.name) continue;
       const size = parseSizeFrom(raw.size_text, raw.name);
       const alt = altSize(raw.size_text, raw.name, size);
+      const price = {
+        price: num(raw.price),
+        was_price: num(raw.was_price) || null,
+        unit_price: num(raw.unit_price) ?? (size ? unitPrice(num(raw.price), size.qty, size.unit) : null),
+        unit_price_text: raw.unit_price_text || null,
+        on_special: raw.on_special ? 1 : 0,
+        available: raw.available === false || num(raw.price) == null ? 0 : 1,
+      };
       const row = {
         store,
-        location,
-        store_product_id: location ? `${location}:${raw.store_product_id}` : String(raw.store_product_id),
+        store_product_id: String(raw.store_product_id),
         name: raw.name.trim(),
         brand: raw.brand || null,
         size_text: raw.size_text || null,
@@ -253,12 +349,11 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
         category: raw.category || null,
         image_url: raw.image_url || null,
         product_url: raw.product_url || null,
-        price: num(raw.price),
-        was_price: num(raw.was_price) || null,
-        unit_price: num(raw.unit_price) ?? (size ? unitPrice(num(raw.price), size.qty, size.unit) : null),
-        unit_price_text: raw.unit_price_text || null,
-        on_special: raw.on_special ? 1 : 0,
-        available: raw.available === false || num(raw.price) == null ? 0 : 1,
+        // Catalogue rows of per-store chains carry no price of their own.
+        ...(perStore
+          ? { price: null, was_price: null, unit_price: null, unit_price_text: null, on_special: 0, available: 1 }
+          : price),
+        location_priced: perStore ? 1 : 0,
         seen: seenAt,
       };
       const existing = getExisting.get(store, row.store_product_id);
@@ -269,11 +364,12 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
       } else {
         id = insert.run(row).lastInsertRowid;
       }
+      if (perStore) upsertStorePrice.run({ id, location, ...price, seen: seenAt });
       upserted++;
-      if (row.price != null) {
-        const last = lastPrice.get(id);
-        if (!last || last.price !== row.price || last.on_special !== row.on_special) {
-          addHistory.run(id, row.price, row.was_price, row.on_special, seenAt);
+      if (price.price != null) {
+        const last = lastPrice.get(id, location);
+        if (!last || last.price !== price.price || last.on_special !== price.on_special) {
+          addHistory.run(id, location, price.price, price.was_price, price.on_special, seenAt);
           if (last) priceChanges++;
         }
       }
@@ -283,11 +379,14 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
   return { upserted, priceChanges };
 }
 
-/** After a complete crawl, anything not seen in it is no longer sold. */
+/** After a complete crawl, anything not seen in it is no longer sold (at that store, for per-store chains). */
 export function markUnseenUnavailable(store, since, location = null) {
-  return getDb()
-    .prepare('UPDATE products SET available = 0 WHERE store = ? AND location IS ? AND last_seen < ?')
-    .run(store, location, since).changes;
+  const d = getDb();
+  if (location != null) {
+    return d.prepare(`UPDATE store_prices SET available = 0 WHERE location = ? AND last_seen < ?
+      AND product_id IN (SELECT id FROM products WHERE store = ?)`).run(location, since, store).changes;
+  }
+  return d.prepare('UPDATE products SET available = 0 WHERE store = ? AND last_seen < ?').run(store, since).changes;
 }
 
 function num(v) {

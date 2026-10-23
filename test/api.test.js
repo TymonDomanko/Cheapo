@@ -200,3 +200,35 @@ test('IGA: pick a store, prices follow the store, lists can use another store', 
   assert.equal((await api('PATCH', `/api/lists/${list.id}`, { igaStore: 'nope' })).status, 400);
   assert.equal((await api('POST', '/api/iga/stores/123456/use')).status, 400);
 });
+
+test('IGA shares one catalogue row per product; prices and history are per store', async () => {
+  const { getDb } = await import('../src/db.js');
+  const d = getDb();
+  upsertProducts('iga', [{ store_product_id: 'x9', name: 'Community Co Rolled Oats', brand: 'Community Co', size_text: '1kg', price: 3 }], '2026-01-01T00:00:00.000Z', '32600');
+  upsertProducts('iga', [{ store_product_id: 'x9', name: 'Community Co Rolled Oats', brand: 'Community Co', size_text: '1kg', price: 2 }], '2026-01-01T00:00:00.000Z', '4647');
+  upsertProducts('iga', [{ store_product_id: 'x9', name: 'Community Co Rolled Oats', brand: 'Community Co', size_text: '1kg', price: 2.5 }], '2026-01-02T00:00:00.000Z', '4647');
+  const rows = d.prepare("SELECT id, price, location_priced FROM products WHERE store = 'iga' AND store_product_id = 'x9'").all();
+  assert.equal(rows.length, 1, 'one catalogue row');
+  assert.equal(rows[0].price, null, 'catalogue row has no price of its own');
+  const prices = d.prepare('SELECT location, price FROM store_prices WHERE product_id = ? ORDER BY location').all(rows[0].id);
+  assert.deepEqual(prices, [{ location: '32600', price: 3 }, { location: '4647', price: 2.5 }]);
+
+  const anon = client();
+  const detail = (await anon('GET', `/api/products/${rows[0].id}?iga=4647`)).body;
+  assert.equal(detail.product.price, 2.5);
+  assert.deepEqual(detail.history.filter((h) => h.product_id === rows[0].id).map((h) => h.price), [2, 2.5]);
+  const other = (await anon('GET', `/api/products/${rows[0].id}?iga=32600`)).body;
+  assert.deepEqual(other.history.filter((h) => h.product_id === rows[0].id).map((h) => h.price), [3]);
+});
+
+test('IGA stores whose catalogue is empty online are hidden from the picker', async () => {
+  const { markScraped } = await import('../src/iga.js');
+  const anon = client();
+  assert.equal((await anon('GET', '/api/iga/stores?q=perth')).body.length, 1);
+  markScraped('999', 0); // fetched: no products online
+  assert.equal((await anon('GET', '/api/iga/stores?q=perth')).body.length, 0);
+  const r = await anon('POST', '/api/iga/stores/999/use');
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /doesn’t publish its prices online/);
+  assert.equal((await anon('GET', '/api/config')).body.igaOnlineStores, 2);
+});

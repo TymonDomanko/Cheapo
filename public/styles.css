@@ -280,3 +280,4 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .linkish { border: none; background: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: inherit; }
 .col-sub { display: block; text-transform: none; letter-spacing: 0; font-size: 11px; margin-top: 2px; }
 .notice { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); font-size: 14px; }
+.iga-why { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; }

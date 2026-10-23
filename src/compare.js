@@ -5,27 +5,21 @@ import { STORES } from './stores.js';
 import { nameTokens, rankMatches } from './matcher.js';
 import { defaultStoreId } from './iga.js';
 
+// Chains where each store sets its own prices (IGA) keep one shared catalogue
+// row per product and each store's price in store_prices. Every product query
+// joins in the price for the IGA store being looked at (first SQL parameter).
+const PRICE_JOIN = 'LEFT JOIN store_prices sp ON p.location_priced = 1 AND sp.product_id = p.id AND sp.location = ?';
+const FROM_PRICED = `products p ${PRICE_JOIN}`;
+const FROM_FTS_PRICED = `products_fts f JOIN products p ON p.id = f.rowid ${PRICE_JOIN}`;
+const priced = (col, fallback = 'NULL') =>
+  `CASE WHEN p.location_priced = 1 THEN COALESCE(sp.${col}, ${fallback}) ELSE p.${col} END`;
 const PRODUCT_COLS = `p.id, p.store, p.store_product_id, p.name, p.brand, p.size_text, p.size_qty, p.size_unit,
-  p.alt_size_qty, p.alt_size_unit,
-  p.per_weight, p.category, p.image_url, p.product_url, p.price, p.was_price, p.unit_price, p.unit_price_text,
-  p.on_special, p.available, p.first_seen, p.last_seen, p.location`;
-
-// Per-store chains (IGA) only show the chosen store's rows; national chains have no location.
-const LOCATION_SQL = '(p.location IS NULL OR p.location = ?)';
+  p.alt_size_qty, p.alt_size_unit, p.per_weight, p.category, p.image_url, p.product_url,
+  ${priced('price')} AS price, ${priced('was_price')} AS was_price, ${priced('unit_price')} AS unit_price,
+  ${priced('unit_price_text')} AS unit_price_text, ${priced('on_special', 0)} AS on_special,
+  ${priced('available', 0)} AS available, p.first_seen, p.last_seen, sp.location AS location`;
+const AVAILABLE_SQL = `${priced('available', 0)} = 1`;
 const loc = (igaStore) => String(igaStore || defaultStoreId());
-
-/**
- * The same product at another IGA store (IGA product ids are chain-wide),
- * or null if that store doesn't stock it. Non-IGA products pass through.
- */
-export function relocate(product, igaStore) {
-  if (!product?.location) return product;
-  const want = loc(igaStore);
-  if (product.location === want) return product;
-  const rawId = product.store_product_id.slice(product.store_product_id.indexOf(':') + 1);
-  return getDb().prepare(`SELECT ${PRODUCT_COLS} FROM products p WHERE p.store = ? AND p.store_product_id = ?`)
-    .get(product.store, `${want}:${rawId}`) || null;
-}
 
 function ftsQuery(text, op = 'AND', prefixLast = op === 'AND') {
   const toks = String(text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
@@ -34,8 +28,9 @@ function ftsQuery(text, op = 'AND', prefixLast = op === 'AND') {
   return toks.map((t, i) => (i === toks.length - 1 && prefixLast ? `"${t}"*` : `"${t}"`)).join(` ${op} `);
 }
 
-export function getProduct(id) {
-  return getDb().prepare(`SELECT ${PRODUCT_COLS} FROM products p WHERE p.id = ?`).get(id);
+/** A product, priced at the given IGA store (for IGA products). */
+export function getProduct(id, igaStore = null) {
+  return getDb().prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE p.id = ?`).get(loc(igaStore), id);
 }
 
 /** Only keep known store ids; an empty or missing list means every store. */
@@ -47,26 +42,27 @@ function storeSet(stores) {
 export function searchProducts(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false } = {}) {
   const d = getDb();
   const match = ftsQuery(q);
-  const where = ['p.available = 1', LOCATION_SQL];
-  const params = [loc(igaStore)];
+  const where = [AVAILABLE_SQL];
+  const params = [];
   const allowed = store && STORES.includes(store) ? [store] : storeSet(stores);
   if (allowed.length < STORES.length) {
     where.push(`p.store IN (${allowed.map(() => '?').join(',')})`);
     params.push(...allowed);
   }
-  if (specialsOnly) where.push('p.on_special = 1');
+  if (specialsOnly) where.push(`${priced('on_special', 0)} = 1`);
+  const at = loc(igaStore);
   if (!match) {
-    return d.prepare(`SELECT ${PRODUCT_COLS} FROM products p WHERE ${where.join(' AND ')}
-      ORDER BY p.on_special DESC, p.name LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    return d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE ${where.join(' AND ')}
+      ORDER BY on_special DESC, p.name LIMIT ? OFFSET ?`).all(at, ...params, limit, offset);
   }
-  const stmt = d.prepare(`SELECT ${PRODUCT_COLS} FROM products_fts f JOIN products p ON p.id = f.rowid
+  const stmt = d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
     WHERE products_fts MATCH ? AND ${where.join(' AND ')}
     ORDER BY bm25(products_fts, 10.0, 3.0, 1.0) LIMIT ? OFFSET ?`);
   // Whole-word matches first, then prefix matches ("egg" → "eggplant") to fill up.
-  const exact = stmt.all(ftsQuery(q, 'AND', false), ...params, limit, offset);
+  const exact = stmt.all(at, ftsQuery(q, 'AND', false), ...params, limit, offset);
   if (exact.length >= limit) return exact;
   const ids = new Set(exact.map((p) => p.id));
-  const prefix = stmt.all(match, ...params, limit, offset).filter((p) => !ids.has(p.id));
+  const prefix = stmt.all(at, match, ...params, limit, offset).filter((p) => !ids.has(p.id));
   return [...exact, ...prefix].slice(0, limit);
 }
 
@@ -76,9 +72,7 @@ export function searchProducts(q, { store, stores, igaStore, limit = 30, offset 
  * @param {'similar'|'exact'|'this'} mode
  */
 export function findEquivalents(anchor, mode = 'similar', igaStore = null) {
-  // The anchor itself, at the IGA store being priced (if it's an IGA product).
-  const here = relocate(anchor, igaStore);
-  if (mode === 'this') return here ? [{ product: here, score: 1 }] : [];
+  if (mode === 'this') return [{ product: anchor, score: 1 }];
   const toks = [...nameTokens(anchor.name, anchor.brand)];
   const d = getDb();
   let candidates = [];
@@ -94,12 +88,12 @@ export function findEquivalents(anchor, mode = 'similar', igaStore = null) {
         params.push(unit, qty - tol, qty + tol);
       }
     }
-    candidates = d.prepare(`SELECT ${PRODUCT_COLS} FROM products_fts f JOIN products p ON p.id = f.rowid
-      WHERE products_fts MATCH ? AND p.available = 1 AND ${LOCATION_SQL} AND (${conds.join(' OR ')})
-      ORDER BY rank LIMIT 400`).all(ftsQuery(toks.join(' '), 'OR'), loc(igaStore), ...params);
+    candidates = d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
+      WHERE products_fts MATCH ? AND ${AVAILABLE_SQL} AND (${conds.join(' OR ')})
+      ORDER BY rank LIMIT 400`).all(loc(igaStore), ftsQuery(toks.join(' '), 'OR'), ...params);
   }
   const ranked = rankMatches(anchor, candidates, mode);
-  if (here && !ranked.some((m) => m.product.id === here.id)) ranked.unshift({ product: here, score: 1 });
+  if (!ranked.some((m) => m.product.id === anchor.id)) ranked.unshift({ product: anchor, score: 1 });
   return ranked;
 }
 
@@ -147,24 +141,26 @@ export function compareSearch(q, opts = {}) {
   return groups;
 }
 
-export function priceHistory(productIds) {
+/** Price changes over time; IGA products' history is for the given IGA store. */
+export function priceHistory(productIds, igaStore = null) {
   if (!productIds.length) return [];
   const d = getDb();
   const ph = productIds.map(() => '?').join(',');
   return d.prepare(`SELECT product_id, price, was_price, on_special, recorded_at FROM price_history
-    WHERE product_id IN (${ph}) ORDER BY recorded_at, id`).all(...productIds);
+    WHERE product_id IN (${ph}) AND (location IS NULL OR location = ?) ORDER BY recorded_at, id`)
+    .all(...productIds, loc(igaStore));
 }
 
 /** Product detail: itself, its cross-store equivalents and everyone's price history. */
 export function productDetail(id, stores, igaStore) {
-  const p = getProduct(id);
+  const p = getProduct(id, igaStore);
   if (!p) return null;
   const allowed = storeSet(stores);
   const eq = findEquivalents(p, 'similar', igaStore).filter((m) => m.product.id === p.id || allowed.includes(m.product.store));
   const best = bestPerStore(eq);
   // Chart the product itself plus the best match at each other store.
   const charted = [p, ...Object.values(best).map((m) => m.product).filter((x) => x.id !== p.id)];
-  const history = priceHistory(charted.map((x) => x.id));
+  const history = priceHistory(charted.map((x) => x.id), igaStore);
   return {
     product: p,
     equivalents: eq.map((m) => ({ ...m.product, score: m.score })),

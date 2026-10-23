@@ -7,7 +7,8 @@ import { createClient } from './scrapers/http.js';
 
 const DIRECTORY_URL = 'https://www.igashop.com.au/api/storefront/stores';
 const DIRECTORY_MAX_AGE_DAYS = 7;
-const MAX_TRACKED = Number(process.env.IGA_MAX_STORES || 50);
+// How many IGA stores' prices to collect. Unset or 0 = no limit.
+const MAX_TRACKED = Number(process.env.IGA_MAX_STORES) > 0 ? Number(process.env.IGA_MAX_STORES) : Infinity;
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
 export function defaultStoreId() {
@@ -77,6 +78,15 @@ function distanceKm(lat1, lng1, lat2, lng2) {
 }
 
 /** Store row plus whether we have its prices yet. */
+// The picker only offers stores that publish their prices on igashop.com.au:
+// those in IGA's online directory, minus any whose catalogue turned out empty.
+const LISTED = 'SELECT * FROM iga_stores WHERE no_prices = 0';
+
+/** How many IGA stores have prices online (for the picker's explanation). */
+export function onlineStoreCount() {
+  return getDb().prepare('SELECT COUNT(*) n FROM iga_stores WHERE no_prices = 0').get().n;
+}
+
 function withStatus(s, extra = {}) {
   if (!s) return null;
   const t = getDb().prepare('SELECT last_scraped_at FROM iga_tracked WHERE store_id = ?').get(s.id);
@@ -109,7 +119,7 @@ export async function searchStores({ q, lat, lng, limit = 8 }) {
   const text = String(q || '').trim().toLowerCase();
   const hasPoint = Number.isFinite(lat) && Number.isFinite(lng);
   if (!text && !hasPoint) return [];
-  let rows = d.prepare('SELECT * FROM iga_stores').all();
+  let rows = d.prepare(LISTED).all();
   if (text) {
     const words = text.split(/\s+/);
     rows = rows.filter((s) => {
@@ -121,11 +131,11 @@ export async function searchStores({ q, lat, lng, limit = 8 }) {
       const exact = rows;
       const anchor = exact.find((s) => s.lat != null);
       if (anchor) {
-        rows = d.prepare('SELECT * FROM iga_stores').all();
+        rows = d.prepare(LISTED).all();
         return nearest(rows, anchor.lat, anchor.lng, limit, new Set(exact.map((s) => s.id)));
       }
       if (!exact.length) {
-        const near = d.prepare('SELECT * FROM iga_stores WHERE postcode BETWEEN ? AND ?').all(
+        const near = d.prepare(`${LISTED} AND postcode BETWEEN ? AND ?`).all(
           String(Number(text) - 20).padStart(4, '0'), String(Number(text) + 20).padStart(4, '0'));
         return near.sort((a, b) => Math.abs(a.postcode - text) - Math.abs(b.postcode - text)).slice(0, limit).map((s) => withStatus(s));
       }
@@ -158,7 +168,9 @@ export function trackedStores() {
 export async function useStore(storeId, userId = null) {
   await ensureDirectory();
   const id = String(storeId || '');
-  if (!getDb().prepare('SELECT 1 FROM iga_stores WHERE id = ?').get(id)) throw httpError(400, 'Unknown IGA store');
+  const known = getDb().prepare('SELECT no_prices FROM iga_stores WHERE id = ?').get(id);
+  if (!known) throw httpError(400, 'Unknown IGA store');
+  if (known.no_prices) throw httpError(400, 'That IGA doesn’t publish its prices online, so we can’t compare it.');
   const d = getDb();
   if (!d.prepare('SELECT 1 FROM iga_tracked WHERE store_id = ?').get(id)) {
     const n = d.prepare('SELECT COUNT(*) n FROM iga_tracked').get().n;
@@ -176,8 +188,20 @@ export function untrack(storeId) {
   getDb().prepare('DELETE FROM iga_tracked WHERE store_id = ?').run(String(storeId));
 }
 
-export function markScraped(storeId) {
-  getDb().prepare('UPDATE iga_tracked SET last_scraped_at = ? WHERE store_id = ?').run(nowIso(), String(storeId));
+/**
+ * Record a finished fetch. A store whose online catalogue came back empty
+ * doesn't really publish prices: hide it from the picker and stop following it.
+ */
+export function markScraped(storeId, productCount) {
+  const d = getDb();
+  const id = String(storeId);
+  if (productCount > 0) {
+    d.prepare('UPDATE iga_tracked SET last_scraped_at = ? WHERE store_id = ?').run(nowIso(), id);
+    d.prepare('UPDATE iga_stores SET no_prices = 0 WHERE id = ?').run(id);
+  } else {
+    d.prepare('UPDATE iga_stores SET no_prices = 1 WHERE id = ?').run(id);
+    if (id !== defaultStoreId()) d.prepare('DELETE FROM iga_tracked WHERE store_id = ?').run(id);
+  }
 }
 
 /** Make sure the site's default IGA store is always followed. */

@@ -87,6 +87,7 @@ export function createApp() {
     allowSignups: ALLOW_SIGNUPS,
     trolleyFill: TROLLEY_FILL && !!req.user?.isAdmin,
     igaStore: iga.getStore(igaFor(req)) || { id: igaFor(req), name: 'IGA', pricesReady: false },
+    igaOnlineStores: iga.onlineStoreCount(),
     };
   }));
 
@@ -98,7 +99,7 @@ export function createApp() {
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
         updatedAt: d.prepare("SELECT MAX(finished_at) t FROM scrape_runs WHERE store = ? AND status = 'ok'").get(s).t,
       })),
-      demo: !!d.prepare("SELECT 1 FROM products WHERE store_product_id LIKE '%demo-%' LIMIT 1").get(),
+      demo: !!d.prepare("SELECT 1 FROM products WHERE store_product_id LIKE 'demo-%' LIMIT 1").get(),
     };
   }));
 
@@ -127,11 +128,13 @@ export function createApp() {
     const days = Math.min(Number(req.query.days) || 7, 90);
     const dir = req.query.direction === 'up' ? 'AND h.price > old_price' : req.query.direction === 'down' ? 'AND h.price < old_price' : '';
     return getDb().prepare(`
-      SELECT p.id, p.store, p.name, p.size_text, p.image_url, p.price, h.price AS new_price, h.recorded_at,
-        (SELECT price FROM price_history e WHERE e.product_id = h.product_id AND e.id < h.id ORDER BY e.id DESC LIMIT 1) AS old_price
+      SELECT p.id, p.store, p.name, p.size_text, p.image_url, h.price AS new_price, h.recorded_at,
+        (SELECT price FROM price_history e WHERE e.product_id = h.product_id AND e.location IS h.location AND e.id < h.id
+          ORDER BY e.id DESC LIMIT 1) AS old_price
       FROM price_history h JOIN products p ON p.id = h.product_id
-      WHERE h.recorded_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AND old_price IS NOT NULL AND p.available = 1 ${dir}
-      ORDER BY ABS(h.price - old_price) / old_price DESC LIMIT 100`).all(`-${days} days`);
+      WHERE h.recorded_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AND old_price IS NOT NULL
+        AND (h.location IS NULL OR h.location = ?) AND (p.location_priced = 1 OR p.available = 1) ${dir}
+      ORDER BY ABS(h.price - old_price) / old_price DESC LIMIT 100`).all(`-${days} days`, igaFor(req));
   }));
 
   // ------------------------------------------------------------ IGA store picker
@@ -264,6 +267,7 @@ export function createApp() {
         tracked: iga.trackedStores(),
         queue: iga.queueStatus(),
         defaultStoreId: iga.defaultStoreId(),
+        maxStores: Number(process.env.IGA_MAX_STORES) > 0 ? Number(process.env.IGA_MAX_STORES) : null,
       },
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
