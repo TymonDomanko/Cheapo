@@ -109,7 +109,7 @@ function withStatus(s, extra = {}) {
     online: !!s.listed && !s.no_prices,
     tracked: !!t,
     pricesReady: !!t?.last_scraped_at,
-    updating: queue.includes(s.id) || current === s.id,
+    updating: queue.includes(s.id) || current.has(s.id),
     ...extra,
   };
 }
@@ -308,10 +308,12 @@ export function ensureDefaultTracked() {
   getDb().prepare('INSERT OR IGNORE INTO iga_tracked (store_id, added_at) VALUES (?, ?)').run(defaultStoreId(), nowIso());
 }
 
-// One IGA store is fetched at a time; newly picked stores wait their turn.
+// A few IGA stores are fetched at once (IGA_CONCURRENCY, default 3); newly
+// picked stores wait their turn.
+const CONCURRENCY = Math.max(1, Number(process.env.IGA_CONCURRENCY) || 3);
 const queue = []; // store ids waiting
 const waiters = new Map(); // store id → [resolve]
-let current = null;
+const current = new Set(); // store ids being fetched now
 let runner = null; // (storeId) => Promise, set by the scrapers module to avoid an import cycle
 
 export function setScrapeRunner(fn) {
@@ -323,30 +325,32 @@ export function requestScrape(storeId) {
   const id = String(storeId);
   if (process.env.DISABLE_BACKGROUND_SCRAPES === 'true' || !runner) return Promise.resolve();
   const done = new Promise((resolve) => waiters.set(id, [...(waiters.get(id) || []), resolve]));
-  if (current !== id && !queue.includes(id)) {
+  if (!current.has(id) && !queue.includes(id)) {
     queue.push(id);
     drain();
   }
   return done;
 }
 
-async function drain() {
-  if (current) return;
-  while (queue.length) {
-    current = queue.shift();
-    let result;
-    try {
-      result = await runner(current);
-    } catch (e) {
-      result = { error: e.message };
-      console.error(`IGA store ${current}: ${e.message}`);
-    }
-    for (const resolve of waiters.get(current) || []) resolve(result);
-    waiters.delete(current);
-    current = null;
+function drain() {
+  while (current.size < CONCURRENCY && queue.length) {
+    const id = queue.shift();
+    current.add(id);
+    Promise.resolve()
+      .then(() => runner(id))
+      .catch((e) => {
+        console.error(`IGA store ${id}: ${e.message}`);
+        return { error: e.message };
+      })
+      .then((result) => {
+        for (const resolve of waiters.get(id) || []) resolve(result);
+        waiters.delete(id);
+        current.delete(id);
+        drain();
+      });
   }
 }
 
 export function queueStatus() {
-  return { current, waiting: [...queue] };
+  return { current: [...current][0] ?? null, fetching: [...current], waiting: [...queue] };
 }

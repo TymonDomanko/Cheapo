@@ -234,6 +234,12 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
 
+**How long it takes.** Measured on real crawls from a cloud server:
+- **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
+- **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
+- **ALDI and Harris Farm:** about a minute each.
+- **Coles:** about 30 minutes or more. Coles challenges a server after roughly every 30 requests however slowly they're made, and gets stricter as a crawl goes on. The crawler tries a fresh session first, then waits, and skips a department that stays blocked (the rest is saved). Coles is far more relaxed with home internet connections, so if Coles refreshes keep failing, let the home collector fetch Coles too.
+
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
 - the home collector hasn't sent prices for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).

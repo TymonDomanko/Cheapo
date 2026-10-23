@@ -33,21 +33,32 @@ export class HttpError extends Error {
 }
 
 // Bot protection sometimes answers with an HTML challenge page (status 200)
-// instead of JSON. Back off and try again a few times before giving up.
+// instead of JSON. A fresh session often gets straight through (Coles limits
+// each IP to a burst of requests, then challenges); if not, back off and try
+// again a few times before giving up.
 const SOFT_BLOCK_WAITS = [15000, 45000, 120000];
 
-async function requestJson(client, url, opts) {
-  for (let attempt = 0; ; attempt++) {
+export async function requestJson(client, url, opts) {
+  let renewed = false;
+  for (let attempt = 0; ; ) {
     const text = await client.request(url, opts);
     await sleep(client.delayMs);
     try {
       return JSON.parse(text);
     } catch {
+      const host = new URL(url).host;
+      if (!renewed && client.renew) {
+        renewed = true;
+        console.warn(`Got non-JSON response from ${host}; trying a fresh session`);
+        await client.renew();
+        continue;
+      }
       if (attempt >= SOFT_BLOCK_WAITS.length) {
         throw new Error(`Expected JSON from ${url} but got ${text.trim().startsWith('<') ? 'an HTML page (likely a bot check)' : 'invalid data'}`);
       }
-      console.warn(`Got non-JSON response from ${new URL(url).host}; backing off ${SOFT_BLOCK_WAITS[attempt] / 1000}s`);
-      await sleep(SOFT_BLOCK_WAITS[attempt]);
+      console.warn(`Got non-JSON response from ${host}; backing off ${SOFT_BLOCK_WAITS[attempt] / 1000}s`);
+      await sleep(SOFT_BLOCK_WAITS[attempt++]);
+      renewed = false; // after waiting, a fresh session is worth another try
     }
   }
 }
@@ -74,6 +85,12 @@ class FetchClient {
     } catch {
       /* non-fatal: some APIs work without cookies */
     }
+  }
+
+  /** Start a new session: forget cookies and collect fresh ones. */
+  async renew() {
+    this.cookies.clear();
+    await this.init();
   }
 
   cookieHeader() {
