@@ -2,15 +2,27 @@
 // Home collector: crawls stores that block cloud servers (Woolworths, ALDI)
 // from your own connection and sends the products to your public site.
 //
+// Easiest: download it from your site's Admin page (Site settings → Home
+// collector) and run start.bat / start.sh. Or from this repo:
 //   COLLECTOR_SERVER=https://groceries.example.com COLLECTOR_TOKEN=… npm run collect
 //   npm run collect -- woolworths aldi --server=https://… --token=…
 //   npm run collect -- --cron="0 4 * * *"     # keep running and collect daily
 //
-// The server must have the same COLLECTOR_TOKEN set.
+// A downloaded collector keeps itself up to date: before each collection it
+// asks the site for the latest version and, if it's different, downloads it,
+// checks it, replaces its own files and restarts (exit code 75).
 
-import cron from 'node-cron';
-import { SCRAPERS } from '../scrapers/index.js';
-import { sleep } from '../scrapers/http.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { collectorVersion, COLLECTOR_CODE } from '../collector-files.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const RESTART = 75;
+
+// Settings from .env next to the collector (a downloaded one has it filled in).
+loadEnvFile(path.join(ROOT, '.env'));
 
 const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -20,8 +32,18 @@ const schedule = flag('cron') || process.env.COLLECT_CRON;
 const named = args.filter((a) => !a.startsWith('--'));
 const stores = named.length ? named : (process.env.COLLECT_STORES || 'woolworths,aldi').split(',').map((s) => s.trim());
 
+// How this copy runs: a downloaded bundle can update itself; inside the Docker
+// image or a git checkout it can't (pull the new image / code instead).
+const MODE = fs.existsSync(path.join(ROOT, '.collector-bundle')) ? 'bundle' : fs.existsSync('/.dockerenv') ? 'docker' : 'source';
+const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf8'));
+
+// Scrapers read proxy settings when loaded, so load them after .env.
+const { SCRAPERS } = await import('../scrapers/registry.js');
+const { sleep } = await import('../scrapers/http.js');
+const { default: cron } = await import('node-cron');
+
 if (!server || !token) {
-  console.error('Set COLLECTOR_SERVER and COLLECTOR_TOKEN (or pass --server= and --token=).');
+  console.error('Set COLLECTOR_SERVER and COLLECTOR_TOKEN (in .env, or pass --server= and --token=).');
   process.exit(1);
 }
 const unknown = stores.filter((s) => !SCRAPERS[s]);
@@ -30,15 +52,26 @@ if (unknown.length) {
   process.exit(1);
 }
 
-/** POST JSON to the site, retrying network hiccups. Uses Node's normal fetch (no scraper proxy). */
-async function post(path, body) {
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+}
+
+const headers = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${token}`,
+  'X-Collector-Version': VERSION,
+  'X-Collector-Mode': MODE,
+});
+
+/** Talk to the site, retrying network hiccups. Uses Node's normal fetch (no scraper proxy). */
+async function call(method, urlPath, body) {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetch(server + path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(server + urlPath, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
       if (res.ok) return data;
       if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true });
@@ -49,6 +82,50 @@ async function post(path, body) {
     }
   }
 }
+const post = (p, body) => call('POST', p, body);
+
+// ---------------------------------------------------------------- staying up to date
+
+/** Returns true if this copy was replaced and should restart. */
+async function updateIfNeeded() {
+  let latest;
+  try {
+    latest = (await call('GET', '/api/collector/latest')).version;
+  } catch (e) {
+    console.warn(`Couldn't check for updates: ${e.message}`);
+    return false;
+  }
+  if (latest === VERSION) return false;
+  if (MODE !== 'bundle' || process.env.AUTO_UPDATE === 'false') {
+    console.warn(`A newer collector is available (${latest}; this is ${VERSION}). `
+      + (MODE === 'docker' ? 'Run: docker compose pull && docker compose up -d' : MODE === 'bundle' ? 'Download it from the Admin page, or set AUTO_UPDATE=true.' : 'Pull the latest code.'));
+    return false;
+  }
+  console.log(`Updating collector ${VERSION} → ${latest}…`);
+  const bundle = await call('GET', '/api/collector/bundle');
+  // Make sure we got the whole, matching code before touching anything.
+  const check = collectorVersion((p) => bundle.files[p] ?? '');
+  if (check !== bundle.version || COLLECTOR_CODE.some((p) => typeof bundle.files[p] !== 'string')) {
+    console.error('Update download looked wrong; keeping the current version.');
+    return false;
+  }
+  const oldPackage = fs.existsSync(path.join(ROOT, 'package.json')) ? fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8') : '';
+  for (const [rel, text] of Object.entries(bundle.files)) {
+    const dest = path.resolve(ROOT, rel);
+    if (!dest.startsWith(ROOT + path.sep) || rel === '.env') continue; // never write outside the folder or over settings
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(`${dest}.tmp`, text);
+    fs.renameSync(`${dest}.tmp`, dest);
+  }
+  if (bundle.files['package.json'] !== oldPackage) {
+    console.log('Installing updated dependencies…');
+    spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32' });
+  }
+  console.log('Updated — restarting.');
+  return true;
+}
+
+// ---------------------------------------------------------------- collecting
 
 async function collect(store) {
   const { runId } = await post('/api/ingest/runs', { store });
@@ -67,15 +144,19 @@ async function collect(store) {
   }
 }
 
-async function collectAll() {
+async function run() {
+  if (await updateIfNeeded()) process.exit(RESTART);
   const results = await Promise.allSettled(stores.map(collect));
   results.forEach((r, i) => r.status === 'rejected' && console.error(`${stores[i]}: failed — ${r.reason?.message}`));
   return results.every((r) => r.status === 'fulfilled');
 }
 
+console.log(`Home collector ${VERSION} (${MODE}) for ${server}: ${stores.join(', ')}`);
 if (schedule) {
-  console.log(`Collecting ${stores.join(', ')} for ${server} on schedule "${schedule}"`);
-  cron.schedule(schedule, () => collectAll().catch(() => {}), { timezone: process.env.TZ || undefined });
+  console.log(`Collecting on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
+  cron.schedule(schedule, () => run().catch((e) => console.error(e.message)), { timezone: process.env.TZ || undefined });
+  if (process.env.COLLECT_ON_START === 'true') run().catch((e) => console.error(e.message));
+  else if (await updateIfNeeded()) process.exit(RESTART);
 } else {
-  process.exit((await collectAll()) ? 0 : 1);
+  process.exit((await run()) ? 0 : 1);
 }

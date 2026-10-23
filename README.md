@@ -17,6 +17,7 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
 - **Better-value sizes.** If the same item in another pack size is at least 10% cheaper per kg, litre or item, you see a hint ("3L is 18% cheaper per litre").
 - **Alerts.** Watch any product for a target price or any drop. There's also a Wednesday email of what's on special from your lists.
 - **In the shop.** Tick things off on your phone, grouped by shop and section. Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Home collector, one click.** For stores that block cloud servers, the Admin page has a **Download home collector** button. You get a zip that's already set up for your site and runs on any home computer with Node.js. It updates itself, and the Admin page shows whether it's connected and current.
 - **Accounts done properly.** Email confirmation, password reset, a privacy page, and data export and deletion in Settings.
 - **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button.
 

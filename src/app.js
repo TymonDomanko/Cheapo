@@ -17,6 +17,7 @@ import { siteUrl, mailConfigured, siteName, sendMail, emailHtml } from './mailer
 import * as backup from './backup.js';
 import * as settings from './settings.js';
 import { getSetting } from './settings.js';
+import * as collectorBundle from './collector-bundle.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
 import { backfillColesBarcodes, barcodeStatus, colesBarcodeProgress } from './barcodes.js';
@@ -92,7 +93,8 @@ export function createApp() {
   // ------------------------------------------------------------ public
 
   app.get('/api/config', h(async (req) => {
-    await iga.ensureDirectory().catch(() => {}); // store names; harmless if IGA is unreachable
+    // IGA store names, if the directory loads quickly; never hold the page up for it.
+    await Promise.race([iga.ensureDirectory().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
     return {
     user: req.user || null,
     stores: STORES.map((s) => ({ id: s, ...STORE_INFO[s] })),
@@ -367,8 +369,16 @@ export function createApp() {
     const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const ok = want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
     if (!ok) return res.status(401).json({ error: want ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
+    collectorBundle.recordCollector({ version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') });
     next();
   }
+
+  // Collectors ask before each run whether there's a newer version, and fetch it if so.
+  app.get('/api/collector/latest', requireCollector, h(() => ({ version: collectorBundle.latestCollectorVersion() })));
+  app.get('/api/collector/bundle', requireCollector, h((req) => ({
+    version: collectorBundle.latestCollectorVersion(),
+    files: collectorBundle.bundleFiles(siteUrl(req)),
+  })));
   const collectorRun = (req) => {
     const run = getRun(id(req.params.runId));
     if (!run || run.source !== 'collector') throw bad('Unknown run', 404);
@@ -433,6 +443,7 @@ export function createApp() {
     stores: STORES,
     currentAddress: `${req.protocol}://${req.get('host')}`,
     litestream: backup.litestreamInfo(),
+    collector: collectorBundle.collectorStatus(),
   })));
 
   app.put('/api/admin/settings', requireAdmin, h((req) => {
@@ -461,6 +472,28 @@ export function createApp() {
     settings.setSetting('COLLECTOR_TOKEN', token);
     return { token };
   }));
+  // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
+  app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
+    let token = getSetting('COLLECTOR_TOKEN');
+    if (!token) {
+      token = settings.newCollectorToken();
+      settings.setSetting('COLLECTOR_TOKEN', token);
+    }
+    // Stores the server doesn't crawl itself; if it crawls everything, the usual two.
+    const notCrawled = STORES.filter((x) => !serverStores().includes(x));
+    const stores = notCrawled.length ? notCrawled : ['woolworths', 'aldi'];
+    const files = {
+      ...collectorBundle.bundleFiles(siteUrl(req)),
+      '.env': collectorBundle.envFile({ serverUrl: siteUrl(req), token, stores, cron: '0 4 * * *' }),
+    };
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': 'attachment; filename="grocery-home-collector.zip"',
+      'Cache-Control': 'no-store',
+    });
+    res.send(collectorBundle.zip(files, 'grocery-home-collector'));
+  });
+
   app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
 
   app.post('/api/admin/settings/test-email', requireAdmin, h(async (req) => {

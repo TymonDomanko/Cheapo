@@ -526,3 +526,60 @@ test('admin settings: collector token and which stores the server crawls', async
   assert.equal(serverStores().length, 5);
   if (saved) process.env.COLLECTOR_TOKEN = saved;
 });
+
+test('home collector download, version check and self-update bundle', async () => {
+  const zlib = await import('node:zlib');
+  const fs = await import('node:fs');
+  const { collectorVersion } = await import('../src/collector-files.js');
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const cookie = await (async () => {
+    const r = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }) });
+    return r.headers.get('set-cookie').split(';')[0];
+  })();
+  assert.equal((await fetch(base + '/api/admin/collector/download')).status, 401, 'admins only');
+  const saved = process.env.COLLECTOR_TOKEN;
+  delete process.env.COLLECTOR_TOKEN;
+  const res = await fetch(base + '/api/admin/collector/download', { headers: { Cookie: cookie } });
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  const buf = Buffer.from(await res.arrayBuffer());
+
+  // Unpack the zip by hand and check every file.
+  const files = {};
+  let at = 0;
+  while (buf.readUInt32LE(at) === 0x04034b50) {
+    const size = buf.readUInt32LE(at + 18);
+    const nameLen = buf.readUInt16LE(at + 26);
+    const name = buf.subarray(at + 30, at + 30 + nameLen).toString();
+    const data = zlib.inflateRawSync(buf.subarray(at + 30 + nameLen, at + 30 + nameLen + size));
+    assert.equal(zlib.crc32(data), buf.readUInt32LE(at + 14), `crc ok for ${name}`);
+    files[name.replace('grocery-home-collector/', '')] = data.toString();
+    at += 30 + nameLen + size;
+  }
+  for (const f of ['src/cli/collect.js', 'src/scrapers/registry.js', 'package.json', 'start.sh', 'start.bat', 'README.txt', '.env']) assert.ok(files[f], f);
+  // Points at the site's public address (SITE_URL) when one is set, else the address used.
+  const site = (await admin('GET', '/api/admin/settings')).body.settings.SITE_URL.value || base;
+  assert.ok(files['.env'].includes(`COLLECTOR_SERVER=${site}\n`), 'collector points at this site');
+  const token = files['.env'].match(/COLLECTOR_TOKEN=(\S+)/)[1];
+  assert.ok(token.length >= 24, 'a token was created for the download');
+  assert.ok(!Object.keys(files).some((f) => f.includes('db.js') || f.includes('auth.js')), 'only collector code, no server code');
+  const zipVersion = collectorVersion((p) => files[p]);
+
+  // The collector asks for the latest version and gets the matching code.
+  const call = (p) => fetch(base + p, { headers: { Authorization: `Bearer ${token}`, 'X-Collector-Version': 'old123', 'X-Collector-Mode': 'bundle' } }).then((r) => r.json());
+  assert.equal((await call('/api/collector/latest')).version, zipVersion);
+  const bundle = await call('/api/collector/bundle');
+  assert.equal(collectorVersion((p) => bundle.files[p]), bundle.version);
+  assert.ok(!('.env' in bundle.files), 'updates never touch the collector’s settings');
+  assert.equal((await fetch(base + '/api/collector/latest')).status, 401, 'needs the token');
+
+  // The admin page sees which version last connected.
+  const st = (await admin('GET', '/api/admin/settings')).body.collector;
+  assert.equal(st.last.version, 'old123');
+  assert.equal(st.last.upToDate, false);
+  assert.equal(st.latest, zipVersion);
+  // Repo files and served files fingerprint the same.
+  assert.equal(collectorVersion((p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')), zipVersion);
+  await admin('DELETE', '/api/admin/settings/collector-token');
+  if (saved) process.env.COLLECTOR_TOKEN = saved;
+});

@@ -165,17 +165,25 @@ Litestream starts before the app, so it can restore the database onto a new serv
 
 ## Home collector (Woolworths and ALDI)
 
-Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site:
+Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site.
 
-1. **On the server:** go to Admin → **Site settings → Home collector**. Press **Generate token** and copy it. Then untick Woolworths and ALDI under "This server crawls" and save. (Or set `COLLECTOR_TOKEN` and `SERVER_SCRAPE_STORES=coles,iga,harrisfarm` in `.env`.)
-2. **On any always-on machine at home** (a PC, a NAS, a Raspberry Pi), use [`deploy/collector/`](deploy/collector):
-   ```bash
-   cp .env.example .env    # set COLLECTOR_SERVER (your site) and the same COLLECTOR_TOKEN
-   docker compose up -d
-   ```
-   It collects every day at `COLLECT_CRON` (default 4am). For a one-off run without Docker: `COLLECTOR_SERVER=… COLLECTOR_TOKEN=… npm run collect`.
+**Easiest: download it from the Admin page.**
 
-The Admin page marks these stores "Collected from home" and shows each run.
+1. Go to **Admin → Site settings → Home collector** and untick Woolworths and ALDI under "This server crawls". Save.
+2. Press **⬇ Download home collector**. The zip is already set up for your site: its address, a collector token, and the stores you unticked.
+3. Unzip it on any computer that stays on (Windows, Mac or Linux) that has [Node.js 20+](https://nodejs.org) installed.
+4. Run `start.bat` (Windows) or `sh start.sh` (Mac/Linux). It installs what it needs, collects once straight away, then collects every day at 4am (`COLLECT_CRON` in its `.env`).
+
+**It keeps itself up to date.**
+- Before each collection, it asks your site for the latest collector version.
+- If there's a newer one, it downloads it, checks the code matches the version fingerprint, replaces its files and restarts.
+- Its `.env` settings are never touched by updates. To turn updating off, set `AUTO_UPDATE=false` in its `.env`.
+
+**Checking on it.** The Admin page shows when the collector last connected, how it's run, and whether it's up to date. It also warns if it hasn't connected for more than a day and a half.
+
+**Docker instead.** Use [`deploy/collector/`](deploy/collector): copy `.env.example` to `.env` and fill in `COLLECTOR_SERVER` and the token from the Admin page's `.env`, then run `docker compose up -d`. A Docker collector can't replace its own code. The Admin page tells you when to run `docker compose pull && docker compose up -d`.
+
+The token in the collector's `.env` is what lets it send prices, so keep that file private. If it's ever exposed, press **Generate a new token** and download the collector again.
 
 ## The daily refresh
 

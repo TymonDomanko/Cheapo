@@ -1,5 +1,6 @@
-# Home collector: run this on any always-on machine at home (PC, NAS,
-# Raspberry Pi). It crawls the stores that block cloud servers and sends the
+# Home collector in Docker. (No Docker? The Admin page has a "Download home
+# collector" button with a ready-to-run version that updates itself.)
+# Run this on any always-on machine at home (PC, NAS, Raspberry Pi). It crawls the stores that block cloud servers and sends the
 # prices to your public site every day.
 #   cp .env.example .env    # set COLLECTOR_SERVER and COLLECTOR_TOKEN (same token as the server)
 #   docker compose up -d
@@ -9,3 +10,10 @@ services:
     restart: unless-stopped
     env_file: .env
     command: ["node", "src/cli/collect.js"]
+  # Keeps the collector image up to date (checks nightly).
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --schedule "0 30 3 * * *" --cleanup

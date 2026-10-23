@@ -1594,8 +1594,30 @@ function refreshAdminWhenIdle() {
 // ------------------------------------------------------------------ site settings
 // Values in the server's .env file win; those fields are shown locked.
 
+function ago(iso) {
+  const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (mins < 2) return 'just now';
+  if (mins < 90) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  return hours < 36 ? `${hours} hours ago` : `${Math.round(hours / 24)} days ago`;
+}
+
+/** "Last connected 2 hours ago · up to date" for the home collector. */
+function collectorStatusLine(c) {
+  if (!c.last) return '<span class="hint">No collector has connected yet.</span>';
+  const how = { bundle: 'downloaded copy', docker: 'Docker', source: 'from the code' }[c.last.mode] || c.last.mode;
+  const stale = Date.now() - Date.parse(c.last.at) > 36 * 3600000;
+  const version = c.last.upToDate
+    ? '<span class="state ready">✓ up to date</span>'
+    : `<span class="state pending">older version</span> — ${c.last.mode === 'bundle'
+      ? 'it updates itself before its next collection'
+      : c.last.mode === 'docker' ? 'run <code>docker compose pull && docker compose up -d</code> on that machine' : 'pull the latest code on that machine'}`;
+  return `Last connected <strong>${ago(c.last.at)}</strong>${stale ? ' <span class="warn">(it should connect daily — is that computer on?)</span>' : ''}
+    · ${esc(how)}, version ${esc(c.last.version)} · ${version}`;
+}
+
 async function loadAdminSettings(justMadeToken = null) {
-  const { settings: st, stores, currentAddress, litestream } = await api('/api/admin/settings');
+  const { settings: st, stores, currentAddress, litestream, collector } = await api('/api/admin/settings');
   const locked = (key) => st[key].source === 'env';
   const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
@@ -1638,9 +1660,13 @@ async function loadAdminSettings(justMadeToken = null) {
 
       <form id="collector-settings" class="card stack">
         <h3>Home collector</h3>
-        <p class="hint">For stores that block this server: a small program on a computer at home crawls them and sends the prices here (see DEPLOY.md, “Home collector”).</p>
+        <p class="hint">For stores that block this server: a small program on a computer at home crawls them and sends the prices here.</p>
+        <p><a class="button primary" href="/api/admin/collector/download" download>⬇ Download home collector</a></p>
+        <p class="hint">Unzip it on any computer that stays on (Windows, Mac or Linux, with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>), then run <code>start.bat</code> or <code>start.sh</code>.
+          It’s already set up for this site, keeps itself up to date, and collects the stores this server doesn’t crawl (below). Prefer Docker? Use <code>deploy/collector</code>.</p>
+        <p class="collector-status">${collectorStatusLine(collector)}</p>
         <p><strong>Token:</strong>${envTag('COLLECTOR_TOKEN')} ${st.COLLECTOR_TOKEN.set ? 'set' : '<span class="hint">none — the collector can’t send prices</span>'}</p>
-        ${justMadeToken ? `<div class="notice">Copy this into the collector’s .env as COLLECTOR_TOKEN. It won’t be shown again.
+        ${justMadeToken ? `<div class="notice">Copy this into the collector’s .env as COLLECTOR_TOKEN (or just download the collector again — the download includes it). It won’t be shown again here.
           <div class="copy-row"><input readonly value="${esc(justMadeToken)}" id="new-token"><button type="button" class="small" id="copy-token">Copy</button></div></div>` : ''}
         ${locked('COLLECTOR_TOKEN') ? '' : `<div class="actions"><button type="button" class="small" id="make-token">${st.COLLECTOR_TOKEN.set ? 'Generate a new token' : 'Generate token'}</button>
           ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
