@@ -141,7 +141,7 @@ export function bestPerStore(equivalents, memberships = []) {
   return best;
 }
 
-function cheapestStore(best, memberships = []) {
+export function cheapestStore(best, memberships = []) {
   let out = null;
   for (const s of STORES) {
     if (best[s] && (!out || unitPriceFor(best[s].product, memberships) < unitPriceFor(best[out].product, memberships))) out = s;
@@ -258,4 +258,22 @@ function historyStats(rows, current) {
     since: rows[0].recorded_at,
     current,
   };
+}
+
+/**
+ * A scanned barcode: the product and what it costs at each shop. Barcodes
+ * come from Woolworths and Coles, so a match there also finds the same item
+ * elsewhere by name and size. Leading zeros are ignored (UPC-A vs EAN-13).
+ */
+export function lookupBarcode(code, { stores, igaStore, memberships = [] } = {}) {
+  const digits = String(code || '').replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 14) return null;
+  const rows = getDb().prepare(`SELECT id FROM products WHERE barcode IS NOT NULL AND ltrim(barcode, '0') = ltrim(?, '0')
+    ORDER BY available DESC LIMIT 5`).all(digits);
+  if (!rows.length) return { code: digits, found: false };
+  const anchor = getProduct(rows[0].id, igaStore);
+  const allowed = storeSet(stores);
+  const eq = findEquivalents(anchor, 'similar', igaStore).filter((m) => allowed.includes(m.product.store));
+  const best = bestPerStore(eq, memberships);
+  return { code: digits, found: true, anchor, best, cheapest: cheapestStore(best, memberships), sameBarcode: rows.map((r) => r.id) };
 }

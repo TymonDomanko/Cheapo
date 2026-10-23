@@ -656,3 +656,216 @@ test('home collector code needs no npm packages (so it can run as a single progr
     }
   }
 });
+
+test('notes and pasting a list', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'notes@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  // A free-text note, added twice: one item, quantity 2.
+  await api('POST', `/api/lists/${list.id}/items`, { note: '  Birthday   card ' });
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'birthday card' });
+  assert.equal((await api('POST', `/api/lists/${list.id}/items`, { note: '   ' })).status, 400);
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 1);
+  assert.equal(v.items[0].note, 'Birthday card');
+  assert.equal(v.items[0].quantity, 2);
+  assert.equal(v.plan.notes.length, 1);
+  assert.equal(v.plan.unavailable.length, 0, 'a note isn’t a missing product');
+  assert.equal(v.plan.total, 0);
+
+  // Paste: each line gets product suggestions; "milk" is confident, nonsense isn't.
+  const preview = (await api('POST', `/api/lists/${list.id}/paste-preview`, { text: '2 x milk\nzzqx widget' })).body;
+  assert.equal(preview[0].quantity, 2);
+  assert.ok(preview[0].confident);
+  assert.match(preview[0].options[0].name, /milk/i);
+  assert.equal(preview[1].confident, false);
+  const r = (await api('POST', `/api/lists/${list.id}/paste`, {
+    lines: [{ productId: preview[0].options[0].productId, quantity: 2 }, { note: 'zzqx widget', quantity: 1 }],
+  })).body;
+  assert.equal(r.added, 2);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 3);
+  assert.ok(v.plan.total > 0, 'the milk is priced');
+
+  // A note can become a product once you find it.
+  const widget = v.items.find((it) => it.note === 'zzqx widget');
+  await api('PATCH', `/api/items/${widget.id}`, { productId: preview[0].options[0].productId });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.filter((it) => it.note != null).length, 1);
+
+  // Finishing a shop keeps notes in "past shops", and adding it back brings them back.
+  const card = v.items.find((it) => it.note === 'Birthday card');
+  await api('PUT', `/api/items/${card.id}/checked`, { checked: true });
+  await api('POST', `/api/lists/${list.id}/finish`);
+  const snaps = (await api('GET', `/api/lists/${list.id}/snapshots`)).body;
+  await api('POST', `/api/lists/${list.id}/snapshots/${snaps[0].id}/add`);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(v.items.some((it) => it.note === 'Birthday card'));
+});
+
+test('older databases are migrated to allow notes', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const Database = (await import('better-sqlite3')).default;
+  const file = path.join(dir, 'old.db');
+  // A current database, with list_items swapped back to the old definition (product required).
+  const make = spawnSync(process.execPath, ['-e', "const { getDb } = await import('./src/db.js'); getDb();"],
+    { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, DB_PATH: file }, encoding: 'utf8', input: '' });
+  assert.equal(make.status, 0, make.stderr);
+  const old = new Database(file);
+  old.exec(`DROP TABLE list_items;
+    CREATE TABLE list_items (id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE, quantity INTEGER NOT NULL DEFAULT 1,
+      match_mode TEXT NOT NULL DEFAULT 'similar', added_by INTEGER, added_at TEXT NOT NULL, checked_at TEXT, checked_by INTEGER);
+    INSERT INTO products (id, store, store_product_id, name, first_seen, last_seen) VALUES (1, 'coles', 'x', 'Milk', 'now', 'now');
+    INSERT INTO users (id, email, password_hash, name, created_at) VALUES (1, 'o@example.com', 'x', 'O', 'now');
+    INSERT INTO lists (id, name, created_by, created_at) VALUES (1, 'L', 1, 'now');
+    INSERT INTO list_items (list_id, product_id, quantity, added_at) VALUES (1, 1, 3, '2026-01-01');`);
+  old.close();
+  const r = spawnSync(process.execPath, ['-e', `
+    const { getDb } = await import('./src/db.js');
+    const d = getDb();
+    d.prepare("INSERT INTO list_items (list_id, note, added_at) VALUES (1, 'card', 'now')").run();
+    console.log(JSON.stringify(d.prepare('SELECT product_id, note, quantity FROM list_items ORDER BY id').all()));
+  `], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, DB_PATH: file }, encoding: 'utf8', input: '' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), [
+    { product_id: 1, note: null, quantity: 3 }, { product_id: null, note: 'card', quantity: 1 },
+  ]);
+});
+
+test('admins are emailed when a refresh fails or shrinks, and when it recovers', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const { checkCollector } = await import('../src/admin-alerts.js');
+  const saved = process.env.COLLECTOR_TOKEN;
+  process.env.COLLECTOR_TOKEN = 'collector-secret-alerts';
+  const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer collector-secret-alerts' }, body: JSON.stringify(body) }).then((r) => r.json());
+  const items = (n) => Array.from({ length: n }, (_, i) => ({ store_product_id: `al${i}`, name: `Alert Test Product ${i}`, size_text: '1kg', price: 2 + i / 100 }));
+  const run = async ({ n = 0, error } = {}) => {
+    const { runId } = await post('/api/ingest/runs', { store: 'harrisfarm' });
+    if (n) await post(`/api/ingest/runs/${runId}/items`, { items: items(n) });
+    await post(`/api/ingest/runs/${runId}/finish`, error ? { error } : { complete: true });
+    await new Promise((r) => setTimeout(r, 50)); // alerts are sent in the background
+  };
+  const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
+  const before = alerts().length;
+
+  await run({ n: 20 });
+  assert.equal(alerts().length, before, 'a normal refresh sends nothing');
+  await run({ error: 'HTTP 403 for https://example' });
+  assert.equal(alerts().length, before + 1);
+  assert.equal(alerts().at(-1).to, 'admin@example.com');
+  assert.match(alerts().at(-1).subject, /Harris Farm prices didn’t refresh/);
+  assert.match(alerts().at(-1).text, /HTTP 403/);
+  await run({ error: 'again' });
+  assert.equal(alerts().length, before + 1, 'not repeated within a day');
+  await run({ n: 20 });
+  assert.match(alerts().at(-1).subject, /refreshing again/, 'tells admins it’s fixed');
+  await run({ n: 5 });
+  assert.match(alerts().at(-1).subject, /far fewer products/);
+  assert.match(alerts().at(-1).text, /found 5 products; the one before found 20/);
+  await run({ n: 20 });
+
+  // The collector check: Harris Farm is collected from home here, and it's been sending.
+  const { getDb } = await import('../src/db.js');
+  const stores = () => ['woolworths', 'coles', 'aldi', 'iga'];
+  assert.equal(await checkCollector({ serverStores: stores }), false, 'nothing to report');
+  getDb().prepare("UPDATE scrape_runs SET finished_at = '2020-01-01T00:00:00Z' WHERE source = 'collector'").run();
+  assert.equal(await checkCollector({ serverStores: stores }), true);
+  assert.match(alerts().at(-1).subject, /home collector has gone quiet/);
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
+  if (saved) process.env.COLLECTOR_TOKEN = saved;
+  else delete process.env.COLLECTOR_TOKEN;
+});
+
+test('product details and list items say whether it’s a good price', async () => {
+  const { getDb } = await import('../src/db.js');
+  upsertProducts('coles', [{ store_product_id: 'ins1', name: 'Insight Test Coffee Beans 1kg', brand: 'Insight', size_text: '1kg', price: 20 }]);
+  const d = getDb();
+  const p = d.prepare("SELECT id FROM products WHERE store_product_id = 'ins1'").get();
+  // Its history: $40 for months, then dropped to $20 today.
+  d.prepare('DELETE FROM price_history WHERE product_id = ?').run(p.id);
+  const ago = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  d.prepare('INSERT INTO price_history (product_id, price, on_special, recorded_at) VALUES (?, 40, 0, ?), (?, 20, 1, ?)').run(p.id, ago(150), p.id, ago(1));
+  const api = client();
+  const detail = (await api('GET', `/api/products/${p.id}`)).body;
+  assert.equal(detail.insight.verdict, 'great');
+  assert.match(detail.insight.headline, /Lowest price/);
+  await api('POST', '/api/auth/signup', { email: 'insight@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  await api('POST', `/api/lists/${list.id}/items`, { productId: p.id, matchMode: 'this' });
+  const v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].priceInsight.verdict, 'great');
+});
+
+test('finished shops record what they cost and what splitting saved', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'spend@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  assert.deepEqual((await api('GET', `/api/lists/${list.id}/spending`)).body.shops, []);
+  const milk = await productId(api, 'milk', 'woolworths');
+  const eggs = await productId(api, 'eggs', 'coles');
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk, quantity: 2 });
+  await api('POST', `/api/lists/${list.id}/items`, { productId: eggs });
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'card' });
+  const v = (await api('GET', `/api/lists/${list.id}`)).body;
+  for (const it of v.items) await api('PUT', `/api/items/${it.id}/checked`, { checked: true });
+  await api('POST', `/api/lists/${list.id}/finish`);
+  const sp = (await api('GET', `/api/lists/${list.id}/spending`)).body;
+  assert.equal(sp.shops.length, 1);
+  assert.equal(sp.shops[0].spent, v.plan.total, 'the planned cost of what was ticked');
+  assert.equal(sp.shops[0].items, 2, 'notes aren’t counted');
+  assert.equal(sp.last30, v.plan.total);
+  assert.equal(sp.months.length, 1);
+  // Eggs are only at Coles, so Coles is the one shop with everything: 2 × $3.10 + $6.90.
+  assert.deepEqual(sp.shops[0].oneShop, { store: 'coles', total: 13.1 });
+  assert.equal(sp.shops[0].saved, Math.round((13.1 - v.plan.total) * 100) / 100);
+});
+
+test('learns the order you walk a shop from your ticks', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'walker@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  await api('POST', `/api/lists/${list.id}/items`, { note: 'x' });
+  const item = (await api('GET', `/api/lists/${list.id}`)).body.items[0].id;
+  // Two trips where this shopper does the freezers first and fruit & veg last.
+  const tripAt = (hoursAgo, i) => new Date(Date.now() - hoursAgo * 3600000 + i * 60000).toISOString();
+  for (const hoursAgo of [30, 6]) {
+    for (const [i, aisle] of ['frozen', 'dairy', 'pantry', 'produce'].entries()) {
+      await api('PUT', `/api/items/${item}/checked`, { checked: true, store: 'coles', aisle, at: tripAt(hoursAgo, i) });
+    }
+  }
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.layouts.coles.trips, 2);
+  assert.equal(v.layouts.coles.ranks.frozen, 0);
+  assert.equal(v.layouts.coles.ranks.produce, 1);
+  assert.ok(!v.layouts.woolworths, 'nothing learned about other shops');
+  // Bad input is ignored, and the layout can be reset.
+  assert.equal((await api('PUT', `/api/items/${item}/checked`, { checked: true, store: 'nope', aisle: 'frozen' })).status, 200);
+  await api('DELETE', '/api/me/shop-layouts/coles');
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(!v.layouts.coles);
+});
+
+test('looking up a scanned barcode finds the product and its prices elsewhere', async () => {
+  upsertProducts('woolworths', [{ store_product_id: 'bc1', name: 'Barcode Test Crackers 250g', brand: 'Barcode', size_text: '250g', price: 3.5, barcode: '9300000000017' }]);
+  upsertProducts('coles', [{ store_product_id: 'bc2', name: 'Barcode Test Crackers', brand: 'Barcode', size_text: '250g', price: 3.2 }]);
+  const api = client();
+  const r = (await api('GET', '/api/barcode/09300000000017')).body; // leading zero, like a UPC reader gives
+  assert.equal(r.found, true);
+  assert.match(r.anchor.name, /Barcode Test Crackers/);
+  assert.equal(r.cheapest, 'coles');
+  assert.equal((await api('GET', '/api/barcode/123')).status, 400);
+  assert.equal((await api('GET', '/api/barcode/9399999999999')).body.found, false);
+});
+
+test('admin data health', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const hh = (await admin('GET', '/api/admin/health?refresh=1')).body;
+  const coles = hh.stores.find((x) => x.store === 'coles');
+  assert.ok(coles.available > 0);
+  assert.ok(coles.matching.sampled > 0);
+  assert.ok(coles.matching.matchedPct >= 0 && coles.matching.matchedPct <= 100);
+  assert.ok(Array.isArray(hh.alerts));
+  assert.equal((await client()('GET', '/api/admin/health')).status, 401);
+});

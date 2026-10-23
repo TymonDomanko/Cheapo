@@ -6,6 +6,7 @@ import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
+import { checkCollector } from './admin-alerts.js';
 import { ensureDefaultTracked, ensureDirectory, checkOnlineStores, checkIsDue } from './iga.js';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -33,6 +34,8 @@ if (SCRAPE_CRON) {
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
+// Tell admins if the home collector has stopped sending prices (it collects around 4am).
+cron.schedule(process.env.COLLECTOR_CHECK_CRON || '0 11 * * *', () => checkCollector({ serverStores }), { timezone: process.env.TZ || undefined });
 // Weekly "on special this week" email: Wednesday morning, when the big chains' specials change.
 cron.schedule(process.env.DIGEST_CRON || '0 8 * * 3', () => {
   sendWeeklyDigests().catch((e) => console.error(`weekly digest: ${e.message}`));

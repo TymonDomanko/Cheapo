@@ -2,6 +2,7 @@ import { SCRAPERS } from './registry.js';
 import { getDb, upsertProducts, markUnseenUnavailable, nowIso } from '../db.js';
 import * as igaStores from '../iga.js';
 import { getSetting } from '../settings.js';
+import { checkRun } from '../admin-alerts.js';
 
 export { SCRAPERS };
 
@@ -46,12 +47,15 @@ export function finishRun(run, { complete, error = null }) {
   const fresh = getRun(run.id);
   if (error) {
     d.prepare("UPDATE scrape_runs SET finished_at = ?, status = 'error', error = ? WHERE id = ?").run(nowIso(), String(error), run.id);
+    checkRun(getRun(run.id)); // emails admins if this needs a look (doesn't wait)
     return fresh;
   }
   if (complete && fresh.products > 0) markUnseenUnavailable(run.store, run.started_at, run.location || null);
   if (run.store === 'iga' && (complete || fresh.products > 0)) igaStores.markScraped(run.location, fresh.products);
   d.prepare("UPDATE scrape_runs SET finished_at = ?, status = 'ok' WHERE id = ?").run(nowIso(), run.id);
-  return getRun(run.id);
+  const done = getRun(run.id);
+  if (complete) checkRun(done);
+  return done;
 }
 
 /**
