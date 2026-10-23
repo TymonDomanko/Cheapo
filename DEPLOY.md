@@ -116,12 +116,68 @@ Platforms without persistent disks, such as Vercel, Netlify and Heroku, would ne
 
 ---
 
+## Email (password resets, confirmation, alerts)
+
+Set `SMTP_URL` to any email provider's SMTP address, plus `MAIL_FROM` and `SITE_URL` (the public address used in links):
+
+```
+SMTP_URL=smtps://USERNAME:PASSWORD@smtp.example.com:465
+MAIL_FROM=Grocery Price Compare <alerts@groceries.example.com>
+SITE_URL=https://groceries.example.com
+```
+
+Resend, Postmark, Amazon SES, Mailgun and Brevo all give you an SMTP address. Most free tiers cover a household-sized site.
+
+Without `SMTP_URL`, nothing is sent. Emails appear in the Admin page's **Emails** section instead, so you can pass a reset link on to someone by hand.
+
+What gets sent:
+- confirmation of new accounts' emails;
+- password resets;
+- price alerts, daily after prices refresh;
+- the "on special this week" email, Wednesdays at 8am.
+
+Alerts only go to confirmed addresses, and every alert email has a one-click unsubscribe link.
+
+## Off-site backups (Litestream)
+
+The server snapshots its database every night into `/data/backups`, keeping 7 days. Admins can download those from the Admin page. They sit on the same disk as the database, though, so they don't help if the disk is lost.
+
+For that, the Docker image includes [Litestream](https://litestream.io). It copies every change to S3-compatible storage within seconds, and if it starts on an empty disk it restores the latest copy before the app starts. Set:
+
+```
+LITESTREAM_BUCKET=my-grocery-backups
+LITESTREAM_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com   # leave out for AWS S3
+LITESTREAM_REGION=auto                                                # or your AWS region
+LITESTREAM_ACCESS_KEY_ID=...
+LITESTREAM_SECRET_ACCESS_KEY=...
+```
+
+Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers. The Admin page shows whether off-site backup is on.
+
+**To restore onto a new server:** start the container with the same `LITESTREAM_*` settings and an empty `/data`.
+
+## Home collector (Woolworths and ALDI)
+
+Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site:
+
+1. **On the server:** set a long random `COLLECTOR_TOKEN`, and `SERVER_SCRAPE_STORES=coles,iga,harrisfarm` so the server stops trying the blocked stores itself.
+2. **On any always-on machine at home** (a PC, a NAS, a Raspberry Pi), use [`deploy/collector/`](deploy/collector):
+   ```bash
+   cp .env.example .env    # set COLLECTOR_SERVER (your site) and the same COLLECTOR_TOKEN
+   docker compose up -d
+   ```
+   It collects every day at `COLLECT_CRON` (default 4am). For a one-off run without Docker: `COLLECTOR_SERVER=… COLLECTOR_TOKEN=… npm run collect`.
+
+The Admin page marks these stores "Collected from home" and shows each run.
+
 ## The daily refresh
 
 At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
-2. **Refreshes prices** for every supermarket and every followed IGA store.
+2. **Refreshes prices** for every supermarket (except the ones a home collector sends) and every followed IGA store.
+3. **Fills in Coles barcodes:** up to `COLES_BARCODE_BUDGET` product pages a day (default 1,500), products on lists first. This lets Coles products match Woolworths ones exactly.
+4. **Sends price alerts** to people whose watched products got cheaper.
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
 
@@ -136,11 +192,10 @@ With no cap (the default), every one of the ~540 IGAs with online prices would c
 
 ## Scraping from the cloud
 
-Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI sometimes block datacentre IP addresses.** If their refreshes fail on the Admin page, you have three options:
+Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI sometimes block datacentre IP addresses.** If their refreshes fail on the Admin page:
 
-- **Use a residential proxy.** Set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
-- **Scrape from home into the server's database.** Run `npm run scrape -- woolworths aldi` on a home machine, then copy `supermarket.db` up. This works best if you schedule both steps.
-- **Accept the gaps.** Run the site without those two stores' updates; the other three stores stay current.
+- **Run the home collector** (above). This is the simplest dependable fix.
+- **Or use a residential proxy.** Set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
 
 ## Checklist before going public
 
@@ -148,5 +203,7 @@ Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI someti
 - [ ] `ADMIN_EMAILS` is set, and you've signed up with that email.
 - [ ] Remove the demo data if you loaded it: `docker compose exec app node src/cli/seed-demo.js --clear`.
 - [ ] Decide on sign-ups. `ALLOW_SIGNUPS=false` keeps the site to people who already have an account.
-- [ ] Back up `/data/supermarket.db`.
+- [ ] Email is set up (`SMTP_URL`, `MAIL_FROM`, `SITE_URL`), or you're happy to hand out reset links from the admin outbox.
+- [ ] Off-site backup is on (`LITESTREAM_*`). The Admin page says so.
+- [ ] `CONTACT_EMAIL` (and `SITE_OPERATOR`) are set for the privacy page.
 - [ ] Read each supermarket's terms of use. Republishing scraped prices publicly is a legal grey area.

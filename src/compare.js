@@ -212,7 +212,7 @@ export function compareSearch(q, opts = {}) {
       best,
       cheapest,
       betterValue: cheapest ? betterValue(best[cheapest].product, { igaStore: opts.igaStore, stores, memberships: opts.memberships }) : null,
-      members: eq.map((m) => ({ ...m.product, score: m.score })).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)),
+      members: eq.map((m) => ({ ...m.product, score: m.score, via: m.via || null })).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)),
     });
   }
   return groups;
@@ -240,7 +240,7 @@ export function productDetail(id, stores, igaStore) {
   const history = priceHistory(charted.map((x) => x.id), igaStore);
   return {
     product: p,
-    equivalents: eq.map((m) => ({ ...m.product, score: m.score })),
+    equivalents: eq.map((m) => ({ ...m.product, score: m.score, via: m.via || null })),
     best,
     charted,
     history,

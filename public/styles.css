@@ -281,3 +281,38 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .col-sub { display: block; text-transform: none; letter-spacing: 0; font-size: 11px; margin-top: 2px; }
 .notice { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); font-size: 14px; }
 .iga-why { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; }
+
+/* Deals, hints, watches */
+.badge.deal, .badge.member { display: inline-block; margin: 2px 4px 0 0; padding: 0 6px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+.badge.deal { background: var(--surface-2); color: var(--special); }
+.badge.member { background: var(--surface-2); color: var(--accent); }
+.value-hint { grid-column: 1 / -1; font-size: 13px; color: var(--text-2); background: var(--surface-2); border-radius: 8px; padding: 6px 10px; margin-top: 4px; }
+.item .value-hint { margin-top: 8px; }
+.row-actions { white-space: nowrap; }
+.row-actions .ghost { margin-left: 4px; }
+.watching { font-size: 13px; color: var(--text-2); margin-left: 6px; }
+.small-link { font-size: 12px; display: block; margin-top: 2px; }
+.watch-list, .snap-list, .report-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.watch-list li, .snap-list li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; font-size: 14px; }
+.report-list li { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.report-list li > div:nth-child(2) { grid-column: 1 / -1; }
+
+/* In the shop */
+.shop-section { margin: 16px 0; }
+.shop-section h2 { display: flex; align-items: center; gap: 8px; }
+.aisle { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+.checklist { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.checklist label {
+  display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-height: 52px;
+}
+.checklist input { width: 24px; height: 24px; }
+.checklist .ck-price { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.checklist li.done label { opacity: .55; }
+.checklist li.done .ck-name { text-decoration: line-through; }
+
+/* Footer & privacy */
+.site-footer { max-width: 1100px; margin: 24px auto 32px; padding: 0 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 13px; }
+.prose { max-width: 720px; margin: 0 auto; line-height: 1.6; }
+.prose h3 { margin: 18px 0 4px; }
+.prose ul { padding-left: 20px; }

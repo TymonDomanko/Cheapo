@@ -83,6 +83,17 @@ let seed = 42;
 const rand = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
 const money = (n) => Math.max(0.5, Math.round(n * 20) / 20);
 
+// A few multi-buys, member prices and barcodes so those features show up.
+const BARCODES = { "Arnott's Tim Tam Original": '9310072011691', 'Bega Vegemite': '9300650658615', 'Cadbury Dairy Milk Chocolate Block': '9300617003861' };
+function demoExtras(store, name, price) {
+  const out = {};
+  for (const [n, code] of Object.entries(BARCODES)) if (name === n && ['woolworths', 'coles'].includes(store)) out.barcode = code;
+  if (store === 'woolworths' && name === "Arnott's Tim Tam Original") out.member_price = Math.round(price * 0.8 * 20) / 20;
+  if (store === 'coles' && name === "Smith's Original Potato Chips") Object.assign(out, { multi_qty: 2, multi_price: 7, promo_text: 'Pick any 2 for $7' });
+  if (store === 'woolworths' && name === 'Coca-Cola Cola Soft Drink') Object.assign(out, { multi_qty: 2, multi_price: 22, promo_text: '2 for $22.00' });
+  return out;
+}
+
 const DAYS = 90;
 const products = [];
 const FRESH = new Set(['Milk', 'Eggs', 'Butter', 'Cheese', 'Yoghurt', 'Bread', 'Fruit', 'Vegetables', 'Salad', 'Poultry', 'Beef']);
@@ -131,6 +142,7 @@ for (let day = DAYS; day >= 0; day--) {
         price: now,
         was_price: onSpecial ? price : null,
         on_special: onSpecial,
+        ...demoExtras(store, p.name, now),
       };
     });
     // IGA prices belong to one IGA store: the site's default.

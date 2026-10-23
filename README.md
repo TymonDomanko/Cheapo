@@ -12,6 +12,12 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
   - A shop you've excluded says what it's **costing you** (how much including it would save).
 - **Order the cheapest.** Splits your list so each item comes from its cheapest shop. You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
 - **Price history.** Each product has a step chart of its price over time, alongside the matching products at the other shops. A "Price changes" tab lists the biggest recent rises and drops.
+- **Barcode matching.** Woolworths and Coles products are matched exactly by barcode, which catches products whose names differ. Anyone can press **Wrong match?**; an admin confirms it and the fix applies for everyone.
+- **Deals that change the maths.** Multi-buys ("5 for $9") and Everyday Rewards member prices are counted. Each shopper ticks their memberships in Settings, and list totals work out the real cost of the quantity you need.
+- **Better-value sizes.** If the same item in another pack size is at least 10% cheaper per kg, litre or item, you see a hint ("3L is 18% cheaper per litre").
+- **Alerts.** Watch any product for a target price or any drop. There's also a Wednesday email of what's on special from your lists.
+- **In the shop.** Tick things off on your phone, grouped by shop and section. Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Accounts done properly.** Email confirmation, password reset, a privacy page, and data export and deletion in Settings.
 - **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button.
 
 ## Run it on your computer
@@ -71,6 +77,12 @@ See `.env.example`. The main settings:
 | `TZ` | server's | Time zone for the refresh schedule, e.g. `Australia/Sydney` |
 | `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices (server time); empty disables it |
 | `IGA_STORE_ID` | `32600` | Default IGA store for visitors who haven't picked one |
+| `SMTP_URL`, `MAIL_FROM`, `SITE_URL` | — | Sending email (see DEPLOY.md). Without them, emails go to the admin outbox |
+| `CONTACT_EMAIL`, `SITE_OPERATOR` | — | Shown on the privacy page |
+| `COLLECTOR_TOKEN`, `SERVER_SCRAPE_STORES` | — | Accept prices from a home collector, and leave those stores out of the server's own crawl |
+| `LITESTREAM_*` | — | Continuous off-site backup (see DEPLOY.md) |
+| `BACKUP_KEEP_DAYS` | `7` | Daily on-disk snapshots to keep |
+| `COLES_BARCODE_BUDGET` | `1500` | Coles product pages fetched per day for barcodes |
 | `IGA_MAX_STORES` | no limit | Optional cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the daily refresh and about 2 MB of storage |
 | `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |
 | `ENABLE_TROLLEY_FILL` | `false` | Self-hosted trolley automation (see above) |
@@ -88,6 +100,8 @@ See `.env.example`. The main settings:
 | Harris Farm | Shopify `/products.json` | NSW, QLD and ACT |
 
 Chains I looked at but didn't add:
+
+To help add Drakes or Foodland, run `npm run capture -- drakes` (or `foodland`) on a home machine, after a one-time `npx playwright install chromium`. It opens their online shop in a browser and saves every product-data response to `data/capture-*.json`. That file is enough to write a scraper from.
 
 - **Drakes** and **Foodland (SA)** both have online shops, but I couldn't reach either site from the development environment, so I couldn't check what their data looks like. They're good candidates to add next.
 - **FoodWorks, Costco and Spudshed** don't publish a usable online grocery catalogue.

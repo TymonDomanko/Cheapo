@@ -6,6 +6,9 @@
   <title>Grocery Price Compare</title>
   <meta name="description" content="Compare grocery prices across Australian supermarkets, build shared shopping lists and see where to buy each item cheapest.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232a78d6'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'%3E$%3C/text%3E%3C/svg%3E">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#2a78d6">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="stylesheet" href="/styles.css">
   <script src="/vendor/chart.js/chart.umd.js" defer></script>
   <script src="/app.js" type="module"></script>
@@ -28,6 +31,12 @@
   <div id="demo-banner" class="banner" hidden>
     Showing <strong>demo data</strong> with made-up prices.
   </div>
+
+  <div id="verify-banner" class="banner" hidden>
+    Confirm your email address to get price alerts and password resets — check your inbox for the link.
+    <button type="button" class="linkish" id="resend-verify">Send it again</button>
+  </div>
+  <div id="offline-banner" class="banner" hidden>You’re offline. Ticks are saved on this phone and sync when you’re back online.</div>
 
   <main>
     <!-- Compare -->
@@ -88,6 +97,7 @@
           </fieldset>
           <p class="warn" data-form-error hidden></p>
           <button class="primary" type="submit">Create account</button>
+          <p class="hint">See <a href="/privacy" data-link>what we store and why</a>.</p>
         </form>
         <p class="hint">Already have an account? <a href="/login" data-link>Log in</a></p>
       </div>
@@ -103,6 +113,7 @@
           <p class="warn" data-form-error hidden></p>
           <button class="primary" type="submit">Log in</button>
         </form>
+        <p class="hint"><a href="/forgot-password" data-link>Forgot your password?</a></p>
         <p class="hint" data-signup-link>New here? <a href="/signup" data-link>Create an account</a></p>
       </div>
     </section>
@@ -129,6 +140,24 @@
           <button class="primary" type="submit">Save shops</button>
         </form>
 
+        <form id="alerts-form" class="card stack">
+          <h3>Emails</h3>
+          <p class="hint" id="email-status"></p>
+          <label class="check"><input type="checkbox" name="alertsWeekly"> Weekly: what’s on special from my lists (Wednesdays)</label>
+          <label class="check"><input type="checkbox" name="alertsPrice"> Price alerts for things I’m watching</label>
+          <h3>Member prices</h3>
+          <p class="hint">Tick the loyalty schemes you belong to and we’ll use their member-only prices for you.</p>
+          <div id="membership-boxes"></div>
+          <p class="warn" data-form-error hidden></p>
+          <button class="primary" type="submit">Save</button>
+        </form>
+
+        <div class="card stack">
+          <h3>Watching</h3>
+          <p class="hint">Products you’ve asked to hear about when they get cheaper. Add more from any product’s page.</p>
+          <ul id="watch-list" class="watch-list"></ul>
+        </div>
+
         <form id="password-form" class="card stack">
           <h3>Change password</h3>
           <label>Current password<input name="currentPassword" type="password" autocomplete="current-password" required></label>
@@ -137,6 +166,13 @@
           <button class="primary" type="submit">Change password</button>
           <p class="hint">This logs you out everywhere else.</p>
         </form>
+
+        <div class="card stack">
+          <h3>Your data</h3>
+          <p class="hint">Download everything we hold about you: your account details, lists and price watches.</p>
+          <a class="button" href="/api/me/export" download>Download my data</a>
+          <p class="hint"><a href="/privacy" data-link>Privacy: what we store and why</a></p>
+        </div>
 
         <form id="delete-form" class="card stack danger">
           <h3>Delete account</h3>
@@ -148,11 +184,53 @@
       </div>
     </section>
 
+    <!-- Password reset & email confirmation -->
+    <section id="tab-forgot-password" class="tab page" hidden>
+      <div class="card narrow-card">
+        <h2>Forgot your password?</h2>
+        <p class="hint">Enter your email and we’ll send you a link to choose a new one.</p>
+        <form id="forgot-form" class="stack">
+          <label>Email<input name="email" type="email" autocomplete="email" required></label>
+          <p class="warn" data-form-error hidden></p>
+          <button class="primary" type="submit">Send reset link</button>
+        </form>
+        <p class="notice" id="forgot-done" hidden>If there’s an account for that email, a reset link is on its way. It works for an hour. Check your spam folder if it doesn’t arrive.</p>
+        <p class="hint"><a href="/login" data-link>Back to log in</a></p>
+      </div>
+    </section>
+
+    <section id="tab-reset-password" class="tab page" hidden>
+      <div class="card narrow-card">
+        <h2>Choose a new password</h2>
+        <form id="reset-form" class="stack">
+          <label>New password <span class="hint">at least 8 characters</span><input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+          <p class="warn" data-form-error hidden></p>
+          <button class="primary" type="submit">Save password and log in</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="tab-verify-email" class="tab page" hidden>
+      <div class="card narrow-card">
+        <h2 id="verify-title">Confirming your email…</h2>
+        <p id="verify-msg" class="hint"></p>
+        <p><a href="/" data-link>Go to the site</a></p>
+      </div>
+    </section>
+
+    <section id="tab-privacy" class="tab page" hidden>
+      <article class="card prose" id="privacy-body"></article>
+    </section>
+
     <!-- Admin -->
     <section id="tab-admin" class="tab" hidden>
       <div id="admin-root"></div>
     </section>
   </main>
+  <footer class="site-footer">
+    <a href="/privacy" data-link>Privacy</a>
+    <span>Prices come from the supermarkets’ own websites and can differ in store.</span>
+  </footer>
 
   <dialog id="product-dialog">
     <form method="dialog"><button class="close" aria-label="Close">×</button></form>
@@ -175,6 +253,22 @@
     </div>
     <p id="iga-msg" class="hint" role="status"></p>
     <ul id="iga-results" class="iga-results"></ul>
+  </dialog>
+
+  <dialog id="report-dialog" class="narrow">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <h2>Not the same product?</h2>
+    <p id="report-pair" class="hint"></p>
+    <form id="report-form" class="stack">
+      <label>What’s different? <span class="hint">optional</span><input name="note" maxlength="300" placeholder="e.g. one is lactose free"></label>
+      <button class="primary" type="submit">Report wrong match</button>
+      <p class="hint">An admin checks reports. Once confirmed, these two won’t be compared for anyone.</p>
+    </form>
+  </dialog>
+
+  <dialog id="snapshots-dialog" class="narrow">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <div id="snapshots-detail"></div>
   </dialog>
 
   <dialog id="share-dialog">

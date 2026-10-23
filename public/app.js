@@ -43,6 +43,11 @@ function toast(msg) {
 
 async function loadConfig() {
   state.config = await api(withIga('/api/config'));
+  try {
+    localStorage.setItem('lastConfig', JSON.stringify(state.config));
+  } catch {
+    /* storage blocked */
+  }
   state.allStores = state.config.stores.map((s) => s.id);
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
@@ -57,6 +62,7 @@ async function loadConfig() {
 function renderAccount() {
   const u = user();
   $('#admin-tab').hidden = !u?.isAdmin;
+  $('#verify-banner').hidden = !u || u.emailVerified;
   $('#account').innerHTML = u
     ? `<a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
        <a href="/settings" data-link class="button small ghost">Settings</a>
@@ -73,7 +79,8 @@ function renderAccount() {
 // Tabs live at /#compare, /#list…; full pages at /login, /signup, /settings, /join/<token>.
 
 const TABS = ['compare', 'list', 'changes', 'admin'];
-const PAGES = ['login', 'signup', 'settings'];
+const PAGES = ['login', 'signup', 'settings', 'forgot-password', 'reset-password', 'verify-email', 'privacy'];
+const GUEST_ONLY = ['login', 'signup', 'forgot-password'];
 
 function showTab(name) {
   if (name === 'admin' && !user()?.isAdmin) name = 'compare';
@@ -104,11 +111,16 @@ async function route() {
   const page = path.slice(1);
   if (PAGES.includes(page)) {
     if (page === 'settings' && !user()) return goToAuth('login', 'Log in to change your settings.', { type: 'goto', path: '/settings' });
-    if (page !== 'settings' && user()) return navigate('/');
+    if (GUEST_ONLY.includes(page) && user()) return navigate('/');
     if (page === 'signup' && !state.config.allowSignups) return navigate('/login');
     show(page);
     if (page === 'settings') fillSettings();
-    else {
+    else if (page === 'privacy') renderPrivacy();
+    else if (page === 'verify-email') confirmEmail();
+    else if (page === 'reset-password' || page === 'forgot-password') {
+      $$(`#tab-${page} form`).forEach((f) => formError(f, null));
+      $(`#tab-${page} input`).focus();
+    } else {
       $(`#tab-${page} [data-auth-reason]`).textContent = sessionStorage.getItem('authReason') || '';
       $('[data-signup-link]').hidden = !state.config.allowSignups;
       $(`#tab-${page} input[name=${page === 'signup' ? 'name' : 'email'}]`).focus();
@@ -244,6 +256,15 @@ $('#login-form').addEventListener('submit', async (e) => {
 
 function fillSettings() {
   const u = user();
+  const af = $('#alerts-form');
+  af.alertsWeekly.checked = u.alertsWeekly;
+  af.alertsPrice.checked = u.alertsPrice;
+  $('#email-status').innerHTML = u.emailVerified
+    ? `Emails go to <strong>${esc(u.email)}</strong>.`
+    : `<span class="warn">Confirm your email first</span> — we only email confirmed addresses. <button type="button" class="linkish" data-resend-verify>Send the link again</button>`;
+  $('#membership-boxes').innerHTML = Object.entries(state.config.memberships || {}).map(([store, scheme]) => `<label class="check">
+    <input type="checkbox" name="memberships" value="${esc(store)}" ${u.memberships.includes(store) ? 'checked' : ''}> ${dot(store)} ${esc(scheme)} (${esc(storeName(store))})</label>`).join('');
+  loadWatches();
   $('#shops-form [data-shop-boxes]').innerHTML = ''; // start from the saved choice
   $('#profile-form [name=name]').value = u.name;
   $('#profile-form [name=email]').value = u.email;
@@ -301,6 +322,126 @@ $('#delete-form').addEventListener('submit', async (e) => {
     formError(e.target, err);
   }
 });
+
+$('#alerts-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api('/api/me', {
+      method: 'PATCH',
+      body: { alertsWeekly: f.alertsWeekly.checked, alertsPrice: f.alertsPrice.checked, memberships: new FormData(f).getAll('memberships') },
+    });
+    await loadConfig();
+    formError(f, null);
+    toast('Saved');
+    runSearch();
+  } catch (err) {
+    formError(f, err);
+  }
+});
+
+async function loadWatches() {
+  const list = await api('/api/watches').catch(() => []);
+  $('#watch-list').innerHTML = list.length
+    ? list.map((w) => `<li><a href="#" data-product="${w.productId}">${esc(w.product?.name || 'Product')}</a>
+        <span class="hint">${w.product ? `${esc(storeName(w.product.store))} · now ${money(w.price)}` : 'no longer sold'}
+        · ${w.targetPrice != null ? `alert at ${money(w.targetPrice)}` : 'any drop'}</span>
+        <button type="button" class="small ghost" data-unwatch="${w.productId}">Stop</button></li>`).join('')
+    : '<li class="hint">Nothing yet.</li>';
+}
+$('#watch-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-unwatch]');
+  if (!b) return;
+  await api(`/api/watches/${b.dataset.unwatch}`, { method: 'DELETE' });
+  loadWatches();
+});
+
+// Email confirmation & password reset
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('#resend-verify, [data-resend-verify]')) return;
+  try {
+    await api('/api/me/verify-email', { method: 'POST' });
+    toast('Sent — check your inbox');
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+async function confirmEmail() {
+  const token = new URLSearchParams(location.search).get('token');
+  $('#verify-title').textContent = 'Confirming your email…';
+  $('#verify-msg').textContent = '';
+  try {
+    await api('/api/auth/verify', { method: 'POST', body: { token } });
+    $('#verify-title').textContent = 'Email confirmed';
+    $('#verify-msg').textContent = 'Thanks! You can now get price alerts and password resets.';
+    await loadConfig();
+  } catch (err) {
+    $('#verify-title').textContent = 'That link didn’t work';
+    $('#verify-msg').textContent = `${err.message} You can send a new one from Settings.`;
+  }
+}
+
+$('#forgot-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/auth/forgot', { method: 'POST', body: { email: new FormData(e.target).get('email') } });
+    formError(e.target, null);
+    e.target.hidden = true;
+    $('#forgot-done').hidden = false;
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+$('#reset-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/auth/reset', {
+      method: 'POST',
+      body: { token: new URLSearchParams(location.search).get('token'), password: new FormData(e.target).get('password') },
+    });
+    e.target.reset();
+    await loadConfig();
+    toast('Password changed — you’re logged in');
+    history.pushState(null, '', '/');
+    showTab('compare');
+  } catch (err) {
+    formError(e.target, err);
+  }
+});
+
+// ================================================================== privacy
+
+function renderPrivacy() {
+  const site = state.config.site;
+  const contact = site.contact
+    ? `email <a href="mailto:${esc(site.contact)}">${esc(site.contact)}</a>`
+    : 'contact the person who runs this site';
+  $('#privacy-body').innerHTML = `
+    <h2>Privacy</h2>
+    <p>${esc(site.name)}${site.operator ? ` is run by ${esc(site.operator)}` : ''}. It compares supermarket prices and keeps shopping lists. Here’s exactly what it stores and why.</p>
+    <h3>If you just browse</h3>
+    <p>Nothing about you is stored on the server. Your browser keeps your chosen IGA store and last-opened list (in its own storage) so the site remembers them. There are no ads, no trackers, and no analytics.</p>
+    <h3>If you create an account</h3>
+    <ul>
+      <li><strong>Your name and email</strong> — to log you in, and to email you only what you ask for: confirming your address, password resets, and the alerts you turn on.</li>
+      <li><strong>Your password</strong> — stored only as a one-way scrypt hash; nobody can read it.</li>
+      <li><strong>Your lists, settings and price watches</strong> — to provide the service. Shared lists are visible to everyone you invite.</li>
+      <li><strong>A login cookie</strong> — a random token so you stay logged in (30 days). It’s the only cookie we set.</li>
+    </ul>
+    <h3>Emails</h3>
+    <p>We send only: a link to confirm your email, password resets you ask for, and the weekly specials or price alerts you’ve turned on. Every alert email has a one-click unsubscribe link, and you can turn them off in Settings.</p>
+    <h3>Who else sees it</h3>
+    <p>Nobody. We don’t sell or share your data. Emails are sent through an email delivery service, which handles your address only to deliver the email. Prices are fetched from the supermarkets’ public websites; your details are never sent to them.</p>
+    <h3>Your choices</h3>
+    <ul>
+      <li><strong>Download your data</strong> from Settings at any time.</li>
+      <li><strong>Delete your account</strong> from Settings: your details, lists you don’t share and your price watches are removed straight away. Lists you share pass to another member. Daily backups are kept for up to 7 days and then deleted.</li>
+    </ul>
+    <h3>Questions</h3>
+    <p>To ask about your data or have it corrected, ${contact}.</p>`;
+}
 
 // ================================================================== IGA store picker
 // Every IGA prices things differently, so people pick theirs: by suburb,
@@ -523,15 +664,39 @@ function thumb(p) {
     : '<div class="thumb none">no image</div>';
 }
 
+/** Is this shopper a member of the store's loyalty scheme (so member prices apply)? */
+const isMember = (store) => !!user()?.memberships?.includes(store);
+const shownPrice = (p) => (p.member_price != null && isMember(p.store) && p.member_price < p.price ? p.member_price : p.price);
+
+/** Small labels for multi-buys and member prices. */
+function dealBadges(p) {
+  const out = [];
+  if (p.multi_qty) out.push(`<span class="badge deal" title="Multi-buy">${esc(p.promo_text || `${p.multi_qty} for ${money(p.multi_price)}`)}</span>`);
+  if (p.member_price != null && p.member_price < p.price) {
+    out.push(`<span class="badge member" title="${isMember(p.store) ? 'Your member price' : 'Member price — tick your membership in Settings to use it'}">Member ${money(p.member_price)}</span>`);
+  }
+  return out.join('');
+}
+
 function priceCell(store, match, cheapest, anchor) {
   const label = `<span class="store-label">${dot(store)}${esc(storeName(store))}</span>`;
   if (!match) return `<div class="cell none">${label}—</div>`;
   const p = match.product;
   const alt = p.id !== anchor.id && p.name !== anchor.name ? `<span class="alt" title="${esc(p.name)}">${esc(p.name)}</span>` : '';
+  const price = shownPrice(p);
   return `<div class="cell ${store === cheapest ? 'cheapest' : ''}">${label}
-    <span><span class="price">${money(p.price)}</span>${p.was_price ? `<span class="was">${money(p.was_price)}</span>` : ''}
-    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${esc(p.unit_price_text || '')}</span>${alt}</span>
+    <span><span class="price">${money(price)}</span>${p.was_price ? `<span class="was">${money(p.was_price)}</span>` : price < p.price ? `<span class="was">${money(p.price)}</span>` : ''}
+    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${esc(p.unit_price_text || '')}</span>
+    ${dealBadges(p)}${alt}</span>
   </div>`;
+}
+
+/** "3L is 18% cheaper per litre" line. */
+function valueHint(bv) {
+  if (!bv) return '';
+  const p = bv.product;
+  return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !p.name.includes(p.size_text) ? ` ${esc(p.size_text)}` : ''}</a>
+    at ${esc(storeName(p.store))} is <strong>${bv.savingPct}% cheaper per ${esc(bv.unit)}</strong> (${money(bv.perUnit)} vs ${money(bv.basePerUnit)}).</div>`;
 }
 
 function renderGroup(g) {
@@ -545,6 +710,7 @@ function renderGroup(g) {
     </div>
     ${state.stores.map((s) => priceCell(s, g.best[s], g.cheapest, a)).join('')}
     <button class="add small" data-add="${a.id}">+ List</button>
+    ${valueHint(g.betterValue)}
   </div>`;
 }
 
@@ -591,10 +757,11 @@ async function openProduct(id) {
       <div>
         <h2>${esc(p.name)}</h2>
         <div class="hint">${dot(p.store)} ${esc(storeName(p.store))} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
-        <div><strong>${money(p.price)}</strong> ${p.was_price ? `<span class="hint"><s>${money(p.was_price)}</s></span>` : ''}
+        <div><strong>${money(shownPrice(p))}</strong> ${p.was_price ? `<span class="hint"><s>${money(p.was_price)}</s></span>` : ''} ${dealBadges(p)}
           ${s ? `<span class="hint">· lowest ${money(s.min)}, highest ${money(s.max)}, ${plural(s.changes, 'change')} since ${fmtDate(s.since)}</span>` : ''}</div>
         <p>
           <button class="small" data-add="${p.id}">+ Add to list</button>
+          ${watchControl(p, d.watch)}
           ${p.product_url ? `<a href="${esc(p.product_url)}" target="_blank" rel="noopener">View on ${esc(storeName(p.store))} ↗</a>` : ''}
         </p>
       </div>
@@ -608,12 +775,14 @@ async function openProduct(id) {
       <thead><tr><th>Store</th><th>Product</th><th class="num">Price</th><th class="num">Unit price</th><th class="num">Match</th><th></th></tr></thead>
       <tbody>${d.equivalents.sort((a, b) => a.price - b.price).map((x) => `<tr>
         <td>${dot(x.store)} ${esc(storeName(x.store))}</td>
-        <td><a href="#" data-product="${x.id}">${esc(x.name)}</a> ${x.on_special ? '<span class="tag-special">SPECIAL</span>' : ''}</td>
-        <td class="num">${money(x.price)}</td>
+        <td><a href="#" data-product="${x.id}">${esc(x.name)}</a> ${x.on_special ? '<span class="tag-special">SPECIAL</span>' : ''} ${dealBadges(x)}</td>
+        <td class="num">${money(shownPrice(x))}</td>
         <td class="num">${esc(x.unit_price_text || '')}</td>
-        <td class="num">${Math.round(x.score * 100)}%</td>
-        <td><button class="small" data-add="${x.id}">+ List</button></td></tr>`).join('')}</tbody>
-    </table></div>`;
+        <td class="num">${x.via === 'barcode' ? '<span title="Same barcode">barcode</span>' : x.via === 'confirmed' ? 'confirmed' : `${Math.round(x.score * 100)}%`}</td>
+        <td class="row-actions"><button class="small" data-add="${x.id}">+ List</button>
+          ${x.id !== p.id ? `<button class="small ghost" data-report="${x.id}" data-anchor="${p.id}" title="These aren’t the same product">Wrong match?</button>` : ''}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="hint">Products are matched by barcode where the stores publish one, otherwise by size and name. Spotted a wrong match? Use “Wrong match?” and an admin will fix it for everyone.</p>`;
   drawHistory(d);
 }
 
@@ -684,6 +853,68 @@ function drawHistory(d) {
   });
 }
 
+// ================================================================== price watches & wrong-match reports
+
+function watchControl(p, watch) {
+  if (!user()) return '<button class="small ghost" data-watch-login>🔔 Watch price</button>';
+  return watch
+    ? `<span class="watching">🔔 Watching${watch.target_price != null ? ` for ${money(watch.target_price)} or less` : ' for any drop'}
+       <button class="linkish" data-unwatch-product="${p.id}">stop</button></span>`
+    : `<button class="small ghost" data-watch="${p.id}" data-price="${shownPrice(p)}">🔔 Watch price</button>`;
+}
+
+document.addEventListener('click', async (e) => {
+  const t = e.target;
+  try {
+    if (t.closest('[data-watch-login]')) {
+      $('#product-dialog').close();
+      return goToAuth('signup', 'Create an account to get price alerts.');
+    }
+    const w = t.closest('[data-watch]');
+    if (w) {
+      const answer = prompt(`Email me when this costs this much or less (leave empty for any drop from ${money(Number(w.dataset.price))}):`, '');
+      if (answer === null) return;
+      await api(`/api/watches/${w.dataset.watch}`, { method: 'PUT', body: { targetPrice: answer.trim() ? Number(answer.replace(/[^\d.]/g, '')) : null } });
+      toast(user().emailVerified ? 'We’ll email you when it’s cheaper' : 'Watching — confirm your email to get the alert');
+      return openProduct(Number(w.dataset.watch));
+    }
+    const u = t.closest('[data-unwatch-product]');
+    if (u) {
+      await api(`/api/watches/${u.dataset.unwatchProduct}`, { method: 'DELETE' });
+      return openProduct(Number(u.dataset.unwatchProduct));
+    }
+    const r = t.closest('[data-report]');
+    if (r) {
+      if (!requireLogin('Create an account (or log in) to report a wrong match.')) return;
+      openReport(Number(r.dataset.anchor), Number(r.dataset.report), r.closest('tr, .pick')?.querySelector('a, .pname')?.textContent?.trim());
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+let reporting = null;
+function openReport(anchorId, productId, name) {
+  reporting = { anchorId, productId };
+  $('#report-pair').textContent = name ? `You’re saying “${name}” isn’t the same product.` : '';
+  $('#report-form').reset();
+  $('#report-dialog').showModal();
+}
+$('#report-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api('/api/match-reports', { method: 'POST', body: { ...reporting, kind: 'not_same', note: new FormData(e.target).get('note') } });
+    $('#report-dialog').close();
+    toast(r.status === 'accepted' ? 'Fixed for everyone' : 'Thanks — an admin will check it');
+    if (r.status === 'accepted') {
+      if ($('#product-dialog').open) openProduct(reporting.anchorId);
+      if (currentTab() === 'list') loadList();
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
 // ================================================================== lists
 
 async function ensureLists() {
@@ -722,21 +953,39 @@ async function loadList() {
     $('#list-login').addEventListener('click', () => goToAuth('signup', '', { type: 'goto', path: '/#list' }));
     return;
   }
-  state.lists = await api('/api/lists');
-  await ensureLists();
-  selectList(state.listId);
   try {
+    await flushTicks();
+    state.lists = await api('/api/lists');
+    await ensureLists();
+    selectList(state.listId);
     state.list = await api(`/api/lists/${state.listId}`);
+    try {
+      localStorage.setItem('lastList', JSON.stringify({ lists: state.lists, list: state.list }));
+    } catch {
+      /* storage blocked */
+    }
   } catch (e) {
     if (e.status === 404) {
       state.lists = [];
       state.listId = null;
       return loadList();
     }
-    throw e;
+    // Offline in the shop: show the last copy we had.
+    const cached = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('lastList') || 'null');
+      } catch {
+        return null;
+      }
+    })();
+    if (!cached || e.status) throw e;
+    Object.assign(state, { lists: cached.lists, list: cached.list, listId: cached.list.id });
+    $('#offline-banner').hidden = false;
   }
-  renderList();
-  refreshListCount();
+  if (!state.list.items.length) state.shopping = false;
+  if (state.shopping) renderShopping();
+  else renderList();
+  refreshListCount().catch(() => {});
 }
 
 function renderList() {
@@ -755,15 +1004,164 @@ function renderList() {
       </div>
       <div class="actions">
         <button class="small" id="share-list">Share${others.length ? ` · ${others.length + 1} people` : ''}</button>
+        <button class="small" id="snapshots-btn">Saved shops</button>
         <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear</button>
+        <button class="small" id="shop-mode" ${L.items.length ? '' : 'disabled'}>🛒 In the shop</button>
         <button class="primary" id="order-btn" ${L.items.length ? '' : 'disabled'}>Order cheapest</button>
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
     ${renderStorePanel(L)}
-    <div id="items">${L.items.length ? L.items.map(renderItem).join('') : '<div class="empty">This list is empty. Search on the <a href="#" data-goto="compare">Compare</a> tab and press “+ List”.</div>'}</div>
+    <div id="items">${L.items.length ? L.items.map(renderItem).join('') : '<div class="empty">This list is empty. Search on the <a href="#" data-goto="compare">Compare</a> tab and press “+ List”, or add a <button type="button" class="linkish" id="snapshots-empty">saved shop</button>.</div>'}</div>
     ${L.items.length ? renderSummary(L) : ''}`;
 }
+
+/** What `qty` of a product costs this shopper (multi-buys and their member prices). Mirrors src/promos.js. */
+function lineCost(p, qty) {
+  const unit = shownPrice(p);
+  let cost = unit * qty;
+  if (p.multi_qty >= 2 && p.multi_price > 0 && qty >= p.multi_qty) {
+    const deals = Math.floor(qty / p.multi_qty);
+    cost = Math.min(cost, deals * p.multi_price + (qty - deals * p.multi_qty) * unit);
+  }
+  return Math.round(cost * 100) / 100;
+}
+
+// ------------------------------------------------------------------ in the shop
+// A big-tick checklist grouped by shop and aisle category. Ticks sync to
+// everyone on the list; offline, they're kept on the phone and sent later.
+
+state.shopping = false;
+
+function renderShopping() {
+  const L = state.list;
+  const byStore = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
+  const itemById = Object.fromEntries(L.items.map((it) => [it.id, it]));
+  const pending = pendingTicks();
+  const isChecked = (it) => (it.id in pending ? pending[it.id] : !!it.checkedAt);
+  const ticked = L.items.filter(isChecked).length;
+  const section = (store) => {
+    const rows = L.plan.byStore[store].items.map((x) => ({ x, it: itemById[x.itemId] }));
+    const groups = new Map();
+    for (const r of rows) {
+      const cat = r.x.product.category || 'Other';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(r);
+    }
+    const sorted = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    return `<section class="shop-section"><h2>${dot(store)} ${esc(storeName(store))} <span class="hint">${money(L.plan.byStore[store].total)}</span></h2>
+      ${sorted.map(([cat, list]) => `<h3 class="aisle">${esc(cat)}</h3><ul class="checklist">${list.map(({ x, it }) => `
+        <li class="${isChecked(it) ? 'done' : ''}"><label>
+          <input type="checkbox" data-tick="${it.id}" ${isChecked(it) ? 'checked' : ''}>
+          <span class="ck-name"><strong>${x.quantity} ×</strong> ${esc(x.product.name)}
+            ${it.checkedBy && isChecked(it) && L.members.length > 1 ? `<span class="hint"> · ${esc(it.checkedBy)}</span>` : ''}</span>
+          <span class="ck-price">${money(x.lineTotal)}</span></label></li>`).join('')}</ul>`).join('')}
+    </section>`;
+  };
+  const missing = L.plan.unavailable.map((u) => itemById[u.id]).filter(Boolean);
+  $('#list-root').innerHTML = `
+    <div class="list-head">
+      <h2>🛒 ${esc(L.name)} <span class="hint">${ticked} of ${L.items.length} ticked</span></h2>
+      <div class="actions">
+        <button class="small" id="shop-mode">Back to list</button>
+        <button class="primary" id="finish-shop" ${ticked ? '' : 'disabled'}>Finish shop</button>
+      </div>
+    </div>
+    <p class="hint">Grouped by shop, then by section. ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
+    ${byStore.map(section).join('')}
+    ${missing.length ? `<section class="shop-section"><h2>Not available at your shops</h2><ul class="checklist">${missing.map((it) => `
+      <li class="${isChecked(it) ? 'done' : ''}"><label><input type="checkbox" data-tick="${it.id}" ${isChecked(it) ? 'checked' : ''}>
+        <span class="ck-name"><strong>${it.quantity} ×</strong> ${esc(it.anchor.name)}</span></label></li>`).join('')}</ul></section>` : ''}`;
+}
+
+function pendingTicks() {
+  try {
+    return JSON.parse(localStorage.getItem(`ticks:${state.listId}`) || '{}');
+  } catch {
+    return {};
+  }
+}
+function savePendingTicks(p) {
+  try {
+    localStorage.setItem(`ticks:${state.listId}`, JSON.stringify(p));
+  } catch {
+    /* storage full or blocked */
+  }
+}
+
+async function tick(itemId, checked) {
+  const pending = pendingTicks();
+  pending[itemId] = checked;
+  savePendingTicks(pending);
+  renderShopping();
+  await flushTicks();
+}
+
+/** Send ticks made offline (or just now) to the server. */
+async function flushTicks() {
+  const pending = pendingTicks();
+  for (const [itemId, checked] of Object.entries(pending)) {
+    try {
+      await api(`/api/items/${itemId}/checked`, { method: 'PUT', body: { checked } });
+      delete pending[itemId];
+    } catch (e) {
+      if (e.status === 404) delete pending[itemId]; // item removed by someone else
+      else break; // offline: try again later
+    }
+  }
+  savePendingTicks(pending);
+}
+
+window.addEventListener('online', async () => {
+  $('#offline-banner').hidden = true;
+  await flushTicks();
+  if (currentTab() === 'list' && user()) loadList();
+});
+window.addEventListener('offline', () => {
+  $('#offline-banner').hidden = false;
+});
+
+// ------------------------------------------------------------------ saved & past shops
+
+async function openSnapshots() {
+  const snaps = await api(`/api/lists/${state.listId}/snapshots`);
+  const saved = snaps.filter((x) => x.kind === 'saved');
+  const past = snaps.filter((x) => x.kind === 'history');
+  const row = (x) => `<li><span><strong>${esc(x.name)}</strong> <span class="hint">${plural(x.items, 'item')}${x.kind === 'history' ? '' : ` · saved ${fmtDate(x.createdAt)}`}</span></span>
+    <span><button class="small" data-snap-add="${x.id}">Add to list</button>
+    <button class="small ghost" data-snap-del="${x.id}" aria-label="Delete">×</button></span></li>`;
+  $('#snapshots-detail').innerHTML = `<h2>Saved shops</h2>
+    <p class="hint">Add a regular shop to this list in one go. Things already on the list are skipped.</p>
+    ${state.list.items.length ? '<p><button class="primary" id="snap-save">Save this list as a regular shop</button></p>' : ''}
+    <h3>Regular shops</h3><ul class="snap-list">${saved.map(row).join('') || '<li class="hint">None yet — fill a list and save it.</li>'}</ul>
+    <h3>Past shops</h3><ul class="snap-list">${past.map(row).join('') || '<li class="hint">Finished shops appear here (use “In the shop”, tick things off, then “Finish shop”).</li>'}</ul>`;
+  if (!$('#snapshots-dialog').open) $('#snapshots-dialog').showModal();
+}
+
+$('#snapshots-dialog').addEventListener('click', async (e) => {
+  const t = e.target;
+  try {
+    if (t.id === 'snap-save') {
+      const name = prompt('Name this regular shop', 'Weekly shop');
+      if (!name) return;
+      await api(`/api/lists/${state.listId}/snapshots`, { method: 'POST', body: { name } });
+      toast('Saved');
+      return openSnapshots();
+    }
+    if (t.dataset.snapAdd) {
+      const r = await api(`/api/lists/${state.listId}/snapshots/${t.dataset.snapAdd}/add`, { method: 'POST' });
+      toast(r.added ? `Added ${plural(r.added, 'item')}` : 'Everything was already on the list');
+      $('#snapshots-dialog').close();
+      return loadList();
+    }
+    if (t.dataset.snapDel) {
+      await api(`/api/lists/${state.listId}/snapshots/${t.dataset.snapDel}`, { method: 'DELETE' });
+      return openSnapshots();
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
 
 /** Store on/off toggles, each saying what including or excluding it is worth. */
 function renderStorePanel(L) {
@@ -808,7 +1206,7 @@ function renderItem(it) {
   return `<div class="item" data-item="${it.id}">
     <div class="item-top">
       <div class="name" data-product="${a.id}"><strong>${esc(a.name)}</strong>
-        <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}</div></div>
+        <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
       <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
       <select data-mode aria-label="Matching">
         <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
@@ -818,6 +1216,7 @@ function renderItem(it) {
       <button class="small ghost" data-remove>Remove</button>
     </div>
     <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
+    ${valueHint(it.betterValue)}
   </div>`;
 }
 
@@ -827,14 +1226,16 @@ function renderPick(it, store, enabled) {
   const p = ps.product;
   const opts = [
     `<option value="auto" ${!ps.manual && !ps.excluded ? 'selected' : ''}>Auto: cheapest match</option>`,
-    ...ps.candidates.map((c) => `<option value="${c.id}" ${ps.manual && p?.id === c.id ? 'selected' : ''}>${esc(c.name)} — ${money(c.price)}</option>`),
-    ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}" selected>${esc(p.name)} — ${money(p.price)}</option>`] : []),
+    ...ps.candidates.map((c) => `<option value="${c.id}" ${ps.manual && p?.id === c.id ? 'selected' : ''}>${esc(c.name)} — ${money(shownPrice(c))}</option>`),
+    ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}" selected>${esc(p.name)} — ${money(shownPrice(p))}</option>`] : []),
     `<option value="exclude" ${ps.excluded ? 'selected' : ''}>Don't buy here</option>`,
   ];
   return `<div class="pick ${win ? 'win' : ''} ${ps.excluded || !enabled ? 'excluded' : ''}">
     <div class="ph"><span class="store">${dot(store)}${esc(storeName(store))}</span>
-      <span class="price">${p && !ps.excluded ? money(p.price * it.quantity) : '—'}</span></div>
+      <span class="price">${p && !ps.excluded ? money(lineCost(p, it.quantity)) : '—'}</span></div>
     <span class="pname" title="${esc(p?.name || '')}">${!enabled ? 'Shop excluded' : ps.excluded ? 'Excluded' : p ? `${esc(p.name)}${win ? ' · <strong class="saving">cheapest</strong>' : ''}` : 'No match found'}</span>
+    ${p && !ps.excluded ? dealBadges(p) : ''}
+    ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">Wrong match?</button>` : ''}
     <select data-pick="${store}" aria-label="${esc(storeName(store))} product">${opts.join('')}</select>
   </div>`;
 }
@@ -851,7 +1252,11 @@ function renderSummary(L) {
   return `<h2 class="section">Total</h2>
     <div class="totals">
       <div class="tile hero"><div class="label">Cheapest split</div><div class="value">${money(L.plan.total)}</div>
-        <div class="note">${plural(L.items.length, 'item')}${L.plan.unavailable.length ? ` · <span class="warn">${L.plan.unavailable.length} unavailable</span>` : ''}</div></div>
+        <div class="note">${plural(L.items.length, 'item')}${L.plan.unavailable.length ? ` · <span class="warn">${L.plan.unavailable.length} unavailable</span>` : ''}
+          ${(() => {
+            const deals = Object.values(L.plan.byStore).flatMap((b) => b.items).reduce((n, i) => n + (i.dealSaving || 0), 0);
+            return deals > 0.004 ? `<br>includes <span class="saving">${money(deals)}</span> from multi-buys${L.memberships.length ? ' and member prices' : ''}` : '';
+          })()}</div></div>
       ${stores.map((s) => `<div class="tile"><div class="label">${dot(s)} ${esc(storeName(s))}</div>
         <div class="value">${money(L.plan.byStore[s].total)}</div><div class="note">${plural(L.plan.byStore[s].items.length, 'item')}</div></div>`).join('')}
     </div>
@@ -862,6 +1267,7 @@ function renderSummary(L) {
 // List events (delegated, since the list re-renders)
 $('#list-root').addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.dataset.tick) return tick(Number(t.dataset.tick), t.checked);
   try {
     if (t.id === 'list-select') {
       selectList(Number(t.value));
@@ -947,6 +1353,21 @@ $('#list-root').addEventListener('click', async (e) => {
         return openShare();
       case 'order-btn':
         return openOrder();
+      case 'shop-mode':
+        state.shopping = !state.shopping;
+        window.scrollTo(0, 0);
+        return state.shopping ? renderShopping() : renderList();
+      case 'finish-shop': {
+        await flushTicks();
+        if (!confirm('Finished? Ticked items come off the list and are saved under “Past shops” so you can repeat them.')) return;
+        const r = await api(`/api/lists/${state.listId}/finish`, { method: 'POST' });
+        toast(`${r.name} saved — ${plural(r.items, 'item')} done`);
+        state.shopping = false;
+        return loadList();
+      }
+      case 'snapshots-btn':
+      case 'snapshots-empty':
+        return openSnapshots();
       default:
     }
   } catch (err) {
@@ -958,10 +1379,15 @@ $('#list-root').addEventListener('click', async (e) => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && currentTab() === 'list' && user()) loadList();
 });
+// Every 30s while viewing a list; every 5s in the shop so ticks from others show up quickly.
+let lastPoll = 0;
 setInterval(() => {
-  const busy = document.activeElement?.closest?.('#list-root') || $('dialog[open]');
-  if (!document.hidden && currentTab() === 'list' && user() && !busy) loadList();
-}, 30000);
+  const busy = (!state.shopping && document.activeElement?.closest?.('#list-root')) || $('dialog[open]');
+  const every = state.shopping ? 5000 : 30000;
+  if (Date.now() - lastPoll < every || document.hidden || currentTab() !== 'list' || !user() || busy || !navigator.onLine) return;
+  lastPoll = Date.now();
+  loadList().catch(() => {});
+}, 1000);
 
 // ================================================================== sharing
 
@@ -1102,8 +1528,9 @@ async function loadAdmin() {
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
       return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
         <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}</div>
-        <p><button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button></p></div>`;
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
+        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
+          : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>
     <h2 class="section">IGAs with prices online</h2>
     <p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
@@ -1120,18 +1547,97 @@ async function loadAdmin() {
         <td>${o.iga.queue.current === t.store_id ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
         <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
     </tbody></table></div>
-    <h2 class="section">Users <span class="hint">${o.users} accounts · ${o.lists} lists</span></h2>
+    <h2 class="section">Wrong matches ${o.openMatchReports ? `<span class="pill">${o.openMatchReports}</span>` : ''}</h2>
+    <div id="admin-matches"><p class="hint">Loading…</p></div>
+
+    <h2 class="section">Barcodes</h2>
+    <p>${(o.barcodes.with_barcode || 0).toLocaleString()} of ${(o.barcodes.total || 0).toLocaleString()} Coles products have a barcode
+      (${(o.barcodes.checked || 0).toLocaleString()} pages checked).
+      ${o.barcodes.status.running ? `<span class="state pending">Fetching… ${o.barcodes.status.done} of ${o.barcodes.status.total}</span>`
+        : '<button class="small" id="barcodes-now">Fetch more now</button>'}</p>
+    <p class="hint">Coles only shows barcodes on product pages, so they’re filled in a batch at a time each day (products on lists first). Woolworths barcodes come with every refresh. Same barcode = same product.</p>
+
+    <h2 class="section">Home collector</h2>
+    <p class="hint">${o.collectorEnabled
+      ? 'This server accepts prices from a home collector (COLLECTOR_TOKEN is set). Stores marked “Collected from home” above come from it.'
+      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, run the home collector — see DEPLOY.md.'}</p>
+
+    <h2 class="section">Backups</h2>
+    <div id="admin-backups"><p class="hint">Loading…</p></div>
+
+    <h2 class="section">Emails</h2>
+    <div id="admin-emails"><p class="hint">Loading…</p></div>
+
+    <h2 class="section">Users <span class="hint">${plural(o.users, 'account')} · ${plural(o.lists, 'list')}</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Joined</th><th class="num">Lists</th><th>Admin</th></tr></thead><tbody>
       ${users.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${fmtDate(u.created_at)}</td><td class="num">${u.lists}</td>
         <td><input type="checkbox" data-admin-user="${u.id}" ${u.is_admin ? 'checked' : ''} ${u.id === user().id ? 'disabled' : ''} aria-label="Admin"></td></tr>`).join('')}
     </tbody></table></div>`;
   clearTimeout(adminTimer);
-  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running;
+  loadAdminExtras();
+  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running || o.barcodes.status.running;
   if (busy && currentTab() === 'admin') adminTimer = setTimeout(loadAdmin, 3000);
+}
+
+async function loadAdminExtras() {
+  const [m, b, em] = await Promise.all([api('/api/admin/match-reports'), api('/api/admin/backups'), api('/api/admin/emails')]);
+  const prod = (p) => (p ? `${dot(p.store)} <a href="#" data-product="${p.id}">${esc(p.name)}</a> <span class="hint">${esc(p.size_text || '')} · ${money(p.price)}</span>` : '<span class="hint">(gone)</span>');
+  $('#admin-matches').innerHTML = (m.open.length
+    ? `<ul class="report-list">${m.open.map((r) => `<li>
+        <div>${prod(r.a)}<br><span class="hint">${r.kind === 'same' ? 'is the same as' : 'is NOT the same as'}</span><br>${prod(r.b)}</div>
+        <div class="hint">${plural(r.count, 'report')}${r.reporter ? ` · first by ${esc(r.reporter)}` : ''}${r.notes.length ? ` · “${r.notes.map(esc).join('”, “')}”` : ''}</div>
+        <div><button class="small primary" data-resolve="${r.id}" data-decision="accept">Fix it</button>
+          <button class="small ghost" data-resolve="${r.id}" data-decision="dismiss">Dismiss</button></div></li>`).join('')}</ul>`
+    : '<p class="hint">No reports waiting. Shoppers can press “Wrong match?” on any comparison.</p>')
+    + (m.rules.length ? `<details><summary>${plural(m.rules.length, 'confirmed fix')}</summary><ul class="report-list">${m.rules.map((r) => `<li>
+        <div>${dot(r.a_store)} ${esc(r.a_name)} <span class="hint">${r.kind === 'never' ? '≠' : '='}</span> ${dot(r.b_store)} ${esc(r.b_name)}</div>
+        <div><button class="small ghost" data-unrule="${r.a_id}/${r.b_id}">Undo</button></div></li>`).join('')}</ul></details>` : '');
+  $('#admin-backups').innerHTML = `<p>${b.litestream
+    ? '✓ Continuous off-site backup with Litestream is on.'
+    : '<span class="warn">No off-site backup.</span> Daily snapshots below are on the same disk as the database — set up Litestream (see DEPLOY.md) to survive losing the disk.'}</p>
+    <p><button class="small" id="backup-now">Back up now</button> <span class="hint">Snapshots are taken daily and kept for ${b.keepDays} days.</span></p>
+    ${b.snapshots.length ? `<table class="data"><thead><tr><th>Snapshot</th><th class="num">Size</th><th></th></tr></thead><tbody>
+      ${b.snapshots.map((x) => `<tr><td>${fmtDate(x.createdAt)} <span class="hint">${esc(x.name)}</span></td><td class="num">${(x.bytes / 1e6).toFixed(1)} MB</td>
+        <td><a href="/api/admin/backups/${encodeURIComponent(x.name)}" download>Download</a></td></tr>`).join('')}</tbody></table>` : ''}`;
+  $('#admin-emails').innerHTML = `<p class="hint">${em.mailConfigured
+    ? 'Sending through your mail server (SMTP_URL). Recent emails:'
+    : '<span class="warn">No mail server set up (SMTP_URL)</span>, so emails are not sent — they’re kept here instead. You can pass a reset link on to someone by hand.'}</p>
+    ${em.emails.length ? `<div class="table-scroll"><table class="data"><thead><tr><th>When</th><th>To</th><th>Subject</th><th></th></tr></thead><tbody>
+      ${em.emails.map((x) => `<tr><td>${fmtDate(x.sent_at)}</td><td>${esc(x.to_email)}</td><td>${esc(x.subject)}${x.error ? ` <span class="warn">failed: ${esc(x.error)}</span>` : ''}</td>
+        <td>${x.body ? `<details><summary>Show</summary><pre class="order-log">${esc(x.body)}</pre></details>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">None yet.</p>'}
+    <p><button class="small" id="send-alerts">Send price alerts now</button> <span class="hint">They also go out daily after prices refresh, and the specials email every Wednesday.</span></p>`;
 }
 
 $('#admin-root').addEventListener('click', async (e) => {
   const t = e.target;
+  try {
+    if (t.dataset.resolve) {
+      await api(`/api/admin/match-reports/${t.dataset.resolve}`, { method: 'POST', body: { decision: t.dataset.decision } });
+      toast(t.dataset.decision === 'accept' ? 'Fixed for everyone' : 'Dismissed');
+      return loadAdmin();
+    }
+    if (t.dataset.unrule) {
+      await api(`/api/admin/match-rules/${t.dataset.unrule}`, { method: 'DELETE' });
+      return loadAdminExtras();
+    }
+    if (t.id === 'backup-now') {
+      const r = await api('/api/admin/backups', { method: 'POST' });
+      toast(`Backed up (${(r.bytes / 1e6).toFixed(1)} MB)`);
+      return loadAdminExtras();
+    }
+    if (t.id === 'barcodes-now') {
+      await api('/api/admin/barcodes', { method: 'POST' });
+      toast('Fetching Coles barcodes…');
+      return setTimeout(loadAdmin, 800);
+    }
+    if (t.id === 'send-alerts') {
+      const r = await api('/api/admin/send-alerts', { method: 'POST', body: {} });
+      toast(`${plural(r.priceAlerts.emails, 'price alert email')} sent`);
+      return loadAdminExtras();
+    }
+  } catch (err) {
+    return toast(err.message);
+  }
   if (t.id === 'iga-check') {
     await api('/api/admin/iga/check', { method: 'POST', body: {} });
     toast('Checking IGA stores…');
@@ -1162,7 +1668,21 @@ $('#admin-root').addEventListener('change', async (e) => {
 
 // ================================================================== start
 
-await loadConfig();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if (!navigator.onLine) $('#offline-banner').hidden = false;
+
+try {
+  await loadConfig();
+} catch {
+  // Offline on first load: use what we remember so the shopping list still opens.
+  const cached = JSON.parse(localStorage.getItem('lastConfig') || 'null');
+  if (!cached) throw new Error('offline');
+  state.config = cached;
+  state.allStores = cached.stores.map((x) => x.id);
+  state.names = Object.fromEntries(cached.stores.map((x) => [x.id, x.name]));
+  state.stores = state.allStores;
+  renderAccount();
+}
 api('/api/stats').then((s) => {
   $('#demo-banner').hidden = !s.demo;
   const latest = s.stores.map((x) => x.updatedAt).filter(Boolean).sort().pop();

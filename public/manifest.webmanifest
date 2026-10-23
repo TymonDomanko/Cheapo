@@ -1,0 +1,13 @@
+{
+  "name": "Grocery Price Compare",
+  "short_name": "Groceries",
+  "description": "Compare Australian supermarket prices and shop from a shared list.",
+  "start_url": "/#list",
+  "display": "standalone",
+  "background_color": "#f6f6f4",
+  "theme_color": "#2a78d6",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

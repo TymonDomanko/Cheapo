@@ -138,6 +138,10 @@ export function createApp() {
   app.get('/api/products/:id', h((req) => {
     const out = productDetail(id(req.params.id), req.user?.preferredStores, igaFor(req));
     if (!out) throw bad('Not found', 404);
+    if (req.user) {
+      out.watch = getDb().prepare('SELECT target_price, baseline_price FROM watches WHERE user_id = ? AND product_id = ?')
+        .get(req.user.id, out.product.id) || null;
+    }
     return out;
   }));
 
