@@ -1,0 +1,15 @@
+# Continuous backup of the SQLite database to S3-compatible storage
+# (AWS S3, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, MinIO…).
+# Only used when LITESTREAM_BUCKET is set — see DEPLOY.md.
+dbs:
+  - path: ${DB_PATH}
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: ${LITESTREAM_PATH}
+        endpoint: ${LITESTREAM_ENDPOINT}
+        region: ${LITESTREAM_REGION}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        sync-interval: 10s
+        retention: 168h

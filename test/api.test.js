@@ -9,6 +9,8 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-'));
 process.env.DB_PATH = path.join(dir, 'test.db');
 process.env.ADMIN_EMAILS = 'admin@example.com';
 process.env.DISABLE_BACKGROUND_SCRAPES = 'true';
+process.env.MAIL_CAPTURE = 'true';
+process.env.AUTH_RATE_LIMIT = '1000';
 
 const { upsertProducts } = await import('../src/db.js');
 const { createApp } = await import('../src/app.js');
@@ -265,4 +267,75 @@ test('daily IGA check: hides stores that stop publishing prices, re-lists ones t
   assert.deepEqual(await names('perth'), []);
   assert.equal(iga.lastCheck().with_prices, 2);
   assert.equal(iga.checkIsDue(), false);
+});
+
+test('forgot password: email with a one-time link; verify email', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'forgetful@example.com', name: 'Fay', password: 'password123' });
+  const verifyMail = capturedMail.find((m) => m.to === 'forgetful@example.com' && m.kind === 'verify');
+  assert.ok(verifyMail, 'verification email sent at sign-up');
+  const vtoken = verifyMail.text.match(/token=([\w-]+)/)[1];
+  assert.equal((await client()('POST', '/api/auth/verify', { token: vtoken })).status, 200);
+  assert.equal((await api('GET', '/api/config')).body.user.emailVerified, true);
+
+  const before = capturedMail.length;
+  // Unknown emails get the same answer and no email.
+  assert.equal((await client()('POST', '/api/auth/forgot', { email: 'nobody@example.com' })).status, 200);
+  assert.equal(capturedMail.length, before);
+  await client()('POST', '/api/auth/forgot', { email: 'forgetful@example.com' });
+  const mail = capturedMail.at(-1);
+  assert.equal(mail.kind, 'reset');
+  const token = mail.text.match(/token=([\w-]+)/)[1];
+
+  const other = client();
+  const r = await other('POST', '/api/auth/reset', { token, password: 'brand new pass' });
+  assert.equal(r.status, 200, 'reset logs you in');
+  assert.equal((await api('GET', '/api/lists')).status, 401, 'old sessions are signed out');
+  assert.equal((await other('POST', '/api/auth/reset', { token, password: 'again again' })).status, 400, 'links work once');
+  assert.equal((await client()('POST', '/api/auth/login', { email: 'forgetful@example.com', password: 'brand new pass' })).status, 200);
+});
+
+test('export my data', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'exporter@example.com', password: 'password123' });
+  const r = await api('GET', '/api/me/export');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.account.email, 'exporter@example.com');
+  assert.ok(Array.isArray(r.body.lists));
+});
+
+test('admin backups: snapshot, list, download; non-admins refused', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const made = await admin('POST', '/api/admin/backups');
+  assert.equal(made.status, 200);
+  assert.ok(made.body.bytes > 0);
+  const list = (await admin('GET', '/api/admin/backups')).body.snapshots;
+  assert.ok(list.some((b) => b.name === made.body.name));
+  const user = client();
+  await user('POST', '/api/auth/login', { email: 'pat@example.com', password: 'password123' });
+  assert.equal((await user('GET', '/api/admin/backups')).status, 403);
+  assert.equal((await admin('GET', '/api/admin/backups/..%2F..%2Fetc%2Fpasswd')).status, 404);
+});
+
+test('home collector: token-protected ingest with complete runs', async () => {
+  process.env.COLLECTOR_TOKEN = 'collector-secret-123';
+  const post = (path, body, token = 'collector-secret-123') => fetch(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  assert.equal((await post('/api/ingest/runs', { store: 'aldi' }, 'wrong-token-xxxxxxx')).status, 401);
+  const run = (await post('/api/ingest/runs', { store: 'aldi' })).body;
+  assert.ok(run.runId);
+  const r = await post(`/api/ingest/runs/${run.runId}/items`, { items: [
+    { store_product_id: 'a1', name: 'Farmdale Full Cream Milk 2L', brand: 'Farmdale', size_text: '2L', price: 2.89 },
+  ] });
+  assert.equal(r.status, 200);
+  const done = await post(`/api/ingest/runs/${run.runId}/finish`, { complete: true });
+  assert.equal(done.body.status, 'ok');
+  assert.equal(done.body.priceChanges, 1, 'ALDI milk 2.99 → 2.89 recorded');
+  assert.equal((await post(`/api/ingest/runs/${run.runId}/items`, { items: [] })).status, 409, 'finished runs take no more data');
 });

@@ -7,6 +7,7 @@ export { STORES } from './stores.js';
 
 const DATA_DIR = process.env.DATA_DIR || path.resolve('data');
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'supermarket.db');
+export const DB_FILE = DB_PATH;
 
 let db;
 
@@ -166,6 +167,7 @@ function migrate(d) {
   if (!runCols.includes('location')) d.exec('ALTER TABLE scrape_runs ADD COLUMN location TEXT');
 
   migratePerStorePrices(d);
+  migrateAccountsAndShopping(d);
 
   d.exec(`
     -- IGA's store directory (refreshed weekly from igashop.com.au).
@@ -297,6 +299,100 @@ function migratePerStorePrices(d) {
         unit_price_text = NULL, on_special = 0 WHERE store = 'iga' AND location_priced = 0`);
     }
   })();
+}
+
+/** Email, alerts, barcodes, promotions, match fixes, in-store ticking, saved shops. */
+function migrateAccountsAndShopping(d) {
+  const cols = (t) => d.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+  const add = (table, col, def) => {
+    if (!cols(table).includes(col)) d.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  };
+  add('users', 'email_verified_at', 'TEXT');
+  add('users', 'alerts_weekly', 'INTEGER NOT NULL DEFAULT 1');
+  add('users', 'alerts_price', 'INTEGER NOT NULL DEFAULT 1');
+  add('users', 'memberships', "TEXT NOT NULL DEFAULT '[]'"); // loyalty schemes for member prices
+  add('products', 'barcode', 'TEXT');
+  add('products', 'barcode_checked_at', 'TEXT'); // Coles: barcode comes from the product page
+  for (const t of ['products', 'store_prices']) {
+    add(t, 'promo_text', 'TEXT'); // e.g. "5 for $9.00"
+    add(t, 'multi_qty', 'INTEGER'); // multi-buy: buy multi_qty for multi_price in total
+    add(t, 'multi_price', 'REAL');
+    add(t, 'member_price', 'REAL'); // price for loyalty members (Everyday Rewards)
+  }
+  add('list_items', 'checked_at', 'TEXT');
+  add('list_items', 'checked_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  add('scrape_runs', 'source', "TEXT NOT NULL DEFAULT 'server'");
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode) WHERE barcode IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+    -- One-time links: password reset and email verification. Only hashes are stored.
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose TEXT NOT NULL,             -- reset | verify
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS email_log (
+      id INTEGER PRIMARY KEY,
+      to_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      error TEXT,
+      body TEXT                          -- kept only when no mail server is configured (dev outbox)
+    );
+
+    -- Admin-confirmed matching fixes. a_id < b_id. never = not the same item; always = same item.
+    CREATE TABLE IF NOT EXISTS match_rules (
+      a_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      b_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (a_id, b_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS match_reports (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      anchor_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,                -- not_same | same
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'open', -- open | accepted | dismissed
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    -- "Tell me when this is cheaper" (target_price NULL = any drop or special).
+    CREATE TABLE IF NOT EXISTS watches (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      target_price REAL,
+      created_at TEXT NOT NULL,
+      baseline_price REAL,               -- price when the watch was set (for "any drop")
+      last_notified_price REAL,
+      last_notified_at TEXT,
+      PRIMARY KEY (user_id, product_id)
+    );
+
+    -- Saved regular shops and finished-shop history, to add again later.
+    CREATE TABLE IF NOT EXISTS list_snapshots (
+      id INTEGER PRIMARY KEY,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,                -- saved | history
+      items_json TEXT NOT NULL,          -- [{productId, quantity, matchMode}]
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
 }
 
 const nowIso = () => new Date().toISOString();

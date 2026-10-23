@@ -9,10 +9,14 @@ import { compareSearch, productDetail } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
   sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
+  requestPasswordReset, resetPassword, sendVerification, verifyEmail, MEMBERSHIPS,
 } from './auth.js';
 import * as lists from './lists.js';
 import * as iga from './iga.js';
-import { scrapeAll, scrapeStatus } from './scrapers/index.js';
+import { siteUrl, mailConfigured, siteName } from './mailer.js';
+import * as backup from './backup.js';
+import { scrapeAll, scrapeStatus, serverStores, startRun, getRun, recordBatch, finishRun } from './scrapers/index.js';
+import crypto from 'node:crypto';
 import { startOrder, orderStatus } from './order/index.js';
 
 const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
@@ -63,12 +67,15 @@ export function createApp() {
     });
     next();
   });
-  app.use(express.json({ limit: '50kb' }));
+  // Home collectors send product batches, which can be large; everything else is small.
+  const smallJson = express.json({ limit: '50kb' });
+  const bigJson = express.json({ limit: '5mb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
   app.use(express.static(path.resolve('public')));
   app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist')));
   // Pages handled by the single-page app.
   const spa = (req, res) => res.sendFile(path.resolve('public/index.html'));
-  app.get(['/login', '/signup', '/settings', '/join/:token'], spa);
+  app.get(['/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
   // For load balancers / platform health checks.
   app.get('/healthz', (req, res) => {
     getDb().prepare('SELECT 1').get();
@@ -88,6 +95,13 @@ export function createApp() {
     trolleyFill: TROLLEY_FILL && !!req.user?.isAdmin,
     igaStore: iga.getStore(igaFor(req)) || { id: igaFor(req), name: 'IGA', pricesReady: false },
     igaOnlineStores: iga.onlineStoreCount(),
+    memberships: MEMBERSHIPS,
+    site: {
+      name: siteName(),
+      contact: process.env.CONTACT_EMAIL || null,
+      operator: process.env.SITE_OPERATOR || null,
+      emailEnabled: mailConfigured(),
+    },
     };
   }));
 
@@ -165,7 +179,8 @@ export function createApp() {
 
   // ------------------------------------------------------------ accounts
 
-  const authLimit = rateLimit({ windowMs: 15 * 60000, max: 20 });
+  // Sign-up / log-in / reset attempts per IP per 15 minutes.
+  const authLimit = rateLimit({ windowMs: 15 * 60000, max: Number(process.env.AUTH_RATE_LIMIT) || 20 });
 
   app.post('/api/auth/signup', authLimit, h(async (req, res) => {
     if (!ALLOW_SIGNUPS) throw bad('Sign-ups are closed', 403);
@@ -177,6 +192,7 @@ export function createApp() {
     if (igaStore) user = updateProfile(user.id, { igaStore });
     lists.createList(user.id, 'My list', user.preferredStores, user.igaStoreId);
     startSession(res, user.id);
+    sendVerification(user.id, siteUrl(req)).catch((e) => console.error(`verification email: ${e.message}`));
     return { user };
   }));
 
@@ -190,13 +206,49 @@ export function createApp() {
     endSession(req, res);
   }));
 
+  // Forgotten password: always answers the same, whether or not the account exists.
+  app.post('/api/auth/forgot', authLimit, h(async (req) => {
+    await requestPasswordReset(req.body?.email, siteUrl(req)).catch((e) => console.error(`reset email: ${e.message}`));
+    return { ok: true };
+  }));
+
+  app.post('/api/auth/reset', authLimit, h(async (req, res) => {
+    const user = await resetPassword(req.body?.token, req.body?.password);
+    startSession(res, user.id);
+    return { user };
+  }));
+
+  app.post('/api/auth/verify', authLimit, h((req) => {
+    verifyEmail(req.body?.token);
+  }));
+
   // ------------------------------------------------------------ your account
 
   app.patch('/api/me', requireUser, h((req) => {
-    const { name, preferredStores, applyToLists } = req.body || {};
-    const user = updateProfile(req.user.id, { name, preferredStores });
+    const { name, preferredStores, applyToLists, alertsWeekly, alertsPrice, memberships } = req.body || {};
+    const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships });
     if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
     return { user };
+  }));
+
+  app.post('/api/me/verify-email', requireUser, authLimit, h(async (req) => {
+    await sendVerification(req.user.id, siteUrl(req));
+  }));
+
+  // Everything we hold about you, as a JSON file (see the privacy page).
+  app.get('/api/me/export', requireUser, h((req, res) => {
+    const d = getDb();
+    const u = d.prepare(`SELECT id, email, name, created_at, email_verified_at, preferred_stores, iga_store, alerts_weekly,
+      alerts_price, memberships FROM users WHERE id = ?`).get(req.user.id);
+    const myLists = lists.listsForUser(req.user.id).map((l) => ({
+      ...l,
+      items: d.prepare(`SELECT p.store, p.name, p.size_text, i.quantity, i.match_mode, i.added_at FROM list_items i
+        JOIN products p ON p.id = i.product_id WHERE i.list_id = ?`).all(l.id),
+    }));
+    const watches = d.prepare(`SELECT p.store, p.name, p.size_text, w.target_price, w.created_at FROM watches w
+      JOIN products p ON p.id = w.product_id WHERE w.user_id = ?`).all(req.user.id);
+    res.set('Content-Disposition', 'attachment; filename="my-grocery-data.json"');
+    return { exportedAt: new Date().toISOString(), account: u, lists: myLists, watches };
   }));
 
   app.post('/api/me/password', requireUser, authLimit, h(async (req) => {
@@ -252,6 +304,38 @@ export function createApp() {
     lists.removeMember(id(req.params.id), req.user.id, id(req.params.userId));
   }));
 
+  // ------------------------------------------------------------ home collector
+  // Stores that block cloud servers (Woolworths, ALDI) can be crawled from a
+  // home connection by `npm run collect`, which sends the products here.
+
+  function requireCollector(req, res, next) {
+    const want = process.env.COLLECTOR_TOKEN;
+    const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const ok = want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
+    if (!ok) return res.status(401).json({ error: want ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
+    next();
+  }
+  const collectorRun = (req) => {
+    const run = getRun(id(req.params.runId));
+    if (!run || run.source !== 'collector') throw bad('Unknown run', 404);
+    return run;
+  };
+
+  app.post('/api/ingest/runs', requireCollector, h((req) => {
+    const { store, location } = req.body || {};
+    if (!STORES.includes(store)) throw bad('Unknown store');
+    return startRun(store, { location: location ? String(location) : null, source: 'collector' });
+  }));
+  app.post('/api/ingest/runs/:runId/items', requireCollector, h((req) => {
+    const items = req.body?.items;
+    if (!Array.isArray(items) || items.length > 2000) throw bad('Send { items: [...] } (up to 2000 per batch)');
+    return recordBatch(collectorRun(req), items);
+  }));
+  app.post('/api/ingest/runs/:runId/finish', requireCollector, h((req) => {
+    const run = finishRun(collectorRun(req), { complete: !!req.body?.complete, error: req.body?.error || null });
+    return { status: run.status, products: run.products, priceChanges: run.price_changes };
+  }));
+
   // ------------------------------------------------------------ admin
 
   app.get('/api/admin/overview', requireAdmin, h(() => {
@@ -261,6 +345,7 @@ export function createApp() {
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
         status: scrapeStatus[s],
+        fedByCollector: !serverStores().includes(s),
         runs: d.prepare('SELECT * FROM scrape_runs WHERE store = ? ORDER BY id DESC LIMIT 5').all(s),
       })),
       iga: {
@@ -275,11 +360,12 @@ export function createApp() {
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
       scrapeCron: process.env.SCRAPE_CRON ?? '15 4 * * *',
+      collectorEnabled: !!process.env.COLLECTOR_TOKEN,
     };
   }));
 
   app.post('/api/admin/scrape', requireAdmin, h((req) => {
-    const wanted = Array.isArray(req.body?.stores) ? req.body.stores.filter((s) => STORES.includes(s)) : STORES;
+    const wanted = Array.isArray(req.body?.stores) ? req.body.stores.filter((s) => serverStores().includes(s)) : serverStores();
     const stores = wanted.filter((s) => !scrapeStatus[s].running);
     scrapeAll(stores).catch(() => {});
     return { started: stores };
@@ -290,6 +376,24 @@ export function createApp() {
     iga.checkOnlineStores().catch(() => {});
     return { started: true };
   }));
+
+  // Without a mail server, emails land here so an admin can pass on a reset link by hand.
+  app.get('/api/admin/emails', requireAdmin, h(() => ({
+    mailConfigured: mailConfigured(),
+    emails: getDb().prepare('SELECT id, to_email, subject, kind, sent_at, error, body FROM email_log ORDER BY id DESC LIMIT 50').all(),
+  })));
+
+  app.get('/api/admin/backups', requireAdmin, h(() => ({
+    snapshots: backup.listBackups(),
+    keepDays: Number(process.env.BACKUP_KEEP_DAYS) || 7,
+    litestream: backup.litestreamEnabled(),
+  })));
+  app.post('/api/admin/backups', requireAdmin, h(() => backup.snapshot()));
+  app.get('/api/admin/backups/:name', requireAdmin, (req, res) => {
+    const file = backup.backupPath(req.params.name);
+    if (!file) return res.status(404).json({ error: 'Not found' });
+    res.download(file);
+  });
 
   app.get('/api/admin/users', requireAdmin, h(() => getDb().prepare(`
     SELECT u.id, u.email, u.name, u.is_admin, u.created_at,

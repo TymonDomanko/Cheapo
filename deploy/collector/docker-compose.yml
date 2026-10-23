@@ -1,0 +1,11 @@
+# Home collector: run this on any always-on machine at home (PC, NAS,
+# Raspberry Pi). It crawls the stores that block cloud servers and sends the
+# prices to your public site every day.
+#   cp .env.example .env    # set COLLECTOR_SERVER and COLLECTOR_TOKEN (same token as the server)
+#   docker compose up -d
+services:
+  collector:
+    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    restart: unless-stopped
+    env_file: .env
+    command: ["node", "src/cli/collect.js"]

@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { getDb, nowIso } from './db.js';
 import { STORES } from './stores.js';
+import { sendMail, emailHtml, siteName } from './mailer.js';
 
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'sid';
@@ -38,7 +39,22 @@ function publicUser(u) {
     id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin,
     preferredStores: parsePreferred(u.preferred_stores),
     igaStoreId: u.iga_store || null,
+    emailVerified: !!u.email_verified_at,
+    alertsWeekly: !!u.alerts_weekly,
+    alertsPrice: !!u.alerts_price,
+    memberships: parseMemberships(u.memberships),
   };
+}
+
+// Loyalty schemes whose member-only prices we can show.
+export const MEMBERSHIPS = { woolworths: 'Everyday Rewards' };
+
+function parseMemberships(json) {
+  try {
+    return (JSON.parse(json || '[]') || []).filter((m) => m in MEMBERSHIPS);
+  } catch {
+    return [];
+  }
 }
 
 /** The user's chosen shops (all shops if they haven't chosen). */
@@ -53,8 +69,14 @@ function parsePreferred(json) {
 }
 
 /** @param igaStore  an IGA store id the caller has already validated */
-export function updateProfile(userId, { name, preferredStores, igaStore }) {
+export function updateProfile(userId, { name, preferredStores, igaStore, alertsWeekly, alertsPrice, memberships }) {
   const d = getDb();
+  if (alertsWeekly != null) d.prepare('UPDATE users SET alerts_weekly = ? WHERE id = ?').run(alertsWeekly ? 1 : 0, userId);
+  if (alertsPrice != null) d.prepare('UPDATE users SET alerts_price = ? WHERE id = ?').run(alertsPrice ? 1 : 0, userId);
+  if (memberships != null) {
+    const clean = [...new Set((Array.isArray(memberships) ? memberships : []).filter((m) => m in MEMBERSHIPS))];
+    d.prepare('UPDATE users SET memberships = ? WHERE id = ?').run(JSON.stringify(clean), userId);
+  }
   if (igaStore != null) d.prepare('UPDATE users SET iga_store = ? WHERE id = ?').run(String(igaStore), userId);
   if (name != null) {
     const n = String(name).trim();
@@ -212,4 +234,88 @@ export function rateLimit({ windowMs, max, key = (req) => req.ip }) {
 
 export function purgeExpiredSessions() {
   getDb().prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowIso());
+}
+
+// ---------------------------------------------------------------- one-time links (reset, verify)
+
+const LINK_TTL = { reset: 60, verify: 7 * 24 * 60 }; // minutes
+
+function createAuthToken(userId, purpose) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const d = getDb();
+  d.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(userId, purpose); // only the latest link works
+  d.prepare('INSERT INTO auth_tokens (token_hash, user_id, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
+    .run(tokenHash(token), userId, purpose, nowIso(), new Date(Date.now() + LINK_TTL[purpose] * 60000).toISOString());
+  return token;
+}
+
+function consumeAuthToken(token, purpose) {
+  const d = getDb();
+  const row = d.prepare('SELECT * FROM auth_tokens WHERE token_hash = ? AND purpose = ?').get(tokenHash(String(token || '')), purpose);
+  if (!row || row.used_at || row.expires_at <= nowIso()) {
+    throw httpError(400, purpose === 'reset' ? 'This reset link is invalid or has expired — ask for a new one.' : 'This link is invalid or has expired.');
+  }
+  d.prepare('UPDATE auth_tokens SET used_at = ? WHERE token_hash = ?').run(nowIso(), row.token_hash);
+  return row.user_id;
+}
+
+/**
+ * Email a reset link if the account exists. Always looks the same to the
+ * caller, so it can't be used to discover who has an account.
+ */
+export async function requestPasswordReset(email, baseUrl) {
+  const u = getDb().prepare('SELECT * FROM users WHERE email = ?').get(String(email || '').trim());
+  if (!u) return;
+  const url = `${baseUrl}/reset-password?token=${createAuthToken(u.id, 'reset')}`;
+  await sendMail({
+    to: u.email,
+    kind: 'reset',
+    subject: `Reset your ${siteName()} password`,
+    text: `Hi ${u.name},\n\nSomeone (hopefully you) asked to reset your password. Open this link within an hour to choose a new one:\n\n${url}\n\nIf you didn't ask, ignore this email — your password won't change.`,
+    html: emailHtml({
+      heading: 'Reset your password',
+      paragraphs: [`Hi ${u.name},`, 'Someone (hopefully you) asked to reset your password. The link works for one hour.'],
+      button: { url, label: 'Choose a new password' },
+      footer: 'If you didn’t ask for this, ignore this email — your password won’t change.',
+    }),
+  });
+}
+
+/** Set a new password from a reset link. Signs out everywhere; the link also proves the email address. */
+export async function resetPassword(token, newPassword) {
+  if (String(newPassword || '').length < MIN_PASSWORD) throw httpError(400, `Password must be at least ${MIN_PASSWORD} characters`);
+  const userId = consumeAuthToken(token, 'reset');
+  const d = getDb();
+  d.prepare('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?')
+    .run(await hashPassword(newPassword), nowIso(), userId);
+  d.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  return publicUser(d.prepare('SELECT * FROM users WHERE id = ?').get(userId));
+}
+
+export async function sendVerification(userId, baseUrl) {
+  const u = getDb().prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!u || u.email_verified_at) return;
+  const url = `${baseUrl}/verify-email?token=${createAuthToken(u.id, 'verify')}`;
+  await sendMail({
+    to: u.email,
+    kind: 'verify',
+    subject: `Confirm your email for ${siteName()}`,
+    text: `Hi ${u.name},\n\nConfirm your email address so we can send you price alerts and password resets:\n\n${url}\n\nIf you didn't sign up, ignore this email.`,
+    html: emailHtml({
+      heading: 'Confirm your email',
+      paragraphs: [`Hi ${u.name},`, 'Confirm your email address so we can send you price alerts and, if you ever need one, a password reset.'],
+      button: { url, label: 'Confirm my email' },
+      footer: 'If you didn’t sign up, ignore this email.',
+    }),
+  });
+}
+
+export function verifyEmail(token) {
+  const userId = consumeAuthToken(token, 'verify');
+  getDb().prepare('UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?').run(nowIso(), userId);
+  return userId;
+}
+
+export function getUser(userId) {
+  return publicUser(getDb().prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }

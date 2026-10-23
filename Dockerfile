@@ -9,6 +9,14 @@ ENV NODE_ENV=production \
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
+# Litestream: optional continuous backup to S3-compatible storage (enabled by LITESTREAM_BUCKET).
+ARG LITESTREAM_VERSION=0.3.13
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz" \
+       | tar -xz -C /usr/local/bin litestream \
+    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 # Playwright (trolley filling / browser scraping) is optional and not useful on a server.
 RUN npm ci --omit=dev --omit=optional && npm cache clean --force
@@ -16,6 +24,7 @@ RUN npm ci --omit=dev --omit=optional && npm cache clean --force
 COPY src ./src
 COPY public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY litestream.yml /etc/litestream.yml
 
 VOLUME ["/data"]
 EXPOSE 3000

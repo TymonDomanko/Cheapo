@@ -13,6 +13,7 @@
     "scrape": "node src/cli/scrape.js",
     "seed:demo": "node src/cli/seed-demo.js",
     "admin": "node src/cli/admin.js",
+    "collect": "node src/cli/collect.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "chart.js": "^4.4.4",
     "express": "^4.21.0",
     "node-cron": "^4.6.0",
+    "nodemailer": "^10.2.1",
     "undici": "^6.19.8"
   },
   "optionalDependencies": {
