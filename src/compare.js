@@ -2,9 +2,10 @@
 
 import { getDb } from './db.js';
 import { STORES } from './stores.js';
-import { nameTokens, rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
+import { rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
 import { unitPriceFor } from './promos.js';
 import { parseSizeFrom, SIZE_TOKEN_RE } from './units.js';
+import { sameSizeCandidates, sameWordCandidates } from './match-index.js';
 import { defaultStoreId } from './iga.js';
 
 // Chains where each store sets its own prices (IGA) keep one shared catalogue
@@ -96,33 +97,26 @@ function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, special
  */
 export function findEquivalents(anchor, mode = 'similar', igaStore = null) {
   if (mode === 'this') return [{ product: anchor, score: 1 }];
-  const toks = [...nameTokens(anchor.name, anchor.brand)];
   const d = getDb();
-  let candidates = [];
-  const sizes = [[anchor.size_unit, anchor.size_qty], [anchor.alt_size_unit, anchor.alt_size_qty]].filter(([u]) => u);
-  if (sizes.length && toks.length) {
-    // A candidate qualifies if either of its sizes equals either of the anchor's.
-    const conds = [];
-    const params = [];
-    for (const [unit, qty] of sizes) {
-      const tol = qty * 0.01;
-      for (const col of ['', 'alt_']) {
-        conds.push(`(p.${col}size_unit = ? AND p.${col}size_qty BETWEEN ? AND ?)`);
-        params.push(unit, qty - tol, qty + tol);
-      }
-    }
-    candidates = d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
-      WHERE products_fts MATCH ? AND ${AVAILABLE_SQL} AND (${conds.join(' OR ')})
-      ORDER BY rank LIMIT 400`).all(loc(igaStore), ftsQuery(toks.join(' '), 'OR'), ...params);
-  }
+  // Score names among the products of the same size (an in-memory index), then
+  // load just the best of them, priced, from the database.
+  const scored = rankMatches(anchor, sameSizeCandidates(anchor), mode).slice(0, 80);
+  const scoreOf = new Map(scored.map((m) => [m.product.id, m.score]));
+  const candidates = scored.length
+    ? d.prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE p.id IN (SELECT value FROM json_each(?)) AND ${AVAILABLE_SQL}`)
+      .all(loc(igaStore), JSON.stringify(scored.map((m) => m.product.id)))
+    : [];
   const rules = matchRulesFor(anchor.id);
-  let ranked = rankMatches(anchor, candidates, mode).filter((m) => {
-    const p = m.product;
-    if (rules.never.has(p.id)) return false;
-    // Same brand and size but a different barcode: a different variant the name didn't reveal.
-    if (anchor.barcode && p.barcode && anchor.barcode !== p.barcode && sameBrand(anchor, p)) return false;
-    return true;
-  });
+  let ranked = candidates
+    .map((p) => ({ product: p, score: scoreOf.get(p.id) }))
+    .sort((x, y) => y.score - x.score || (x.product.price ?? Infinity) - (y.product.price ?? Infinity))
+    .filter((m) => {
+      const p = m.product;
+      if (rules.never.has(p.id)) return false;
+      // Same brand and size but a different barcode: a different variant the name didn't reveal.
+      if (anchor.barcode && p.barcode && anchor.barcode !== p.barcode && sameBrand(anchor, p)) return false;
+      return true;
+    });
   // Exact matches the name rules can't see: same barcode, or confirmed by an admin.
   const sure = [];
   if (anchor.barcode) {
@@ -186,19 +180,20 @@ export function betterValue(product, { igaStore = null, stores = STORES, members
   if (!product?.size_unit || product.per_weight) return null;
   const base = perUnit(product, memberships);
   if (!base) return null;
-  const toks = [...nameTokens(product.name, product.brand)];
-  if (!toks.length) return null;
   const allowed = storeSet(stores);
-  const candidates = getDb().prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_FTS_PRICED}
-      WHERE products_fts MATCH ? AND ${AVAILABLE_SQL} AND p.size_unit = ? AND p.per_weight = 0
-        AND p.size_qty BETWEEN ? AND ? AND ABS(p.size_qty - ?) > ? * 0.02
-      ORDER BY rank LIMIT 300`)
-    .all(loc(igaStore), ftsQuery(toks.join(' '), 'OR'), product.size_unit, product.size_qty / 4, product.size_qty * 4,
-      product.size_qty, product.size_qty);
+  // The same item in another pack size: same unit, a quarter to four times the size, a matching name.
+  const ids = sameWordCandidates(product)
+    .filter((c) => allowed.includes(c.store) && c.size_unit === product.size_unit && !c.per_weight
+      && c.size_qty >= product.size_qty / 4 && c.size_qty <= product.size_qty * 4
+      && Math.abs(c.size_qty - product.size_qty) > product.size_qty * 0.02
+      && matchScore(product, c, 'similar', { ignoreSize: true }) >= MATCH_THRESHOLD)
+    .slice(0, 200)
+    .map((c) => c.id);
+  if (!ids.length) return null;
+  const candidates = getDb().prepare(`SELECT ${PRODUCT_COLS} FROM ${FROM_PRICED} WHERE p.id IN (SELECT value FROM json_each(?)) AND ${AVAILABLE_SQL}`)
+    .all(loc(igaStore), JSON.stringify(ids));
   let best = null;
   for (const c of candidates) {
-    if (!allowed.includes(c.store)) continue;
-    if (matchScore(product, c, 'similar', { ignoreSize: true }) < MATCH_THRESHOLD) continue;
     const pu = perUnit(c, memberships);
     if (pu && pu < base * 0.9 && (!best || pu < best.perUnit)) best = { product: c, perUnit: pu };
   }

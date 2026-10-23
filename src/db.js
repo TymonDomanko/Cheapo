@@ -447,7 +447,13 @@ const nowIso = () => new Date().toISOString();
  *   catalogue row; the price goes into store_prices for that store.
  * @returns {{upserted:number, priceChanges:number}}
  */
+// Bumped whenever products change, so in-memory indexes know to rebuild.
+let version = 0;
+export const catalogueVersion = () => version;
+export const catalogueChanged = () => version++;
+
 export function upsertProducts(store, items, seenAt = nowIso(), location = null) {
+  catalogueChanged();
   const d = getDb();
   const perStore = location != null;
   const getExisting = d.prepare('SELECT id FROM products WHERE store = ? AND store_product_id = ?');
@@ -548,6 +554,7 @@ export function upsertProducts(store, items, seenAt = nowIso(), location = null)
 
 /** After a complete crawl, anything not seen in it is no longer sold (at that store, for per-store chains). */
 export function markUnseenUnavailable(store, since, location = null) {
+  catalogueChanged();
   const d = getDb();
   if (location != null) {
     return d.prepare(`UPDATE store_prices SET available = 0 WHERE location = ? AND last_seen < ?
