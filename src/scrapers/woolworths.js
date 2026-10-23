@@ -4,7 +4,7 @@
 // so this generally only works from a residential connection (or with
 // SCRAPE_MODE=browser).
 
-import { createClient, eachCategory } from './http.js';
+import { createClient, crawlInParallel } from './http.js';
 
 const ORIGIN = 'https://www.woolworths.com.au';
 const PAGE_SIZE = 36;
@@ -19,25 +19,46 @@ const SKIP = new Set(
 export const store = 'woolworths';
 
 export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
-  const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.WOOLWORTHS_DELAY_MS ?? 600) });
+  const delayMs = Number(process.env.WOOLWORTHS_DELAY_MS ?? 600);
+  const client = createClient({ origin: ORIGIN, delayMs });
   await client.init();
+  let cats;
   try {
     const tree = await client.getJson(`${ORIGIN}/apis/ui/PiesCategoriesWithSpecials`);
-    let cats = (tree.Categories || tree.categories || [])
+    cats = (tree.Categories || tree.categories || [])
       .map((c) => ({
         id: c.NodeId ?? c.nodeId,
         name: c.Description ?? c.description,
         slug: c.UrlFriendlyName ?? c.urlFriendlyName,
       }))
       .filter((c) => c.id && c.slug && !SKIP.has(c.slug) && !/special/i.test(c.slug));
-    if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
-    log(`woolworths: ${cats.length} categories`);
+  } finally {
+    await client.close();
+  }
+  if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
+  // Two departments at a time, each in its own session. A session that has made
+  // hundreds of requests gets slowed right down, so each department starts a fresh one.
+  const workers = Math.max(1, Number(process.env.WOOLWORTHS_CONCURRENCY) || 2);
+  log(`woolworths: ${cats.length} categories, ${workers} at a time`);
 
-    yield* eachCategory('woolworths', cats, log, async function* (cat) {
+  yield* crawlInParallel('woolworths', cats, {
+    workers,
+    log,
+    newClient: async () => {
+      const c = createClient({ origin: ORIGIN, delayMs });
+      await c.init();
+      return c;
+    },
+    crawl: async function* (c, cat) {
+      if (c.cookies) {
+        // A fresh session (browser mode keeps its one browser).
+        c.cookies.clear();
+        await c.init();
+      }
       let page = 1;
       let pages = 1;
       do {
-        const json = await client.postJson(`${ORIGIN}/apis/ui/browse/category`, {
+        const json = await c.postJson(`${ORIGIN}/apis/ui/browse/category`, {
           categoryId: cat.id,
           pageNumber: page,
           pageSize: PAGE_SIZE,
@@ -67,10 +88,8 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
         if (!items.length) break;
         page++;
       } while (page <= pages && page <= maxPagesPerCategory);
-    });
-  } finally {
-    await client.close();
-  }
+    },
+  });
 }
 
 /** Woolworths' own range: no Everyday Market (third-party marketplace) listings. */

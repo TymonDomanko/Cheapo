@@ -228,3 +228,69 @@ export async function* eachCategory(store, cats, log, crawl) {
   }
   if (failed.length) throw new Error(`couldn't fetch ${failed.length} of ${cats.length} categories (${failed.join(', ')}); everything else was saved`);
 }
+
+/**
+ * Like eachCategory, but crawls several categories at once, each worker with
+ * its own client (its own session). Batches are yielded as they arrive. A
+ * category that keeps failing is skipped; three failures with no category
+ * finishing in between stop the crawl.
+ * @param {{workers?: number, log: Function, newClient: () => Promise<object>, crawl: (client, cat) => AsyncIterable}} opts
+ */
+export async function* crawlInParallel(store, cats, { workers = 2, log, newClient, crawl }) {
+  const queue = [...cats];
+  const ready = [];
+  const failed = [];
+  let streak = 0;
+  let fatal = null;
+  let finished = false;
+  let wake = null;
+  const notify = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
+  async function worker() {
+    let client;
+    try {
+      client = await newClient();
+      while (queue.length && !fatal) {
+        const cat = queue.shift();
+        const name = cat.slug || cat.seoToken || cat.name;
+        try {
+          for await (const batch of crawl(client, cat)) {
+            if (fatal) return;
+            ready.push(batch);
+            notify();
+          }
+          streak = 0;
+        } catch (e) {
+          failed.push(name);
+          log(`${store}: skipped ${name} — ${e.message}`);
+          if (++streak >= 3) fatal = new Error(`stopped after ${streak} categories failed in a row (last: ${e.message})`);
+        }
+      }
+    } catch (e) {
+      fatal ||= e;
+    } finally {
+      await client?.close?.();
+      notify();
+    }
+  }
+  const all = Promise.all(Array.from({ length: Math.max(1, Math.min(workers, cats.length)) }, worker)).then(() => {
+    finished = true;
+    notify();
+  });
+  while (true) {
+    if (ready.length) {
+      yield ready.shift();
+      continue;
+    }
+    if (finished) break;
+    await new Promise((resolve) => {
+      wake = resolve;
+    });
+  }
+  await all;
+  if (fatal) throw fatal;
+  if (failed.length) throw new Error(`couldn't fetch ${failed.length} of ${cats.length} categories (${failed.join(', ')}); everything else was saved`);
+}

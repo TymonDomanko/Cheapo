@@ -50,3 +50,47 @@ test('Woolworths: Everyday Market (third-party) listings are left out', async ()
   const json = { Bundles: [{ Products: [{ Stockcode: 1, Name: 'Woolworths Full Cream Milk 2L' }] }, { Products: [{ Stockcode: 1124514655, Name: 'Kenzzi Salon Pro+ Hair Dryer', IsMarketProduct: true }] }] };
   assert.deepEqual(ownRange(extractProducts(json)).map((p) => p.Name), ['Woolworths Full Cream Milk 2L']);
 });
+
+test('categories can be crawled in parallel, skipping ones that fail', async () => {
+  const { crawlInParallel } = await import('../src/scrapers/http.js');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let clients = 0;
+  let active = 0;
+  let most = 0;
+  const run = async (failing, workers = 2) => {
+    const got = [];
+    try {
+      for await (const b of crawlInParallel('woolworths', ['a', 'b', 'c', 'd', 'e'].map((slug) => ({ slug })), {
+        workers,
+        log: () => {},
+        newClient: async () => ({ id: ++clients }),
+        crawl: async function* (client, cat) {
+          active++;
+          most = Math.max(most, active);
+          try {
+            await sleep(10);
+            if (failing.includes(cat.slug)) throw new Error('bot check');
+            yield [`${cat.slug}1`];
+            await sleep(5);
+            yield [`${cat.slug}2`];
+          } finally {
+            active--;
+          }
+        },
+      })) got.push(...b);
+      return { got: got.sort() };
+    } catch (e) {
+      return { got: got.sort(), error: e.message };
+    }
+  };
+  let r = await run([]);
+  assert.deepEqual(r.got, ['a1', 'a2', 'b1', 'b2', 'c1', 'c2', 'd1', 'd2', 'e1', 'e2']);
+  assert.equal(r.error, undefined);
+  assert.equal(most, 2, 'two at a time');
+  assert.equal(clients, 2, 'a client (session) per worker');
+  r = await run(['c']);
+  assert.equal(r.got.length, 8, 'the rest is still saved');
+  assert.match(r.error, /couldn't fetch 1 of 5 categories \(c\)/);
+  r = await run(['a', 'b', 'c', 'd', 'e'], 1);
+  assert.match(r.error, /stopped after 3 categories failed in a row/);
+});
