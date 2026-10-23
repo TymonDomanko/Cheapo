@@ -3,6 +3,7 @@ import { getDb, upsertProducts, markUnseenUnavailable, nowIso } from '../db.js';
 import * as igaStores from '../iga.js';
 import { getSetting } from '../settings.js';
 import { checkRun } from '../admin-alerts.js';
+import { clearDealsCache } from '../deals.js';
 
 export { SCRAPERS };
 
@@ -55,6 +56,7 @@ export function finishRun(run, { complete, error = null }) {
   d.prepare("UPDATE scrape_runs SET finished_at = ?, status = 'ok' WHERE id = ?").run(nowIso(), run.id);
   const done = getRun(run.id);
   if (complete) checkRun(done);
+  clearDealsCache(); // prices changed
   return done;
 }
 

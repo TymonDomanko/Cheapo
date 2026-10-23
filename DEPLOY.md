@@ -48,6 +48,13 @@ docker compose up -d
 
 Open http://localhost:3000, sign up with your admin email, then go to **Admin** and press **Refresh all prices**. The first full refresh takes 20–60 minutes.
 
+**Ports.** Set these in `.env` if 3000 is taken or you want something else:
+- `HOST_PORT=8080`: the port on your machine (the site is then at http://localhost:8080).
+- `HOST_BIND=127.0.0.1`: only this machine can reach it, e.g. when your own nginx or Caddy sits in front.
+- `PORT`: the app's port inside the container. You rarely need to change it.
+
+Then run `docker compose up -d` again to apply.
+
 - **Update:** `docker compose pull && docker compose up -d`
 - **Logs:** `docker compose logs -f app`
 - **Back up:** copy the database out of the volume:
@@ -63,7 +70,9 @@ What you need:
 - a domain or subdomain with a DNS **A record** pointing at the server;
 - ports **80 and 443** open.
 
-The two files you need are in [`deploy/docker/`](deploy/docker):
+If 80 and 443 are already used on that machine, set `HTTP_PORT` and `HTTPS_PORT` in `.env` to other ports. Something in front, such as your router's port forwarding, still has to send the internet's ports 80 and 443 to them, because Let's Encrypt only checks the standard ports. Caddy finds the app automatically if you change `PORT`.
+
+The files you need are in [`deploy/docker/`](deploy/docker):
 
 ```bash
 mkdir grocery && cd grocery

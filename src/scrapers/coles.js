@@ -1,7 +1,7 @@
 // Coles: the website is a Next.js app, so every category page has a JSON twin
 // at /_next/data/<buildId>/en/browse/<slug>.json?page=N (48 products a page).
 
-import { createClient } from './http.js';
+import { createClient, eachCategory } from './http.js';
 import { parseMultiBuy } from '../promos.js';
 
 const ORIGIN = 'https://www.coles.com.au';
@@ -29,7 +29,7 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
     if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.seoToken));
     log(`coles: ${cats.length} categories, ~${cats.reduce((n, c) => n + c.productCount, 0)} products`);
 
-    for (const cat of cats) {
+    yield* eachCategory('coles', cats, log, async function* (cat) {
       let page = 1;
       let pages = 1;
       do {
@@ -42,7 +42,7 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
         yield items;
         page++;
       } while (page <= pages && page <= maxPagesPerCategory);
-    }
+    });
   } finally {
     await client.close();
   }

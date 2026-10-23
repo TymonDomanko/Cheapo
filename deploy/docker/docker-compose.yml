@@ -1,5 +1,6 @@
 # Public server with automatic HTTPS (Caddy + Let's Encrypt).
-# Needs: a Linux server with Docker, a domain whose DNS points at it, ports 80 and 443 open.
+# Needs: a Linux server with Docker, a domain whose DNS points at it, ports 80 and 443 open
+# (or HTTP_PORT / HTTPS_PORT in .env, if your router forwards 80 and 443 to other ports).
 #   cp .env.example .env    # set DOMAIN and ADMIN_EMAILS
 #   docker compose up -d
 services:
@@ -13,7 +14,7 @@ services:
     volumes:
       - grocery-data:/data
     expose:
-      - "3000"
+      - "${PORT:-3000}"
 
   caddy:
     image: caddy:2
@@ -21,11 +22,12 @@ services:
     depends_on:
       - app
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
     environment:
       DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      APP_PORT: ${PORT:-3000}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

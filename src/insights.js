@@ -92,3 +92,50 @@ export function productInsight(product, igaStore = null) {
     .all(product.id, product.location_priced ? igaStore : null);
   return priceInsight(rows, product.price);
 }
+
+/**
+ * Is today's special out of the ordinary for this product? Specials that come
+ * round every few weeks aren't; these are:
+ *  - rare:     its first special in months;
+ *  - deeper:   cheaper than any of its specials in the past year;
+ *  - uncommon: it's only been on special once or twice in the past year.
+ * Returns null for ordinary prices and ordinary specials.
+ */
+export function dealQuality(rows, current, now = Date.now()) {
+  if (!rows.length || current == null) return null;
+  const historyDays = (now - Date.parse(rows[0].recorded_at)) / DAY;
+  if (historyDays < 56) return null; // need a couple of months before anything looks unusual
+  const segs = rows.map((r, i) => ({
+    price: r.price,
+    special: !!r.on_special,
+    from: Date.parse(r.recorded_at),
+    to: i + 1 < rows.length ? Date.parse(rows[i + 1].recorded_at) : now,
+  }));
+  // The usual price, from the last 6 months of regular (not special) prices.
+  const time = new Map();
+  for (const s of segs.filter((x) => !x.special && x.to > now - 182 * DAY)) {
+    time.set(s.price, (time.get(s.price) || 0) + (s.to - Math.max(s.from, now - 182 * DAY)));
+  }
+  const usual = [...time.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!usual || current > usual * SPECIAL) return null;
+
+  // The specials before this one, over the past year.
+  let end = segs.length - 1;
+  while (end >= 0 && segs[end].price <= usual * SPECIAL) end--;
+  let count = 0;
+  let low = Infinity;
+  let inSpecial = false;
+  for (const s of segs.slice(0, end + 1).filter((x) => x.to > now - 365 * DAY)) {
+    const isSpecial = s.price <= usual * SPECIAL;
+    if (isSpecial && !inSpecial) count++;
+    if (isSpecial) low = Math.min(low, s.price);
+    inSpecial = isSpecial;
+  }
+  const months = Math.max(2, Math.min(12, Math.round(historyDays / 30.4)));
+  const pctOff = Math.round((1 - current / usual) * 100);
+  const base = { usual, pctOff, saving: Math.round((usual - current) * 100) / 100 };
+  if (count === 0) return { ...base, kind: 'rare', headline: `First special in ${months} months` };
+  if (current <= low * 0.95) return { ...base, kind: 'deeper', headline: `Cheapest in ${months} months — its specials are usually ${money(low)}` };
+  if (count <= 2 && historyDays >= 180) return { ...base, kind: 'uncommon', headline: `Only on special ${count === 1 ? 'once' : 'twice'} in the last ${months} months` };
+  return null;
+}

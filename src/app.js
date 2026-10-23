@@ -23,6 +23,7 @@ import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
 import { dataHealth } from './health.js';
+import { unusualDeals, regularsOnSale } from './deals.js';
 import { COLLECTOR_CODE } from './collector-files.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
@@ -145,6 +146,15 @@ export function createApp() {
       limit: Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
+  }));
+
+  // The home page: unusual deals for everyone, and your regulars that are on sale.
+  app.get('/api/home', searchLimit, h((req) => {
+    const stores = req.user?.preferredStores;
+    return {
+      unusual: unusualDeals({ stores }),
+      regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [] }) : null,
+    };
   }));
 
   // A barcode scanned in the shop.

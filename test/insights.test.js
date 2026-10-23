@@ -45,3 +45,20 @@ test('steady prices are just the usual price; rises are flagged', () => {
   assert.equal(i.verdict, 'high');
   assert.match(i.detail, /usually \$4\.00/);
 });
+
+test('spots specials that break the usual pattern', async () => {
+  const { dealQuality } = await import('../src/insights.js');
+  // $6 for 7 months, now $3.90: its first special.
+  const rare = [{ price: 6, recorded_at: daysAgo(210) }, { price: 3.9, on_special: 1, recorded_at: daysAgo(2) }];
+  assert.equal(dealQuality(rare, 3.9, now).kind, 'rare');
+  assert.equal(dealQuality(rare, 3.9, now).pctOff, 35);
+  assert.match(dealQuality(rare, 3.9, now).headline, /First special in 7 months/);
+  // Half price every 6 weeks, and half price again now: nothing unusual.
+  const rows = cycling(1);
+  assert.equal(dealQuality(rows, 3, now), null);
+  // ...but $2.40 is cheaper than any of its specials.
+  const deeper = [...cycling(30), { price: 2.4, on_special: 1, recorded_at: daysAgo(1) }];
+  assert.equal(dealQuality(deeper, 2.4, now).kind, 'deeper');
+  // Not on special at all.
+  assert.equal(dealQuality(rare.slice(0, 1), 6, now), null);
+});

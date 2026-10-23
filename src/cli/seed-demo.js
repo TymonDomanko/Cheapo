@@ -117,6 +117,10 @@ ITEMS.forEach(([name, size, category, base, brands], i) => {
       specialEvery: 14 + Math.floor(rand() * 30),
       specialOffset: Math.floor(rand() * 30),
       rises: rand() < 0.35,
+      depth: rand() < 0.3 ? 0.5 : 0.8, // half price, or 20% off
+      // Some products are rarely discounted; a few of those are on special right now (an unusual deal).
+      rare: rand() < 0.15,
+      rareNow: rand() < 0.6,
     });
   }
 });
@@ -130,8 +134,9 @@ for (let day = DAYS; day >= 0; day--) {
       let price = p.price;
       if (p.rises && day < DAYS / 2) price = money(price * 1.08); // inflation step mid-way through
       // ALDI rarely runs specials; the others run half-price/discount cycles.
-      const onSpecial = store !== 'aldi' && store !== 'harrisfarm' && (DAYS - day + p.specialOffset) % p.specialEvery < 7;
-      const now = onSpecial ? money(price * (rand() < 0.3 ? 0.5 : 0.8)) : price;
+      const onSpecial = store !== 'aldi' && store !== 'harrisfarm'
+        && (p.rare ? p.rareNow && day <= 3 : (DAYS - day + p.specialOffset) % p.specialEvery < 7);
+      const now = onSpecial ? money(price * p.depth) : price;
       return {
         store_product_id: p.id,
         name: p.name,

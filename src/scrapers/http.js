@@ -204,3 +204,27 @@ class BrowserClient {
     await this.browser?.close();
   }
 }
+
+/**
+ * Crawl each category with `crawl(cat)` (an async generator of batches). A
+ * category that keeps failing (say a bot check that won't clear) is skipped so
+ * the rest of the shop is still saved; the run then ends with an error naming
+ * what was missed, so it isn't treated as complete. Three failures in a row
+ * means the whole site is blocking us, so it stops there.
+ */
+export async function* eachCategory(store, cats, log, crawl) {
+  const failed = [];
+  let streak = 0;
+  for (const cat of cats) {
+    const name = cat.slug || cat.seoToken || cat.name;
+    try {
+      yield* crawl(cat);
+      streak = 0;
+    } catch (e) {
+      failed.push(name);
+      log(`${store}: skipped ${name} — ${e.message}`);
+      if (++streak >= 3) throw new Error(`stopped after ${streak} categories in a row failed (last: ${e.message})`);
+    }
+  }
+  if (failed.length) throw new Error(`couldn't fetch ${failed.length} of ${cats.length} categories (${failed.join(', ')}); everything else was saved`);
+}

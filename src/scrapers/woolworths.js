@@ -4,7 +4,7 @@
 // so this generally only works from a residential connection (or with
 // SCRAPE_MODE=browser).
 
-import { createClient } from './http.js';
+import { createClient, eachCategory } from './http.js';
 
 const ORIGIN = 'https://www.woolworths.com.au';
 const PAGE_SIZE = 36;
@@ -32,7 +32,7 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
     if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
     log(`woolworths: ${cats.length} categories`);
 
-    for (const cat of cats) {
+    yield* eachCategory('woolworths', cats, log, async function* (cat) {
       let page = 1;
       let pages = 1;
       do {
@@ -64,7 +64,7 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
         if (!items.length) break;
         page++;
       } while (page <= pages && page <= maxPagesPerCategory);
-    }
+    });
   } finally {
     await client.close();
   }

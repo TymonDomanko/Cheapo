@@ -19,3 +19,28 @@ test('Harris Farm: fees and gift cards aren’t products', async () => {
   assert.deepEqual(hf({ id: 3, title: 'Service Fee', product_type: 'Fees', variants: v }), []);
   assert.equal(hf({ id: 4, title: 'Pudding Lane Classic Christmas Pudding 500g', product_type: 'Z-Bakery', variants: v }).length, 1);
 });
+
+test('a category that keeps failing is skipped, not the whole shop', async () => {
+  const { eachCategory } = await import('../src/scrapers/http.js');
+  const logs = [];
+  const run = async (failing) => {
+    const got = [];
+    try {
+      for await (const b of eachCategory('coles', ['a', 'b', 'c', 'd'].map((slug) => ({ slug })), (m) => logs.push(m), async function* (cat) {
+        if (failing.includes(cat.slug)) throw new Error('bot check');
+        yield [cat.slug];
+      })) got.push(...b);
+      return { got };
+    } catch (e) {
+      return { got, error: e.message };
+    }
+  };
+  let r = await run(['b']);
+  assert.deepEqual(r.got, ['a', 'c', 'd'], 'the rest is still saved');
+  assert.match(r.error, /couldn't fetch 1 of 4 categories \(b\)/);
+  assert.match(logs.join('\n'), /skipped b — bot check/);
+  r = await run(['a', 'b', 'c']);
+  assert.match(r.error, /stopped after 3 categories in a row failed/);
+  assert.deepEqual(r.got, []);
+  assert.deepEqual((await run([])).got, ['a', 'b', 'c', 'd']);
+});
