@@ -2080,32 +2080,12 @@ async function loadAdmin() {
     <div class="list-head"><h2>Product data</h2>
       <button class="primary" id="scrape-all" ${o.stores.some((s) => s.status.running) ? 'disabled' : ''}>Refresh all prices</button></div>
     <p class="hint">Prices also refresh automatically (schedule “${esc(o.scrapeCron || 'off')}”). A full refresh takes 20–60 minutes.</p>
-    <div class="stat-grid">${o.stores.map((s) => {
-      const r = s.runs[0];
-      const status = s.status.running
-        ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
-        : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
-      return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
-        <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
-        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
-          : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
-    }).join('')}</div>
+    <div id="admin-live-stores">${adminStoreTiles(o)}</div>
     <h2 class="section">IGAs with prices online</h2>
-    <p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
-      ${o.iga.check.running ? `<span class="state pending">Checking now… ${o.iga.check.done} of ${o.iga.check.total}</span>`
-        : o.iga.lastCheck ? `<span class="hint">Last checked ${fmtDate(o.iga.lastCheck.started_at)}${o.iga.lastCheck.error
-          ? ` — <span class="warn">failed: ${esc(o.iga.lastCheck.error)}</span>`
-          : ` — ${o.iga.lastCheck.came_online} came online, ${o.iga.lastCheck.went_offline} went offline`}.</span>` : '<span class="hint">Not checked yet.</span>'}
-      <button class="small" id="iga-check" ${o.iga.check.running ? 'disabled' : ''}>Check now</button></p>
+    <div id="admin-live-iga-check">${adminIgaCheck(o)}</div>
     <p class="hint">Checked automatically every day before prices refresh: IGA’s store list is reloaded and each store is asked for one product.</p>
     <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed${o.iga.maxStores ? ` of ${o.iga.maxStores} allowed` : ' (no limit)'} — prices are collected only for stores people have picked</span></h2>
-    <div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
-      ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
-        <td>${fmtDate(t.added_at)}</td>
-        <td>${(o.iga.queue.fetching || [o.iga.queue.current]).includes(t.store_id) ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
-        <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
-    </tbody></table></div>
+    <div id="admin-live-iga-stores">${adminIgaStores(o)}</div>
     <h2 class="section">Data health <button class="small ghost" id="health-refresh">Check again</button></h2>
     <div id="admin-health"><p class="hint">Checking the data… (this can take a few seconds on a big catalogue)</p></div>
 
@@ -2113,10 +2093,7 @@ async function loadAdmin() {
     <div id="admin-matches"><p class="hint">Loading…</p></div>
 
     <h2 class="section">Barcodes</h2>
-    <p>${(o.barcodes.with_barcode || 0).toLocaleString()} of ${(o.barcodes.total || 0).toLocaleString()} Coles products have a barcode
-      (${(o.barcodes.checked || 0).toLocaleString()} pages checked).
-      ${o.barcodes.status.running ? `<span class="state pending">Fetching… ${o.barcodes.status.done} of ${o.barcodes.status.total}</span>`
-        : '<button class="small" id="barcodes-now">Fetch more now</button>'}</p>
+    <div id="admin-live-barcodes">${adminBarcodes(o)}</div>
     <p class="hint">Coles only shows barcodes on product pages, so they’re filled in a batch at a time each day (products on lists first). Woolworths barcodes come with every refresh. Same barcode = same product.</p>
 
     <h2 class="section">Home collector</h2>
@@ -2142,16 +2119,73 @@ async function loadAdmin() {
   loadAdminExtras();
   loadAdminSettings();
   loadHealth();
-  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running || o.barcodes.status.running;
-  if (busy && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
+  if (adminBusy(o) && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminProgress, 3000);
 }
 
-/** Live progress refresh, but never while someone is typing in a settings form. */
-function refreshAdminWhenIdle() {
-  const editing = document.activeElement?.closest?.('#admin-root form')
-    || [...$$('#admin-root form input')].some((i) => i.type === 'password' ? i.value : false);
-  if (editing) adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
-  else loadAdmin();
+const adminBusy = (o) => o.stores.some((s) => s.status.running) || (o.iga.queue.fetching?.length || o.iga.queue.current)
+  || o.iga.check.running || o.barcodes.status.running;
+
+/**
+ * While prices are refreshing: update just the progress (store tiles, IGA
+ * status, barcodes) every few seconds, leaving the rest of the page — your
+ * scroll position, open sections and anything you're typing — alone.
+ */
+async function refreshAdminProgress() {
+  if (currentTab() !== 'admin' || !$('#admin-live-stores')) return;
+  let o;
+  try {
+    o = await api('/api/admin/overview');
+  } catch {
+    adminTimer = setTimeout(refreshAdminProgress, 10000); // offline for a moment: try again later
+    return;
+  }
+  $('#admin-live-stores').innerHTML = adminStoreTiles(o);
+  $('#admin-live-iga-check').innerHTML = adminIgaCheck(o);
+  $('#admin-live-iga-stores').innerHTML = adminIgaStores(o);
+  $('#admin-live-barcodes').innerHTML = adminBarcodes(o);
+  const all = $('#scrape-all');
+  if (all) all.disabled = o.stores.some((s) => s.status.running);
+  if (adminBusy(o)) adminTimer = setTimeout(refreshAdminProgress, 3000);
+  else loadHealth(); // finished: the product counts and freshness have changed
+}
+
+function adminStoreTiles(o) {
+  return `<div class="stat-grid">${o.stores.map((s) => {
+      const r = s.runs[0];
+      const status = s.status.running
+        ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
+        : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
+      return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
+        <div class="value">${s.products.toLocaleString()}</div>
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
+        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
+          : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
+    }).join('')}</div>`;
+}
+
+function adminIgaCheck(o) {
+  return `<p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
+      ${o.iga.check.running ? `<span class="state pending">Checking now… ${o.iga.check.done} of ${o.iga.check.total}</span>`
+        : o.iga.lastCheck ? `<span class="hint">Last checked ${fmtDate(o.iga.lastCheck.started_at)}${o.iga.lastCheck.error
+          ? ` — <span class="warn">failed: ${esc(o.iga.lastCheck.error)}</span>`
+          : ` — ${o.iga.lastCheck.came_online} came online, ${o.iga.lastCheck.went_offline} went offline`}.</span>` : '<span class="hint">Not checked yet.</span>'}
+      <button class="small" id="iga-check" ${o.iga.check.running ? 'disabled' : ''}>Check now</button></p>`;
+}
+
+function adminIgaStores(o) {
+  return `<div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
+      ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
+        <td>${fmtDate(t.added_at)}</td>
+        <td>${(o.iga.queue.fetching || [o.iga.queue.current]).includes(t.store_id) ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
+        <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function adminBarcodes(o) {
+  return `<p>${(o.barcodes.with_barcode || 0).toLocaleString()} of ${(o.barcodes.total || 0).toLocaleString()} Coles products have a barcode
+      (${(o.barcodes.checked || 0).toLocaleString()} pages checked).
+      ${o.barcodes.status.running ? `<span class="state pending">Fetching… ${o.barcodes.status.done} of ${o.barcodes.status.total}</span>`
+        : '<button class="small" id="barcodes-now">Fetch more now</button>'}</p>`;
 }
 
 // ------------------------------------------------------------------ site settings
