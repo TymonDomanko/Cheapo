@@ -4,11 +4,14 @@ import { STORES } from './stores.js';
 import { createApp } from './app.js';
 import { scrapeAll, scrapeStatus } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
+import { ensureDefaultTracked, ensureDirectory } from './iga.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const SCRAPE_CRON = process.env.SCRAPE_CRON ?? '15 4 * * *'; // daily at 04:15 server time
 
 getDb();
+ensureDefaultTracked();
+ensureDirectory().catch((e) => console.warn(`IGA store list not loaded yet: ${e.message}`));
 const app = createApp();
 
 if (SCRAPE_CRON) {

@@ -8,6 +8,7 @@ import path from 'node:path';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-'));
 process.env.DB_PATH = path.join(dir, 'test.db');
 process.env.ADMIN_EMAILS = 'admin@example.com';
+process.env.DISABLE_BACKGROUND_SCRAPES = 'true';
 
 const { upsertProducts } = await import('../src/db.js');
 const { createApp } = await import('../src/app.js');
@@ -153,4 +154,49 @@ test('change password signs out other sessions; delete account', async () => {
   assert.equal((await b('GET', '/api/lists')).status, 401, 'other sessions are signed out');
   assert.equal((await a('DELETE', '/api/me', { password: 'newpassword1' })).status, 200);
   assert.equal((await client()('POST', '/api/auth/login', { email: 'max@example.com', password: 'newpassword1' })).status, 401);
+});
+
+test('IGA: pick a store, prices follow the store, lists can use another store', async () => {
+  const { saveDirectory } = await import('../src/iga.js');
+  saveDirectory([
+    { retailerStoreId: '32600', name: 'IGA Erskine Park', city: 'Erskine Park', countyProvinceState: 'NSW', postCode: '2759', location: { latitude: -33.80, longitude: 150.80 } },
+    { retailerStoreId: '4647', name: 'IGA Waterloo', city: 'Waterloo', countyProvinceState: 'NSW', postCode: '2017', location: { latitude: -33.90, longitude: 151.20 } },
+    { retailerStoreId: '999', name: 'IGA Perth', city: 'Perth', countyProvinceState: 'WA', postCode: '6000', location: { latitude: -31.95, longitude: 115.86 } },
+  ]);
+  // Same product, different price at two IGA stores.
+  upsertProducts('iga', [{ store_product_id: 'x1', name: 'Community Co Full Cream Milk', brand: 'Community Co', size_text: '2L', price: 3.5 }], undefined, '32600');
+  upsertProducts('iga', [{ store_product_id: 'x1', name: 'Community Co Full Cream Milk', brand: 'Community Co', size_text: '2L', price: 2.5 }], undefined, '4647');
+
+  const anon = client();
+  // Find stores by suburb, postcode and location
+  assert.equal((await anon('GET', '/api/iga/stores?q=waterloo')).body[0].id, '4647');
+  assert.equal((await anon('GET', '/api/iga/stores?q=2017')).body[0].id, '4647');
+  const near = (await anon('GET', '/api/iga/stores?lat=-31.9&lng=115.9')).body;
+  assert.equal(near[0].id, '999');
+  assert.ok(near[0].distanceKm < 10);
+
+  // Visitors see the default IGA store's prices unless they pass ?iga=
+  const igaPrice = (groups) => groups.find((g) => g.best.iga)?.best.iga.product.price;
+  assert.equal(igaPrice((await anon('GET', '/api/search?q=milk')).body), 3.5);
+  assert.equal(igaPrice((await anon('GET', '/api/search?q=milk&iga=4647')).body), 2.5);
+
+  // A user picks Waterloo: search and their new lists use it
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'ira@example.com', password: 'password123', igaStore: '4647' });
+  assert.equal((await api('GET', '/api/config')).body.igaStore.id, '4647');
+  assert.equal(igaPrice((await api('GET', '/api/search?q=milk')).body), 2.5);
+  const list = (await api('GET', '/api/lists')).body[0];
+  const milk = (await api('GET', '/api/search?q=milk&store=iga')).body[0].anchor.id;
+  await api('POST', `/api/lists/${list.id}/items`, { productId: milk, matchMode: 'this' });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.igaStore.id, '4647');
+  assert.equal(v.items[0].perStore.iga.product.price, 2.5);
+
+  // The household list switches to Erskine Park: the exact product follows the store
+  assert.equal((await api('PATCH', `/api/lists/${list.id}`, { igaStore: '32600' })).status, 200);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].perStore.iga.product.price, 3.5);
+
+  assert.equal((await api('PATCH', `/api/lists/${list.id}`, { igaStore: 'nope' })).status, 400);
+  assert.equal((await api('POST', '/api/iga/stores/123456/use')).status, 400);
 });

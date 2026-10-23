@@ -5,10 +5,11 @@
 //   npm run seed:demo -- --clear remove demo data (real scraped data is untouched)
 
 import { getDb, upsertProducts } from '../db.js';
+import { defaultStoreId, ensureDefaultTracked, markScraped } from '../iga.js';
 
 const db = getDb();
 if (process.argv.includes('--clear')) {
-  const n = db.prepare("DELETE FROM products WHERE store_product_id LIKE 'demo-%'").run().changes;
+  const n = db.prepare("DELETE FROM products WHERE store_product_id LIKE '%demo-%'").run().changes;
   console.log(`Removed ${n} demo products`);
   process.exit(0);
 }
@@ -132,8 +133,11 @@ for (let day = DAYS; day >= 0; day--) {
         on_special: onSpecial,
       };
     });
-    changes += upsertProducts(store, batch, at.toISOString()).priceChanges;
+    // IGA prices belong to one IGA store: the site's default.
+    changes += upsertProducts(store, batch, at.toISOString(), store === 'iga' ? defaultStoreId() : null).priceChanges;
   }
 }
+ensureDefaultTracked();
+markScraped(defaultStoreId());
 console.log(`Seeded ${products.length} DEMO products with ${DAYS} days of synthetic history (${changes} price changes).`);
 console.log('These are not real prices. Remove them any time with: npm run seed:demo -- --clear');

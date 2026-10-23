@@ -160,6 +160,44 @@ function migrate(d) {
   if (!userCols.includes('preferred_stores')) {
     d.exec('ALTER TABLE users ADD COLUMN preferred_stores TEXT'); // JSON array; NULL = all stores
   }
+  if (!userCols.includes('iga_store')) d.exec('ALTER TABLE users ADD COLUMN iga_store TEXT');
+  const listCols = d.prepare('PRAGMA table_info(lists)').all().map((c) => c.name);
+  if (!listCols.includes('iga_store')) d.exec('ALTER TABLE lists ADD COLUMN iga_store TEXT');
+  const runCols = d.prepare('PRAGMA table_info(scrape_runs)').all().map((c) => c.name);
+  if (!runCols.includes('location')) d.exec('ALTER TABLE scrape_runs ADD COLUMN location TEXT');
+
+  // Chains whose stores set their own prices (IGA) keep one row per product per
+  // store: `location` is that store's id and store_product_id is "<location>:<id>".
+  const productCols = d.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
+  if (!productCols.includes('location')) {
+    d.exec('ALTER TABLE products ADD COLUMN location TEXT');
+    const legacy = process.env.IGA_STORE_ID || '32600';
+    d.prepare(`UPDATE products SET location = ?, store_product_id = ? || ':' || store_product_id
+      WHERE store = 'iga' AND location IS NULL`).run(legacy, legacy);
+  }
+  d.exec('CREATE INDEX IF NOT EXISTS idx_products_location ON products (store, location)');
+
+  d.exec(`
+    -- IGA's store directory (refreshed weekly from igashop.com.au).
+    CREATE TABLE IF NOT EXISTS iga_stores (
+      id TEXT PRIMARY KEY,           -- IGA's retailerStoreId, used in their API
+      name TEXT NOT NULL,
+      address TEXT,
+      suburb TEXT,
+      state TEXT,
+      postcode TEXT,
+      lat REAL,
+      lng REAL,
+      updated_at TEXT NOT NULL
+    );
+    -- IGA stores whose prices we collect (because someone picked them).
+    CREATE TABLE IF NOT EXISTS iga_tracked (
+      store_id TEXT PRIMARY KEY,
+      added_at TEXT NOT NULL,
+      added_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      last_scraped_at TEXT
+    );
+  `);
 }
 
 const nowIso = () => new Date().toISOString();
@@ -169,14 +207,17 @@ const nowIso = () => new Date().toISOString();
  * whenever the price (or special status) differs from the last recorded one.
  * @returns {{upserted:number, priceChanges:number}}
  */
-export function upsertProducts(store, items, seenAt = nowIso()) {
+/**
+ * @param location  for per-store chains (IGA): which store these prices are from
+ */
+export function upsertProducts(store, items, seenAt = nowIso(), location = null) {
   const d = getDb();
   const getExisting = d.prepare('SELECT id FROM products WHERE store = ? AND store_product_id = ?');
   const insert = d.prepare(`
-    INSERT INTO products (store, store_product_id, name, brand, size_text, size_qty, size_unit, alt_size_qty, alt_size_unit, per_weight,
+    INSERT INTO products (store, location, store_product_id, name, brand, size_text, size_qty, size_unit, alt_size_qty, alt_size_unit, per_weight,
       category, image_url, product_url, price, was_price, unit_price, unit_price_text, on_special, available,
       first_seen, last_seen)
-    VALUES (@store, @store_product_id, @name, @brand, @size_text, @size_qty, @size_unit, @alt_size_qty, @alt_size_unit, @per_weight,
+    VALUES (@store, @location, @store_product_id, @name, @brand, @size_text, @size_qty, @size_unit, @alt_size_qty, @alt_size_unit, @per_weight,
       @category, @image_url, @product_url, @price, @was_price, @unit_price, @unit_price_text, @on_special, @available,
       @seen, @seen)`);
   const update = d.prepare(`
@@ -199,7 +240,8 @@ export function upsertProducts(store, items, seenAt = nowIso()) {
       const alt = altSize(raw.size_text, raw.name, size);
       const row = {
         store,
-        store_product_id: String(raw.store_product_id),
+        location,
+        store_product_id: location ? `${location}:${raw.store_product_id}` : String(raw.store_product_id),
         name: raw.name.trim(),
         brand: raw.brand || null,
         size_text: raw.size_text || null,
@@ -242,10 +284,10 @@ export function upsertProducts(store, items, seenAt = nowIso()) {
 }
 
 /** After a complete crawl, anything not seen in it is no longer sold. */
-export function markUnseenUnavailable(store, since) {
+export function markUnseenUnavailable(store, since, location = null) {
   return getDb()
-    .prepare('UPDATE products SET available = 0 WHERE store = ? AND last_seen < ?')
-    .run(store, since).changes;
+    .prepare('UPDATE products SET available = 0 WHERE store = ? AND location IS ? AND last_seen < ?')
+    .run(store, location, since).changes;
 }
 
 function num(v) {

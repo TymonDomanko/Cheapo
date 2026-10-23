@@ -34,7 +34,11 @@ export async function verifyPassword(password, stored) {
 const tokenHash = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
 function publicUser(u) {
-  return u && { id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin, preferredStores: parsePreferred(u.preferred_stores) };
+  return u && {
+    id: u.id, email: u.email, name: u.name, isAdmin: !!u.is_admin,
+    preferredStores: parsePreferred(u.preferred_stores),
+    igaStoreId: u.iga_store || null,
+  };
 }
 
 /** The user's chosen shops (all shops if they haven't chosen). */
@@ -48,8 +52,10 @@ function parsePreferred(json) {
   }
 }
 
-export function updateProfile(userId, { name, preferredStores }) {
+/** @param igaStore  an IGA store id the caller has already validated */
+export function updateProfile(userId, { name, preferredStores, igaStore }) {
   const d = getDb();
+  if (igaStore != null) d.prepare('UPDATE users SET iga_store = ? WHERE id = ?').run(String(igaStore), userId);
   if (name != null) {
     const n = String(name).trim();
     if (!n || n.length > 80) throw httpError(400, 'Name must be 1–80 characters');

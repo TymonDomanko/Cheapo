@@ -1,8 +1,6 @@
 // Every supermarket the app knows about. Adding a chain = a scraper module in
 // src/scrapers/ plus an entry here.
 
-const IGA_STORE_ID = process.env.IGA_STORE_ID || '32600';
-
 export const STORE_INFO = {
   woolworths: {
     name: 'Woolworths',
@@ -26,7 +24,7 @@ export const STORE_INFO = {
     name: 'IGA',
     url: 'https://www.igashop.com.au',
     online: true,
-    note: `IGA stores set their own prices; these are from IGA store #${IGA_STORE_ID}`,
+    note: 'Each IGA sets its own prices — you choose your store',
   },
   harrisfarm: {
     name: 'Harris Farm',

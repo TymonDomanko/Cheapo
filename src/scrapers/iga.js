@@ -1,6 +1,6 @@
 // IGA: igashop.com.au is backed by a storefront API. IGA stores are
 // independently owned and set their own prices, so this reads one store's
-// catalogue (IGA_STORE_ID; find yours in /api/storefront/stores).
+// catalogue at a time (opts.location = IGA's retailerStoreId).
 
 import { createClient } from './http.js';
 
@@ -12,8 +12,8 @@ const SKIP = new Set(
 
 export const store = 'iga';
 
-export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
-  const storeId = process.env.IGA_STORE_ID || '32600';
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, location } = {}) {
+  const storeId = location || process.env.IGA_STORE_ID || '32600';
   const api = `${ORIGIN}/api/storefront/stores/${storeId}`;
   const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.IGA_DELAY_MS ?? 500) });
   await client.init();

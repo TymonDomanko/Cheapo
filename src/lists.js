@@ -4,7 +4,8 @@
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
 import { STORES } from './stores.js';
-import { getProduct, findEquivalents, bestPerStore } from './compare.js';
+import { getProduct, findEquivalents, bestPerStore, relocate } from './compare.js';
+import { getStore, defaultStoreId } from './iga.js';
 import { matchScore } from './matcher.js';
 
 const INVITE_DAYS = 7;
@@ -14,13 +15,13 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 // ---------------------------------------------------------------- lists & access
 
-export function createList(userId, name = 'My list', preferredStores = STORES) {
+export function createList(userId, name = 'My list', preferredStores = STORES, igaStore = null) {
   const d = getDb();
-  // New lists start with the creator's preferred shops.
+  // New lists start with the creator's preferred shops and IGA store.
   const excluded = STORES.filter((s) => !preferredStores.includes(s));
   const id = d.transaction(() => {
-    const listId = d.prepare('INSERT INTO lists (name, created_by, excluded_stores, created_at) VALUES (?, ?, ?, ?)')
-      .run(cleanName(name), userId, JSON.stringify(excluded), nowIso()).lastInsertRowid;
+    const listId = d.prepare('INSERT INTO lists (name, created_by, excluded_stores, iga_store, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(cleanName(name), userId, JSON.stringify(excluded), igaStore, nowIso()).lastInsertRowid;
     d.prepare("INSERT INTO list_members (list_id, user_id, role, joined_at) VALUES (?, ?, 'owner', ?)")
       .run(listId, userId, nowIso());
     return listId;
@@ -57,7 +58,20 @@ export function getListSummary(listId, userId) {
   const list = d.prepare('SELECT * FROM lists WHERE id = ?').get(listId);
   const members = d.prepare(`SELECT u.id, u.name, u.email, m.role FROM list_members m JOIN users u ON u.id = m.user_id
     WHERE m.list_id = ? ORDER BY m.role DESC, m.joined_at`).all(listId);
-  return { id: list.id, name: list.name, role, excludedStores: parseStores(list.excluded_stores), members };
+  return {
+    id: list.id,
+    name: list.name,
+    role,
+    excludedStores: parseStores(list.excluded_stores),
+    igaStoreId: list.iga_store || defaultStoreId(),
+    members,
+  };
+}
+
+/** Which IGA store this list is priced at (shared by everyone on it). Caller validates the id. */
+export function setListIgaStore(listId, userId, igaStore) {
+  requireMember(listId, userId);
+  getDb().prepare('UPDATE lists SET iga_store = ? WHERE id = ?').run(String(igaStore), listId);
 }
 
 function parseStores(json) {
@@ -78,11 +92,15 @@ export function deleteList(listId, userId) {
   getDb().prepare('DELETE FROM lists WHERE id = ?').run(listId);
 }
 
-/** Apply someone's preferred shops to every list they own. */
-export function applyPreferredToOwnedLists(userId, preferredStores) {
-  const excluded = JSON.stringify(STORES.filter((s) => !preferredStores.includes(s)));
-  getDb().prepare(`UPDATE lists SET excluded_stores = ? WHERE id IN
-    (SELECT list_id FROM list_members WHERE user_id = ? AND role = 'owner')`).run(excluded, userId);
+/** Apply someone's preferred shops (and IGA store, if given) to every list they own. */
+export function applyPreferredToOwnedLists(userId, preferredStores, igaStore = null) {
+  const owned = `id IN (SELECT list_id FROM list_members WHERE user_id = ? AND role = 'owner')`;
+  const d = getDb();
+  if (preferredStores) {
+    const excluded = JSON.stringify(STORES.filter((s) => !preferredStores.includes(s)));
+    d.prepare(`UPDATE lists SET excluded_stores = ? WHERE ${owned}`).run(excluded, userId);
+  }
+  if (igaStore) d.prepare(`UPDATE lists SET iga_store = ? WHERE ${owned}`).run(String(igaStore), userId);
 }
 
 export function setExcludedStores(listId, userId, stores) {
@@ -199,7 +217,7 @@ export function setItemStore(itemId, userId, store, productId) {
 // ---------------------------------------------------------------- pricing the list
 
 /** For each item: what it would be at every store (matches + manual choices). */
-export function resolveItems(listId) {
+export function resolveItems(listId, igaStore = null) {
   const d = getDb();
   const items = d.prepare(`SELECT i.*, u.name AS added_by_name FROM list_items i LEFT JOIN users u ON u.id = i.added_by
     WHERE i.list_id = ? ORDER BY i.added_at, i.id`).all(listId);
@@ -207,7 +225,7 @@ export function resolveItems(listId) {
     WHERE i.list_id = ?`).all(listId);
   return items.map((item) => {
     const anchor = getProduct(item.product_id);
-    const eq = findEquivalents(anchor, item.match_mode);
+    const eq = findEquivalents(anchor, item.match_mode, igaStore);
     const best = bestPerStore(eq);
     const perStore = {};
     for (const s of STORES) {
@@ -216,7 +234,8 @@ export function resolveItems(listId) {
       if (ov && ov.product_id == null) {
         perStore[s] = { excluded: true, candidates };
       } else if (ov) {
-        const p = getProduct(ov.product_id);
+        // A pinned IGA product follows the list to its current IGA store.
+        const p = relocate(getProduct(ov.product_id), igaStore);
         perStore[s] = p ? { product: p, manual: true, score: matchScore(anchor, p), candidates } : { candidates };
       } else {
         perStore[s] = best[s] ? { product: best[s].product, score: best[s].score, candidates } : { candidates };
@@ -294,7 +313,7 @@ export function storeImpact(items, included) {
 /** Everything the list page needs in one go. */
 export function listView(listId, userId) {
   const summary = getListSummary(listId, userId);
-  const items = resolveItems(listId);
+  const items = resolveItems(listId, summary.igaStoreId);
   const included = STORES.filter((s) => !summary.excludedStores.includes(s));
   const plan = planFor(items, included);
   const singleStore = Object.fromEntries(STORES.map((s) => {
@@ -303,6 +322,7 @@ export function listView(listId, userId) {
   }));
   return {
     ...summary,
+    igaStore: getStore(summary.igaStoreId),
     included,
     items: items.map((it) => ({ ...it, cheapest: plan.choice[it.id] })),
     plan: { byStore: plan.byStore, total: plan.total, unavailable: plan.unavailable },

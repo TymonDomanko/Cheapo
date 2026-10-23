@@ -10,6 +10,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const state = {
   config: null, // { user, stores, allowSignups, trolleyFill }
   allStores: [], // every shop id, in display order
+  signupIga: null, // IGA store picked on the sign-up page, before the account exists
   stores: [], // the shops this user compares (their settings), in display order
   names: {},
   lists: [],
@@ -41,7 +42,7 @@ function toast(msg) {
 // ================================================================== boot & config
 
 async function loadConfig() {
-  state.config = await api('/api/config');
+  state.config = await api(withIga('/api/config'));
   state.allStores = state.config.stores.map((s) => s.id);
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
@@ -159,10 +160,19 @@ function requireLogin(reason, after) {
 
 /** Tick boxes for each shop, pre-ticked with the user's choice (or all). */
 function renderShopBoxes(el) {
-  const chosen = user()?.preferredStores || state.allStores;
+  // Keep any ticks the person has already changed; otherwise start from their saved choice.
+  const existing = $$('input[name=shops]', el);
+  const chosen = existing.length ? existing.filter((c) => c.checked).map((c) => c.value) : user()?.preferredStores || state.allStores;
+  const signup = !!el.closest('#signup-form');
+  // On the sign-up page nothing is saved yet; elsewhere it's the store in use.
+  const igaStore = signup ? state.signupIga : state.config.igaStore;
   el.innerHTML = state.config.stores.map((s) => `<label class="check shop-box">
     <input type="checkbox" name="shops" value="${s.id}" ${chosen.includes(s.id) ? 'checked' : ''}>
-    ${dot(s.id)} <span><strong>${esc(s.name)}</strong> <span class="hint">${esc(s.note || '')}</span></span></label>`).join('');
+    ${dot(s.id)} <span><strong>${esc(s.name)}</strong> <span class="hint">${esc(s.note || '')}</span></span></label>
+    ${s.id === 'iga' ? `<div class="iga-choice">${igaStore
+      ? `Your IGA: <strong>${esc(igaStore.name)}</strong>${igaStore.suburb ? ` <span class="hint">${esc(igaStore.suburb)}</span>` : ''} ${signup ? '' : igaStatus(igaStore)}
+         <button type="button" class="linkish" data-change-iga>Change</button>`
+      : '<button type="button" class="small" data-change-iga>📍 Find my IGA</button> <span class="hint">or we’ll use a default store</span>'}</div>` : ''}`).join('');
 }
 
 function formError(form, err) {
@@ -204,7 +214,10 @@ $('#signup-form').addEventListener('submit', async (e) => {
   try {
     await api('/api/auth/signup', {
       method: 'POST',
-      body: { name: f.get('name'), email: f.get('email'), password: f.get('password'), preferredStores },
+      body: {
+        name: f.get('name'), email: f.get('email'), password: f.get('password'), preferredStores,
+        igaStore: preferredStores.includes('iga') ? state.signupIga?.id : undefined,
+      },
     });
     formError(e.target, null);
     e.target.reset();
@@ -231,6 +244,7 @@ $('#login-form').addEventListener('submit', async (e) => {
 
 function fillSettings() {
   const u = user();
+  $('#shops-form [data-shop-boxes]').innerHTML = ''; // start from the saved choice
   $('#profile-form [name=name]').value = u.name;
   $('#profile-form [name=email]').value = u.email;
   $$('#tab-settings form').forEach((f) => formError(f, null));
@@ -288,6 +302,175 @@ $('#delete-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ================================================================== IGA store picker
+// Every IGA prices things differently, so people pick theirs: by suburb,
+// postcode or "near me". Visitors' choice lives in their browser; accounts save it.
+
+function visitorIga() {
+  try {
+    return localStorage.getItem('igaStore') || '';
+  } catch {
+    return '';
+  }
+}
+
+/** Visitors send their IGA choice with each request (accounts have it saved). */
+function withIga(path) {
+  const v = !user() && visitorIga();
+  return v ? `${path}${path.includes('?') ? '&' : '?'}iga=${encodeURIComponent(v)}` : path;
+}
+
+function igaShortName(st) {
+  if (!st) return 'Choose store';
+  return st.suburb || st.name.replace(/^IGA\s+/i, '');
+}
+
+function igaStatus(st) {
+  if (!st) return '';
+  if (st.pricesReady) return '<span class="state ready">✓ Prices ready</span>';
+  if (st.tracked) return '<span class="state pending">Fetching prices…</span>';
+  return '<span class="state pending">Prices in ~2 min</span>';
+}
+
+let igaResolve = null;
+let igaFound = new Map();
+let igaCurrentId = null;
+let igaSeq = 0;
+
+/** Open the picker; resolves with the chosen store, or null if closed. */
+function pickIgaStore({ title = 'Choose your IGA', currentId = null } = {}) {
+  igaCurrentId = currentId;
+  $('#iga-title').textContent = title;
+  $('#iga-q').value = '';
+  $('#iga-results').innerHTML = '';
+  $('#iga-msg').textContent = 'Type your suburb or postcode, or tap “Near me”.';
+  $('#iga-dialog').showModal();
+  $('#iga-q').focus();
+  return new Promise((resolve) => {
+    igaResolve = resolve;
+  });
+}
+
+$('#iga-dialog').addEventListener('close', () => {
+  igaResolve?.(null);
+  igaResolve = null;
+});
+
+async function findIga(params, waiting) {
+  const seq = ++igaSeq;
+  $('#iga-msg').textContent = waiting;
+  try {
+    const list = await api(`/api/iga/stores?${new URLSearchParams(params)}`);
+    if (seq !== igaSeq) return;
+    igaFound = new Map(list.map((x) => [x.id, x]));
+    $('#iga-msg').textContent = list.length ? '' : 'No IGA stores found — try a nearby suburb or postcode.';
+    $('#iga-results').innerHTML = list.map((x) => `<li><button type="button" data-iga-id="${esc(x.id)}" class="${x.id === igaCurrentId ? 'current' : ''}">
+      <strong>${esc(x.name)}</strong>
+      ${x.distanceKm != null ? `<span class="dist">${x.distanceKm < 1 ? `${Math.round(x.distanceKm * 1000)} m` : `${x.distanceKm.toFixed(1)} km`}</span>` : '<span></span>'}
+      <span class="addr">${esc([x.address, x.suburb, `${x.state || ''} ${x.postcode || ''}`.trim()].filter(Boolean).join(', '))}</span>
+      ${x.id === igaCurrentId ? '<span class="state ready">Current</span>' : igaStatus(x)}
+    </button></li>`).join('');
+  } catch (e) {
+    if (seq === igaSeq) $('#iga-msg').textContent = e.message;
+  }
+}
+
+let igaTimer;
+$('#iga-q').addEventListener('input', () => {
+  clearTimeout(igaTimer);
+  const q = $('#iga-q').value.trim();
+  if (q.length < 2) return;
+  igaTimer = setTimeout(() => findIga({ q }, 'Searching…'), 250);
+});
+
+$('#iga-locate').addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    $('#iga-msg').textContent = 'Your browser can’t share your location — type your suburb or postcode instead.';
+    return;
+  }
+  $('#iga-msg').textContent = 'Finding stores near you…';
+  navigator.geolocation.getCurrentPosition(
+    (pos) => findIga({ lat: pos.coords.latitude.toFixed(4), lng: pos.coords.longitude.toFixed(4) }, 'Finding stores near you…'),
+    () => {
+      $('#iga-msg').textContent = 'Couldn’t get your location — type your suburb or postcode instead.';
+    },
+    { timeout: 10000, maximumAge: 600000 },
+  );
+});
+
+$('#iga-results').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-iga-id]');
+  if (!b) return;
+  const store = igaFound.get(b.dataset.igaId);
+  const resolve = igaResolve;
+  igaResolve = null;
+  $('#iga-dialog').close();
+  resolve?.(store);
+});
+
+/** Use this IGA for search (and, for accounts, their own lists). */
+async function chooseIga(store, { applyToLists = true } = {}) {
+  const st = await api(`/api/iga/stores/${encodeURIComponent(store.id)}/use`, { method: 'POST', body: { applyToLists } });
+  if (!user()) {
+    try {
+      localStorage.setItem('igaStore', st.id);
+    } catch {
+      /* private mode: the choice lasts until the page is reloaded */
+    }
+  }
+  await loadConfig();
+  watchIgaPrices();
+  runSearch();
+  toast(st.pricesReady ? `Comparing prices at ${st.name}` : `Getting prices for ${st.name} — usually a couple of minutes`);
+  return st;
+}
+
+// While a newly chosen store's prices are being fetched, say so and check back.
+let igaWatch = null;
+function watchIgaPrices() {
+  const st = state.config.igaStore;
+  const waiting = st && !st.pricesReady && state.stores.includes('iga');
+  $('#iga-notice').hidden = !waiting;
+  if (!waiting) return;
+  $('#iga-notice').innerHTML = `Getting prices for <strong>${esc(st.name)}</strong>. This usually takes a couple of minutes; IGA prices will appear here when they’re ready.`;
+  clearTimeout(igaWatch);
+  igaWatch = setTimeout(async () => {
+    const now = await api(`/api/iga/stores/${encodeURIComponent(st.id)}`).catch(() => null);
+    if (now?.pricesReady) {
+      await loadConfig();
+      $('#iga-notice').hidden = true;
+      toast(`${now.name} prices are ready`);
+      runSearch();
+    } else {
+      watchIgaPrices();
+    }
+  }, 15000);
+}
+
+// "Change" buttons on the compare header, sign-up and settings pages.
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-change-iga]');
+  if (!b) return;
+  e.preventDefault();
+  const signup = !!b.closest('#signup-form');
+  const current = signup ? state.signupIga : state.config.igaStore;
+  const store = await pickIgaStore({ currentId: current?.id });
+  if (!store) return;
+  try {
+    if (signup) {
+      state.signupIga = store;
+      $('#signup-form input[value=iga]').checked = true;
+      renderShopBoxes($('#signup-form [data-shop-boxes]'));
+      return;
+    }
+    const inSettings = !!b.closest('#shops-form');
+    await chooseIga(store, { applyToLists: inSettings ? $('#shops-form [name=applyToLists]').checked : true });
+    if (inSettings) renderShopBoxes($('#shops-form [data-shop-boxes]'));
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
 // ================================================================== compare / search
 
 let searchTimer;
@@ -311,14 +494,14 @@ async function runSearch() {
   });
   const box = $('#results');
   try {
-    const groups = await api(`/api/search?${params}`);
+    const groups = await api(withIga(`/api/search?${params}`));
     if (seq !== searchSeq) return;
     if (!groups.length) {
       box.innerHTML = '<div class="empty">No matching products.</div>';
       return;
     }
     box.style.setProperty('--store-cols', state.stores.length);
-    box.innerHTML = `<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${dot(s)} ${esc(storeName(s))}</span>`).join('')}<span></span></div>`
+    box.innerHTML = `<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${dot(s)} ${esc(storeName(s))}${s === 'iga' ? `<button type="button" class="linkish col-sub" data-change-iga>${esc(igaShortName(state.config.igaStore))} ▾</button>` : ''}</span>`).join('')}<span></span></div>`
       + groups.map(renderGroup).join('');
   } catch (e) {
     box.innerHTML = `<div class="empty">Search failed: ${esc(e.message)}</div>`;
@@ -390,7 +573,7 @@ async function openProduct(id) {
   const box = $('#product-detail');
   box.innerHTML = '<p class="hint">Loading…</p>';
   if (!dlg.open) dlg.showModal();
-  const d = await api(`/api/products/${id}`);
+  const d = await api(withIga(`/api/products/${id}`));
   const p = d.product;
   const s = d.stats;
   box.innerHTML = `
@@ -601,8 +784,11 @@ function renderStorePanel(L) {
 }
 
 function storeToggle(s, on, note) {
+  const ig = s === 'iga' ? state.list?.igaStore : null;
   return `<label class="store-card ${on ? 'on' : 'off'}">
     <span class="store-card-head"><input type="checkbox" data-store-toggle="${s}" ${on ? 'checked' : ''}> ${dot(s)} <strong>${esc(storeName(s))}</strong></span>
+    ${s === 'iga' ? `<span class="store-note">${ig ? `${esc(ig.name)}${ig.pricesReady ? '' : ' · <span class="state pending">fetching prices…</span>'}` : 'No store chosen'}
+      · <button type="button" class="linkish" data-list-iga>change</button></span>` : ''}
     ${note ? `<span class="store-note">${note}</span>` : ''}
   </label>`;
 }
@@ -701,6 +887,20 @@ $('#list-root').addEventListener('change', async (e) => {
 
 $('#list-root').addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.closest('[data-list-iga]')) {
+    // The button sits inside the shop's <label>; don't let it toggle the shop.
+    e.preventDefault();
+    const store = await pickIgaStore({ title: `IGA store for “${state.list.name}”`, currentId: state.list.igaStore?.id });
+    if (!store) return;
+    try {
+      await api(`/api/lists/${state.listId}`, { method: 'PATCH', body: { igaStore: store.id } });
+      toast(`${state.list.name} now uses ${store.name}`);
+      loadList();
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
   try {
     if (t.matches('[data-remove]')) {
       await api(`/api/items/${t.closest('[data-item]').dataset.item}`, { method: 'DELETE' });
@@ -896,17 +1096,30 @@ async function loadAdmin() {
         <div class="note">products · ${status}</div>
         <p><button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button></p></div>`;
     }).join('')}</div>
+    <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed — prices are collected only for stores people have picked</span></h2>
+    <div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
+      ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
+        <td>${fmtDate(t.added_at)}</td>
+        <td>${o.iga.queue.current === t.store_id ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
+        <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
+    </tbody></table></div>
     <h2 class="section">Users <span class="hint">${o.users} accounts · ${o.lists} lists</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Joined</th><th class="num">Lists</th><th>Admin</th></tr></thead><tbody>
       ${users.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${fmtDate(u.created_at)}</td><td class="num">${u.lists}</td>
         <td><input type="checkbox" data-admin-user="${u.id}" ${u.is_admin ? 'checked' : ''} ${u.id === user().id ? 'disabled' : ''} aria-label="Admin"></td></tr>`).join('')}
     </tbody></table></div>`;
   clearTimeout(adminTimer);
-  if (o.stores.some((s) => s.status.running) && currentTab() === 'admin') adminTimer = setTimeout(loadAdmin, 3000);
+  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current;
+  if (busy && currentTab() === 'admin') adminTimer = setTimeout(loadAdmin, 3000);
 }
 
 $('#admin-root').addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.dataset.untrackIga) {
+    if (!confirm('Stop collecting prices for this IGA store? People who picked it will see no IGA prices until it’s picked again.')) return;
+    await api(`/api/admin/iga/${encodeURIComponent(t.dataset.untrackIga)}`, { method: 'DELETE' });
+    return loadAdmin();
+  }
   const stores = t.id === 'scrape-all' ? state.allStores : t.dataset.scrape ? [t.dataset.scrape] : null;
   if (!stores) return;
   await api('/api/admin/scrape', { method: 'POST', body: { stores } });
@@ -936,3 +1149,4 @@ api('/api/stats').then((s) => {
 if (user()) refreshListCount().catch(() => {});
 await route();
 runSearch();
+watchIgaPrices();

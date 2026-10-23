@@ -11,6 +11,7 @@ import {
   sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
 } from './auth.js';
 import * as lists from './lists.js';
+import * as iga from './iga.js';
 import { scrapeAll, scrapeStatus } from './scrapers/index.js';
 import { startOrder, orderStatus } from './order/index.js';
 
@@ -18,6 +19,13 @@ const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
 // Filling trolleys drives a browser on the *server* machine, so it only makes
 // sense when you run the app on your own computer.
 const TROLLEY_FILL = process.env.ENABLE_TROLLEY_FILL === 'true';
+
+/** The IGA store to price things at: the user's choice, else ?iga= (visitors), else the site default. */
+function igaFor(req) {
+  if (req.user?.igaStoreId) return req.user.igaStoreId;
+  const q = String(req.query.iga || '');
+  return /^\d{1,10}$/.test(q) ? q : iga.defaultStoreId();
+}
 
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 const id = (v) => {
@@ -71,12 +79,16 @@ export function createApp() {
 
   // ------------------------------------------------------------ public
 
-  app.get('/api/config', h((req) => ({
+  app.get('/api/config', h(async (req) => {
+    await iga.ensureDirectory().catch(() => {}); // store names; harmless if IGA is unreachable
+    return {
     user: req.user || null,
     stores: STORES.map((s) => ({ id: s, ...STORE_INFO[s] })),
     allowSignups: ALLOW_SIGNUPS,
     trolleyFill: TROLLEY_FILL && !!req.user?.isAdmin,
-  })));
+    igaStore: iga.getStore(igaFor(req)) || { id: igaFor(req), name: 'IGA', pricesReady: false },
+    };
+  }));
 
   app.get('/api/stats', h(() => {
     const d = getDb();
@@ -86,7 +98,7 @@ export function createApp() {
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
         updatedAt: d.prepare("SELECT MAX(finished_at) t FROM scrape_runs WHERE store = ? AND status = 'ok'").get(s).t,
       })),
-      demo: !!d.prepare("SELECT 1 FROM products WHERE store_product_id LIKE 'demo-%' LIMIT 1").get(),
+      demo: !!d.prepare("SELECT 1 FROM products WHERE store_product_id LIKE '%demo-%' LIMIT 1").get(),
     };
   }));
 
@@ -96,6 +108,7 @@ export function createApp() {
     return compareSearch(String(q).slice(0, 100), {
       store,
       stores: req.user?.preferredStores,
+      igaStore: igaFor(req),
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
       limit: Math.min(Number(req.query.limit) || 30, 60),
@@ -104,7 +117,7 @@ export function createApp() {
   }));
 
   app.get('/api/products/:id', h((req) => {
-    const out = productDetail(id(req.params.id), req.user?.preferredStores);
+    const out = productDetail(id(req.params.id), req.user?.preferredStores, igaFor(req));
     if (!out) throw bad('Not found', 404);
     return out;
   }));
@@ -121,16 +134,45 @@ export function createApp() {
       ORDER BY ABS(h.price - old_price) / old_price DESC LIMIT 100`).all(`-${days} days`);
   }));
 
+  // ------------------------------------------------------------ IGA store picker
+
+  const igaLimit = rateLimit({ windowMs: 60000, max: 60 });
+  app.get('/api/iga/stores', igaLimit, h(async (req) => iga.searchStores({
+    q: String(req.query.q || '').slice(0, 60),
+    lat: req.query.lat != null ? Number(req.query.lat) : undefined,
+    lng: req.query.lng != null ? Number(req.query.lng) : undefined,
+  })));
+
+  app.get('/api/iga/stores/:storeId', h((req) => {
+    const store = iga.getStore(req.params.storeId);
+    if (!store) throw bad('Unknown IGA store', 404);
+    return store;
+  }));
+
+  // Choose an IGA store: starts collecting its prices if nobody has picked it before.
+  // Logged-in users have it saved (optionally to their own lists too); visitors keep it in their browser.
+  app.post('/api/iga/stores/:storeId/use', igaLimit, h(async (req) => {
+    const store = await iga.useStore(req.params.storeId, req.user?.id);
+    if (req.user) {
+      updateProfile(req.user.id, { igaStore: store.id });
+      if (req.body?.applyToLists) lists.applyPreferredToOwnedLists(req.user.id, null, store.id);
+    }
+    return store;
+  }));
+
   // ------------------------------------------------------------ accounts
 
   const authLimit = rateLimit({ windowMs: 15 * 60000, max: 20 });
 
   app.post('/api/auth/signup', authLimit, h(async (req, res) => {
     if (!ALLOW_SIGNUPS) throw bad('Sign-ups are closed', 403);
-    const { email, name, password, preferredStores } = req.body || {};
+    const { email, name, password, preferredStores, igaStore } = req.body || {};
+    // Check the IGA choice before creating anything.
+    if (igaStore) await iga.useStore(igaStore);
     let user = await createUser({ email, name, password });
     if (Array.isArray(preferredStores) && preferredStores.length) user = updateProfile(user.id, { preferredStores });
-    lists.createList(user.id, 'My list', user.preferredStores);
+    if (igaStore) user = updateProfile(user.id, { igaStore });
+    lists.createList(user.id, 'My list', user.preferredStores, user.igaStoreId);
     startSession(res, user.id);
     return { user };
   }));
@@ -166,12 +208,17 @@ export function createApp() {
   // ------------------------------------------------------------ lists (logged in)
 
   app.get('/api/lists', requireUser, h((req) => lists.listsForUser(req.user.id)));
-  app.post('/api/lists', requireUser, h((req) => lists.createList(req.user.id, req.body?.name, req.user.preferredStores)));
+  app.post('/api/lists', requireUser, h((req) => lists.createList(req.user.id, req.body?.name, req.user.preferredStores, req.user.igaStoreId)));
   app.get('/api/lists/:id', requireUser, h((req) => lists.listView(id(req.params.id), req.user.id)));
 
-  app.patch('/api/lists/:id', requireUser, h((req) => {
+  app.patch('/api/lists/:id', requireUser, h(async (req) => {
     const listId = id(req.params.id);
-    const { name, excludedStores } = req.body || {};
+    const { name, excludedStores, igaStore } = req.body || {};
+    if (igaStore != null) {
+      lists.requireMember(listId, req.user.id);
+      await iga.useStore(igaStore, req.user.id);
+      lists.setListIgaStore(listId, req.user.id, igaStore);
+    }
     if (name != null) lists.renameList(listId, req.user.id, name);
     if (excludedStores != null) lists.setExcludedStores(listId, req.user.id, excludedStores);
   }));
@@ -213,6 +260,11 @@ export function createApp() {
         status: scrapeStatus[s],
         runs: d.prepare('SELECT * FROM scrape_runs WHERE store = ? ORDER BY id DESC LIMIT 5').all(s),
       })),
+      iga: {
+        tracked: iga.trackedStores(),
+        queue: iga.queueStatus(),
+        defaultStoreId: iga.defaultStoreId(),
+      },
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
       scrapeCron: process.env.SCRAPE_CRON ?? '15 4 * * *',
@@ -225,6 +277,8 @@ export function createApp() {
     scrapeAll(stores).catch(() => {});
     return { started: stores };
   }));
+
+  app.delete('/api/admin/iga/:storeId', requireAdmin, h((req) => iga.untrack(req.params.storeId)));
 
   app.get('/api/admin/users', requireAdmin, h(() => getDb().prepare(`
     SELECT u.id, u.email, u.name, u.is_admin, u.created_at,

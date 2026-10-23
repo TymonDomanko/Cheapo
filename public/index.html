@@ -42,6 +42,7 @@
         <label class="check"><input id="specials" type="checkbox"> Specials only</label>
       </form>
       <p class="hint">Products count as the same item when the pack size matches exactly and the name is similar, ignoring brand. Click a product to see its price history.</p>
+      <p id="iga-notice" class="notice" role="status" hidden></p>
       <div id="results" class="results"></div>
       <p class="hint" id="updated-hint"></p>
     </section>
@@ -161,6 +162,18 @@
   <dialog id="order-dialog">
     <form method="dialog"><button class="close" aria-label="Close">×</button></form>
     <div id="order-detail"></div>
+  </dialog>
+
+  <dialog id="iga-dialog" class="narrow">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <h2 id="iga-title">Choose your IGA</h2>
+    <p class="hint">Every IGA is independently owned and sets its own prices, so we compare the one you shop at.</p>
+    <div class="iga-search">
+      <input id="iga-q" type="search" placeholder="Suburb, postcode or store name" autocomplete="off" aria-label="Find an IGA">
+      <button type="button" id="iga-locate" class="small">📍 Near me</button>
+    </div>
+    <p id="iga-msg" class="hint" role="status"></p>
+    <ul id="iga-results" class="iga-results"></ul>
   </dialog>
 
   <dialog id="share-dialog">
