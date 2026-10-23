@@ -225,6 +225,12 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
 
+**When something goes wrong, admins hear about it.** Every admin is emailed when:
+- a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
+- the home collector hasn't sent prices for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).
+
+Each problem is emailed once, then at most daily while it lasts, and there's an "all good again" email when it's fixed. Open problems also show at the top of **Admin → Data health**, alongside how fresh each shop's data is and how much of it can be compared. These emails need email set up (above). Turn them off with `ADMIN_ALERTS=false`.
+
 ## Disk space
 
 The configs above create a **3 GB** disk. Most of the space goes on IGA, because each IGA store people pick keeps its own prices:

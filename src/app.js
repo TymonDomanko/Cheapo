@@ -272,11 +272,14 @@ export function createApp() {
       ...l,
       items: d.prepare(`SELECT p.store, p.name, p.size_text, i.note, i.quantity, i.match_mode, i.added_at FROM list_items i
         LEFT JOIN products p ON p.id = i.product_id WHERE i.list_id = ?`).all(l.id),
+      shops: d.prepare(`SELECT name, kind, items_json, spent, spent_json, created_at FROM list_snapshots WHERE list_id = ?`).all(l.id)
+        .map((x) => ({ ...x, items: JSON.parse(x.items_json), spentDetail: x.spent_json ? JSON.parse(x.spent_json) : null, items_json: undefined, spent_json: undefined })),
     }));
     const watches = d.prepare(`SELECT p.store, p.name, p.size_text, w.target_price, w.created_at FROM watches w
       JOIN products p ON p.id = w.product_id WHERE w.user_id = ?`).all(req.user.id);
     res.set('Content-Disposition', 'attachment; filename="my-grocery-data.json"');
-    return { exportedAt: new Date().toISOString(), account: u, lists: myLists, watches };
+    const ticks = d.prepare('SELECT store, aisle, at FROM tick_log WHERE user_id = ? ORDER BY at').all(req.user.id);
+    return { exportedAt: new Date().toISOString(), account: u, lists: myLists, watches, shopTicks: ticks };
   }));
 
   app.post('/api/me/password', requireUser, authLimit, h(async (req) => {

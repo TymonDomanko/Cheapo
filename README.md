@@ -12,17 +12,21 @@ A grocery price comparison site for Australian supermarkets: **Woolworths, Coles
   - A shop you've excluded says what it's **costing you** (how much including it would save).
 - **Order the cheapest.** Splits your list so each item comes from its cheapest shop. You get a per-shop list with product links, plus copy and print buttons. Totals are compared with buying everything at one shop.
 - **Price history.** Each product has a step chart of its price over time, alongside the matching products at the other shops. A "Price changes" tab lists the biggest recent rises and drops.
+- **Is this a good price?** Products and list items say when today's price is the lowest in months, or when something regularly goes on special ("about every 6 weeks, next one likely in ~2 weeks") so you can wait.
 - **Barcode matching.** Woolworths and Coles products are matched exactly by barcode, which catches products whose names differ. Anyone can press **Wrong match?**; an admin confirms it and the fix applies for everyone.
 - **Deals that change the maths.** Multi-buys ("5 for $9") and Everyday Rewards member prices are counted. Each shopper ticks their memberships in Settings, and list totals work out the real cost of the quantity you need.
 - **Better-value sizes.** If the same item in another pack size is at least 10% cheaper per kg, litre or item, you see a hint ("3L is 18% cheaper per litre").
 - **Alerts.** Watch any product for a target price or any drop. There's also a Wednesday email of what's on special from your lists.
-- **In the shop.** Tick things off on your phone, grouped by shop and section. Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Anything on the list.** Add products, or plain notes like "birthday card". **Paste a list** ("milk, bread, 2 x chips") and confirm what each line matches.
+- **In the shop.** A checklist per shop, sorted by section in the order you walk the store. It learns your own shop's layout from the order you tick things off. Tap to cross items out, or **scan a barcode** to tick it (or to see what it costs elsewhere). Ticks sync to everyone on a shared list and work offline (the site can be installed as an app). **Finish shop** saves what you bought so you can repeat it, and you can save regular shops to add in one go.
+- **Spending.** Each finished shop records what it cost and how much splitting it across shops saved, with a monthly chart.
 - **Home collector, one click.** For stores that block cloud servers, the Admin page has download buttons for the home collector. Each download is already set up for your site.
   - On Windows and Linux (including a Raspberry Pi), it's a single program to run, with nothing to install.
   - On a Mac, it's a zip that runs with Node.js.
   - It updates itself, and the Admin page shows whether it's connected and current.
 - **Accounts done properly.** Email confirmation, password reset, a privacy page, and data export and deletion in Settings.
-- **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button.
+- **Admin page.** Only admins can trigger a price refresh, see scrape status and errors, and manage who else is an admin. The public site has no refresh button. A **data health** panel shows how fresh and comparable each shop's data is.
+- **Problems come to you.** Admins are emailed when a refresh fails or finds far fewer products than usual, when the home collector goes quiet, and again when things recover.
 
 ## Run it on your computer
 

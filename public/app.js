@@ -422,12 +422,14 @@ function renderPrivacy() {
     <h2>Privacy</h2>
     <p>${esc(site.name)}${site.operator ? ` is run by ${esc(site.operator)}` : ''}. It compares supermarket prices and keeps shopping lists. Here’s exactly what it stores and why.</p>
     <h3>If you just browse</h3>
-    <p>Nothing about you is stored on the server. Your browser keeps your chosen IGA store and last-opened list (in its own storage) so the site remembers them. There are no ads, no trackers, and no analytics.</p>
+    <p>Nothing about you is stored on the server. Your browser keeps your chosen IGA store and last-opened list (in its own storage) so the site remembers them. There are no ads, no trackers, and no analytics. If you scan a barcode, the camera picture stays on your phone; only the barcode number is sent, to look up the product.</p>
     <h3>If you create an account</h3>
     <ul>
       <li><strong>Your name and email</strong> — to log you in, and to email you only what you ask for: confirming your address, password resets, and the alerts you turn on.</li>
       <li><strong>Your password</strong> — stored only as a one-way scrypt hash; nobody can read it.</li>
       <li><strong>Your lists, settings and price watches</strong> — to provide the service. Shared lists are visible to everyone you invite.</li>
+      <li><strong>Your finished shops</strong> — what you bought and what it cost, for your saved shops and spending page. Everyone on a shared list sees its shops.</li>
+      <li><strong>The order you tick things off in each shop</strong> (which shop, which section, when — not where you are) — only to sort your checklist the way you walk that shop. Kept for 6 months; you can reset it from the checklist.</li>
       <li><strong>A login cookie</strong> — a random token so you stay logged in (30 days). It’s the only cookie we set.</li>
     </ul>
     <h3>Emails</h3>
