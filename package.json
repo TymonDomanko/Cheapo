@@ -1,0 +1,33 @@
+{
+  "name": "supermarket-tools",
+  "version": "0.1.0",
+  "description": "Self-hosted price comparison, shopping list and price tracking for Woolworths, Coles and ALDI (Australia).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "scrape": "node src/cli/scrape.js",
+    "seed:demo": "node src/cli/seed-demo.js",
+    "admin": "node src/cli/admin.js",
+    "collect": "node src/cli/collect.js",
+    "capture": "node src/cli/capture.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "chart.js": "^4.4.4",
+    "express": "^4.21.0",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^10.2.1",
+    "postject": "1.0.0-alpha.6",
+    "undici": "^6.19.8"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.47.2"
+  },
+  "license": "MIT"
+}
