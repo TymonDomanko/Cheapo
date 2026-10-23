@@ -447,3 +447,82 @@ test('tick off in the shop, finish, repeat a past shop', async () => {
   v = (await api('GET', `/api/lists/${list.id}`)).body;
   assert.equal(v.items.find((i) => i.anchor.id === milk).quantity, 2);
 });
+
+test('admin settings: saved in the database, .env wins, secrets never shown', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const user = client();
+  await user('POST', '/api/auth/login', { email: 'pat@example.com', password: 'password123' });
+  assert.equal((await user('GET', '/api/admin/settings')).status, 403);
+
+  // Email: fields in, URL stored, password never returned.
+  let r = await admin('PUT', '/api/admin/settings', {
+    smtp: { host: 'smtp.example.com', port: 465, secure: true, user: 'me@example.com', password: 's3cr3t pass' },
+    MAIL_FROM: 'Groceries <alerts@example.com>',
+    SITE_URL: 'https://groceries.example.com/some/path',
+    CONTACT_EMAIL: 'privacy@example.com',
+  });
+  assert.equal(r.status, 200);
+  const s = r.body.settings;
+  assert.deepEqual(s.SMTP_URL.parts, { host: 'smtp.example.com', port: 465, secure: true, user: 'me@example.com', passwordSet: true });
+  assert.equal(s.SMTP_URL.value, null, 'secret not sent back');
+  assert.ok(!JSON.stringify(r.body).includes('s3cr3t'));
+  assert.equal(s.SITE_URL.value, 'https://groceries.example.com', 'trimmed to the site’s origin');
+  assert.equal((await client()('GET', '/api/config')).body.site.contact, 'privacy@example.com', 'privacy page uses it');
+  assert.equal((await client()('GET', '/api/config')).body.site.emailEnabled, true);
+
+  // Changing the port with a blank password keeps the saved password.
+  r = await admin('PUT', '/api/admin/settings', { smtp: { host: 'smtp.example.com', port: 587, secure: false, user: 'me@example.com', password: '' } });
+  assert.equal(r.body.settings.SMTP_URL.parts.passwordSet, true);
+  const { getSetting } = await import('../src/settings.js');
+  assert.equal(getSetting('SMTP_URL'), 'smtp://me%40example.com:s3cr3t%20pass@smtp.example.com:587');
+
+  // Bad values are refused and nothing is saved.
+  r = await admin('PUT', '/api/admin/settings', { CONTACT_EMAIL: 'nope', MAIL_FROM: 'Groceries <ok@example.com>' });
+  assert.equal(r.status, 400);
+  assert.equal(getSetting('CONTACT_EMAIL'), 'privacy@example.com');
+
+  // Test email goes to the admin.
+  const { capturedMail } = await import('../src/mailer.js');
+  r = await admin('POST', '/api/admin/settings/test-email');
+  assert.equal(r.body.to, 'admin@example.com');
+  assert.equal(capturedMail.at(-1).kind, 'test');
+
+  // .env wins and locks the setting.
+  process.env.SITE_OPERATOR = 'From env';
+  r = await admin('GET', '/api/admin/settings');
+  assert.equal(r.body.settings.SITE_OPERATOR.source, 'env');
+  assert.equal((await admin('PUT', '/api/admin/settings', { SITE_OPERATOR: 'Me' })).status, 409);
+  delete process.env.SITE_OPERATOR;
+
+  // Clearing email turns sending off again.
+  await admin('PUT', '/api/admin/settings', { smtp: null });
+  assert.equal((await client()('GET', '/api/config')).body.site.emailEnabled, false);
+});
+
+test('admin settings: collector token and which stores the server crawls', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const saved = process.env.COLLECTOR_TOKEN;
+  delete process.env.COLLECTOR_TOKEN; // as if not in .env
+  const { token } = (await admin('POST', '/api/admin/settings/collector-token')).body;
+  assert.ok(token.length >= 24);
+  const post = (t) => fetch(base + '/api/ingest/runs', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` }, body: JSON.stringify({ store: 'aldi' }),
+  });
+  assert.equal((await post(token)).status, 200, 'generated token works for the collector');
+  const s = (await admin('GET', '/api/admin/settings')).body.settings;
+  assert.equal(s.COLLECTOR_TOKEN.value, null, 'token not shown again');
+  assert.equal(s.COLLECTOR_TOKEN.set, true);
+  await admin('DELETE', '/api/admin/settings/collector-token');
+  assert.equal((await post(token)).status, 401, 'revoked');
+
+  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['coles', 'iga', 'harrisfarm'] });
+  const { serverStores } = await import('../src/scrapers/index.js');
+  assert.deepEqual(serverStores(), ['coles', 'iga', 'harrisfarm']);
+  const o = (await admin('GET', '/api/admin/overview')).body;
+  assert.equal(o.stores.find((x) => x.store === 'woolworths').fedByCollector, true);
+  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['woolworths', 'coles', 'aldi', 'iga', 'harrisfarm'] });
+  assert.equal(serverStores().length, 5);
+  if (saved) process.env.COLLECTOR_TOKEN = saved;
+});

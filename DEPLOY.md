@@ -118,7 +118,16 @@ Platforms without persistent disks, such as Vercel, Netlify and Heroku, would ne
 
 ## Email (password resets, confirmation, alerts)
 
-Set `SMTP_URL` to any email provider's SMTP address, plus `MAIL_FROM` and `SITE_URL` (the public address used in links):
+The app writes and sends its own emails. It needs an email service's SMTP details to deliver them; Resend, Postmark, Amazon SES, Mailgun and Brevo all provide them, and most free tiers cover a household-sized site.
+
+**Easiest:** on the Admin page, under **Site settings → Email**, enter:
+- the mail server, port, username and password;
+- the "from" address;
+- the site's address, used for links in emails.
+
+Then press **Send test email**. If it fails, the page says why, e.g. a wrong password or a mismatched port and secure setting.
+
+**Or in `.env`**, which takes priority over the Admin page and keeps the password out of the database and its backups:
 
 ```
 SMTP_URL=smtps://USERNAME:PASSWORD@smtp.example.com:465
@@ -126,9 +135,7 @@ MAIL_FROM=Grocery Price Compare <alerts@groceries.example.com>
 SITE_URL=https://groceries.example.com
 ```
 
-Resend, Postmark, Amazon SES, Mailgun and Brevo all give you an SMTP address. Most free tiers cover a household-sized site.
-
-Without `SMTP_URL`, nothing is sent. Emails appear in the Admin page's **Emails** section instead, so you can pass a reset link on to someone by hand.
+Without a mail server, nothing is sent. Emails appear in the Admin page's **Emails** section instead, so you can pass a reset link on to someone by hand.
 
 What gets sent:
 - confirmation of new accounts' emails;
@@ -152,7 +159,7 @@ LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
 ```
 
-Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers. The Admin page shows whether off-site backup is on.
+Litestream starts before the app, so it can restore the database onto a new server, which means these settings can only go in `.env`. The Admin page shows whether it's on and where it copies to. Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers. The Admin page shows whether off-site backup is on.
 
 **To restore onto a new server:** start the container with the same `LITESTREAM_*` settings and an empty `/data`.
 
@@ -160,7 +167,7 @@ Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free
 
 Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site:
 
-1. **On the server:** set a long random `COLLECTOR_TOKEN`, and `SERVER_SCRAPE_STORES=coles,iga,harrisfarm` so the server stops trying the blocked stores itself.
+1. **On the server:** go to Admin → **Site settings → Home collector**. Press **Generate token** and copy it. Then untick Woolworths and ALDI under "This server crawls" and save. (Or set `COLLECTOR_TOKEN` and `SERVER_SCRAPE_STORES=coles,iga,harrisfarm` in `.env`.)
 2. **On any always-on machine at home** (a PC, a NAS, a Raspberry Pi), use [`deploy/collector/`](deploy/collector):
    ```bash
    cp .env.example .env    # set COLLECTOR_SERVER (your site) and the same COLLECTOR_TOKEN
@@ -203,7 +210,7 @@ Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI someti
 - [ ] `ADMIN_EMAILS` is set, and you've signed up with that email.
 - [ ] Remove the demo data if you loaded it: `docker compose exec app node src/cli/seed-demo.js --clear`.
 - [ ] Decide on sign-ups. `ALLOW_SIGNUPS=false` keeps the site to people who already have an account.
-- [ ] Email is set up (`SMTP_URL`, `MAIL_FROM`, `SITE_URL`), or you're happy to hand out reset links from the admin outbox.
+- [ ] Email is set up (Admin → Site settings, or `.env`) and the test email arrives. Or you're happy to hand out reset links from the admin outbox.
 - [ ] Off-site backup is on (`LITESTREAM_*`). The Admin page says so.
-- [ ] `CONTACT_EMAIL` (and `SITE_OPERATOR`) are set for the privacy page.
+- [ ] The privacy page's contact email and "run by" name are filled in (Admin → Site settings).
 - [ ] Read each supermarket's terms of use. Republishing scraped prices publicly is a legal grey area.

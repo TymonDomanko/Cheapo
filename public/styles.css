@@ -316,3 +316,8 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .prose { max-width: 720px; margin: 0 auto; line-height: 1.6; }
 .prose h3 { margin: 18px 0 4px; }
 .prose ul { padding-left: 20px; }
+
+/* Admin site settings */
+.env-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; font-weight: 600; vertical-align: 1px; }
+.two-col { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: end; }
+.stack .copy-row input { flex: 1; }

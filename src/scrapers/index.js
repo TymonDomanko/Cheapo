@@ -5,6 +5,7 @@ import * as iga from './iga.js';
 import * as harrisfarm from './harrisfarm.js';
 import { getDb, upsertProducts, markUnseenUnavailable, nowIso } from '../db.js';
 import * as igaStores from '../iga.js';
+import { getSetting } from '../settings.js';
 
 export const SCRAPERS = { woolworths, coles, aldi, iga, harrisfarm };
 
@@ -104,7 +105,7 @@ export async function scrapeStore(storeName, opts = {}) {
  * they block cloud servers) can be left out with SERVER_SCRAPE_STORES.
  */
 export function serverStores() {
-  const list = (process.env.SERVER_SCRAPE_STORES || '').split(',').map((x) => x.trim()).filter((x) => SCRAPERS[x]);
+  const list = (getSetting('SERVER_SCRAPE_STORES') || '').split(',').map((x) => x.trim()).filter((x) => SCRAPERS[x]);
   return list.length ? list : Object.keys(SCRAPERS);
 }
 

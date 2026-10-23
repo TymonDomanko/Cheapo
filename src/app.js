@@ -13,8 +13,10 @@ import {
 } from './auth.js';
 import * as lists from './lists.js';
 import * as iga from './iga.js';
-import { siteUrl, mailConfigured, siteName } from './mailer.js';
+import { siteUrl, mailConfigured, siteName, sendMail, emailHtml } from './mailer.js';
 import * as backup from './backup.js';
+import * as settings from './settings.js';
+import { getSetting } from './settings.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
 import { backfillColesBarcodes, barcodeStatus, colesBarcodeProgress } from './barcodes.js';
@@ -101,8 +103,8 @@ export function createApp() {
     memberships: MEMBERSHIPS,
     site: {
       name: siteName(),
-      contact: process.env.CONTACT_EMAIL || null,
-      operator: process.env.SITE_OPERATOR || null,
+      contact: getSetting('CONTACT_EMAIL'),
+      operator: getSetting('SITE_OPERATOR'),
       emailEnabled: mailConfigured(),
     },
     };
@@ -361,7 +363,7 @@ export function createApp() {
   // home connection by `npm run collect`, which sends the products here.
 
   function requireCollector(req, res, next) {
-    const want = process.env.COLLECTOR_TOKEN;
+    const want = getSetting('COLLECTOR_TOKEN');
     const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     const ok = want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
     if (!ok) return res.status(401).json({ error: want ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
@@ -412,7 +414,7 @@ export function createApp() {
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
       scrapeCron: process.env.SCRAPE_CRON ?? '15 4 * * *',
-      collectorEnabled: !!process.env.COLLECTOR_TOKEN,
+      collectorEnabled: !!getSetting('COLLECTOR_TOKEN'),
       barcodes: { ...colesBarcodeProgress(), status: barcodeStatus },
       openMatchReports: getDb().prepare("SELECT COUNT(*) n FROM match_reports WHERE status = 'open'").get().n,
     };
@@ -423,6 +425,67 @@ export function createApp() {
     const stores = wanted.filter((s) => !scrapeStatus[s].running);
     scrapeAll(stores).catch(() => {});
     return { started: stores };
+  }));
+
+  // Site settings (email, site details, home collector). .env values win and can't be changed here.
+  app.get('/api/admin/settings', requireAdmin, h((req) => ({
+    settings: settings.describeSettings(),
+    stores: STORES,
+    currentAddress: `${req.protocol}://${req.get('host')}`,
+    litestream: backup.litestreamInfo(),
+  })));
+
+  app.put('/api/admin/settings', requireAdmin, h((req) => {
+    const body = req.body || {};
+    // Apply everything or nothing: check each value first.
+    const updates = [];
+    if (body.smtp !== undefined) updates.push(['SMTP_URL', body.smtp === null ? null : settings.smtpUrlFrom(body.smtp)]);
+    for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
+      if (body[key] !== undefined) updates.push([key, body[key]]);
+    }
+    if (body.SERVER_SCRAPE_STORES !== undefined) {
+      const list = Array.isArray(body.SERVER_SCRAPE_STORES) ? body.SERVER_SCRAPE_STORES : null;
+      // Every store ticked = the default (crawl everything), so store nothing.
+      updates.push(['SERVER_SCRAPE_STORES', !list || list.length === STORES.length ? null : list.join(',')]);
+    }
+    for (const [key] of updates) {
+      if (settings.settingSource(key) === 'env') throw bad(`${key} is set in the server’s .env file — change it there`, 409);
+    }
+    for (const [key, value] of updates) settings.setSetting(key, value);
+    return { settings: settings.describeSettings() };
+  }));
+
+  // A new collector token, shown in full once so it can be copied to the home collector.
+  app.post('/api/admin/settings/collector-token', requireAdmin, h(() => {
+    const token = settings.newCollectorToken();
+    settings.setSetting('COLLECTOR_TOKEN', token);
+    return { token };
+  }));
+  app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
+
+  app.post('/api/admin/settings/test-email', requireAdmin, h(async (req) => {
+    if (!mailConfigured()) throw bad('Set up a mail server first');
+    const to = req.user.email;
+    try {
+      await sendMail({
+        to,
+        kind: 'test',
+        subject: `Test email from ${siteName()}`,
+        text: `It works! ${siteName()} can send email.\n\nLinks in emails will point to ${siteUrl(req)}.`,
+        html: emailHtml({ heading: 'It works!', paragraphs: [`${siteName()} can send email.`, `Links in emails will point to ${siteUrl(req)}.`] }),
+      });
+    } catch (e) {
+      // Turn the usual connection problems into something actionable.
+      const hint = {
+        ENOTFOUND: 'Couldn’t find that mail server — check the host name.',
+        EAUTH: 'The mail server rejected the username or password.',
+        ECONNREFUSED: 'The mail server refused the connection — check the port.',
+        ETIMEDOUT: 'The mail server didn’t answer — check the port and the secure setting (465 = secure, 587 = not).',
+        ESOCKET: 'Couldn’t talk to the mail server — usually the secure setting doesn’t match the port (465 = secure, 587 = not).',
+      }[e.code] || '';
+      throw bad(`${hint} The mail server said: ${e.message}`.trim(), 422);
+    }
+    return { to };
   }));
 
   app.post('/api/admin/barcodes', requireAdmin, h(() => {

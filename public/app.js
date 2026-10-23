@@ -1559,14 +1559,17 @@ async function loadAdmin() {
 
     <h2 class="section">Home collector</h2>
     <p class="hint">${o.collectorEnabled
-      ? 'This server accepts prices from a home collector (COLLECTOR_TOKEN is set). Stores marked “Collected from home” above come from it.'
-      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, run the home collector — see DEPLOY.md.'}</p>
+      ? 'This server accepts prices from a home collector. Stores marked “Collected from home” above come from it.'
+      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, set up the home collector in <a href="#site-settings">Site settings</a> below.'}</p>
 
     <h2 class="section">Backups</h2>
     <div id="admin-backups"><p class="hint">Loading…</p></div>
 
     <h2 class="section">Emails</h2>
     <div id="admin-emails"><p class="hint">Loading…</p></div>
+
+    <h2 class="section" id="site-settings">Site settings</h2>
+    <div id="admin-settings"><p class="hint">Loading…</p></div>
 
     <h2 class="section">Users <span class="hint">${plural(o.users, 'account')} · ${plural(o.lists, 'list')}</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Joined</th><th class="num">Lists</th><th>Admin</th></tr></thead><tbody>
@@ -1575,9 +1578,149 @@ async function loadAdmin() {
     </tbody></table></div>`;
   clearTimeout(adminTimer);
   loadAdminExtras();
+  loadAdminSettings();
   const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running || o.barcodes.status.running;
-  if (busy && currentTab() === 'admin') adminTimer = setTimeout(loadAdmin, 3000);
+  if (busy && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
 }
+
+/** Live progress refresh, but never while someone is typing in a settings form. */
+function refreshAdminWhenIdle() {
+  const editing = document.activeElement?.closest?.('#admin-root form')
+    || [...$$('#admin-root form input')].some((i) => i.type === 'password' ? i.value : false);
+  if (editing) adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
+  else loadAdmin();
+}
+
+// ------------------------------------------------------------------ site settings
+// Values in the server's .env file win; those fields are shown locked.
+
+async function loadAdminSettings(justMadeToken = null) {
+  const { settings: st, stores, currentAddress, litestream } = await api('/api/admin/settings');
+  const locked = (key) => st[key].source === 'env';
+  const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
+  const dis = (key) => (locked(key) ? 'disabled' : '');
+  const smtp = st.SMTP_URL.parts || { host: '', port: 465, secure: true, user: '', passwordSet: false };
+  const crawled = (st.SERVER_SCRAPE_STORES.value || stores.join(',')).split(',');
+  $('#admin-settings').innerHTML = `
+    <div class="settings-grid">
+      <form id="email-settings" class="card stack">
+        <h3>Email${envTag('SMTP_URL')}</h3>
+        <p class="hint">For password resets, email confirmation and alerts. Use the SMTP details from any email service (Resend, Postmark, Brevo, Mailgun, Amazon SES…).</p>
+        <label>Mail server (SMTP host)<input name="host" placeholder="smtp.resend.com" value="${esc(smtp.host)}" ${dis('SMTP_URL')}></label>
+        <div class="two-col">
+          <label>Port<input name="port" type="number" min="1" max="65535" value="${esc(smtp.port)}" ${dis('SMTP_URL')}></label>
+          <label class="check"><input type="checkbox" name="secure" ${smtp.secure ? 'checked' : ''} ${dis('SMTP_URL')}> Secure connection (SSL/TLS)</label>
+        </div>
+        <label>Username<input name="user" autocomplete="off" value="${esc(smtp.user)}" ${dis('SMTP_URL')}></label>
+        <label>Password${smtp.passwordSet ? ' <span class="hint">saved — leave blank to keep it</span>' : ''}
+          <input name="password" type="password" autocomplete="new-password" placeholder="${smtp.passwordSet ? '••••••••' : ''}" ${dis('SMTP_URL')}></label>
+        <label>Send emails from${envTag('MAIL_FROM')}<input name="MAIL_FROM" placeholder="Groceries <alerts@yourdomain.com>" value="${esc(st.MAIL_FROM.value || '')}" ${dis('MAIL_FROM')}></label>
+        <label>Site address for links in emails${envTag('SITE_URL')}
+          <span class="copy-row"><input name="SITE_URL" placeholder="https://groceries.example.com" value="${esc(st.SITE_URL.value || '')}" ${dis('SITE_URL')}>
+          ${locked('SITE_URL') ? '' : `<button type="button" class="small" data-use-address="${esc(currentAddress)}">Use this page’s</button>`}</span></label>
+        <p class="hint">Saved passwords are stored in the database (and so in its backups). To keep it out, set SMTP_URL in .env instead.</p>
+        <p class="warn" data-form-error hidden></p>
+        <div class="actions">
+          <button class="primary" type="submit">Save</button>
+          <button type="button" class="small" id="test-email" ${st.SMTP_URL.set ? '' : 'disabled'}>Send test email</button>
+          ${st.SMTP_URL.source === 'admin' ? '<button type="button" class="small ghost" id="remove-smtp">Remove mail server</button>' : ''}
+        </div>
+      </form>
+
+      <form id="site-details" class="card stack">
+        <h3>Privacy page details</h3>
+        <p class="hint">Shown on the privacy page so people know who runs the site and how to ask about their data.</p>
+        <label>Contact email${envTag('CONTACT_EMAIL')}<input name="CONTACT_EMAIL" type="email" value="${esc(st.CONTACT_EMAIL.value || '')}" ${dis('CONTACT_EMAIL')}></label>
+        <label>Run by (your name or organisation)${envTag('SITE_OPERATOR')}<input name="SITE_OPERATOR" maxlength="120" value="${esc(st.SITE_OPERATOR.value || '')}" ${dis('SITE_OPERATOR')}></label>
+        <p class="warn" data-form-error hidden></p>
+        <button class="primary" type="submit">Save</button>
+      </form>
+
+      <form id="collector-settings" class="card stack">
+        <h3>Home collector</h3>
+        <p class="hint">For stores that block this server: a small program on a computer at home crawls them and sends the prices here (see DEPLOY.md, “Home collector”).</p>
+        <p><strong>Token:</strong>${envTag('COLLECTOR_TOKEN')} ${st.COLLECTOR_TOKEN.set ? 'set' : '<span class="hint">none — the collector can’t send prices</span>'}</p>
+        ${justMadeToken ? `<div class="notice">Copy this into the collector’s .env as COLLECTOR_TOKEN. It won’t be shown again.
+          <div class="copy-row"><input readonly value="${esc(justMadeToken)}" id="new-token"><button type="button" class="small" id="copy-token">Copy</button></div></div>` : ''}
+        ${locked('COLLECTOR_TOKEN') ? '' : `<div class="actions"><button type="button" class="small" id="make-token">${st.COLLECTOR_TOKEN.set ? 'Generate a new token' : 'Generate token'}</button>
+          ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
+        <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
+          <p class="hint">Untick the stores the home collector sends instead.</p>
+          ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${dot(x)} ${esc(storeName(x))}</label>`).join('')}
+        </fieldset>
+        <p class="warn" data-form-error hidden></p>
+        ${locked('SERVER_SCRAPE_STORES') ? '' : '<button class="primary" type="submit">Save</button>'}
+      </form>
+
+      <div class="card stack">
+        <h3>Off-site backup</h3>
+        ${litestream.enabled
+          ? `<p>✓ On — every change is copied to <strong>${esc(litestream.bucket)}/${esc(litestream.path)}</strong> at ${esc(litestream.host)}.</p>`
+          : '<p><span class="warn">Off.</span> Daily snapshots stay on this server’s disk only.</p>'}
+        <p class="hint">Litestream runs before the app starts (so it can restore the database onto a new server), which means its settings live in the server’s .env file — see DEPLOY.md, “Off-site backups”.</p>
+      </div>
+    </div>`;
+}
+
+$('#admin-root').addEventListener('submit', async (e) => {
+  const f = e.target;
+  if (!['email-settings', 'site-details', 'collector-settings'].includes(f.id)) return;
+  e.preventDefault();
+  const v = (name) => f.elements[name];
+  let body = {};
+  if (f.id === 'email-settings') {
+    if (!v('host').disabled) {
+      body.smtp = v('host').value.trim()
+        ? { host: v('host').value, port: Number(v('port').value), secure: v('secure').checked, user: v('user').value, password: v('password').value }
+        : null;
+    }
+    for (const k of ['MAIL_FROM', 'SITE_URL']) if (!v(k).disabled) body[k] = v(k).value;
+  } else if (f.id === 'site-details') {
+    for (const k of ['CONTACT_EMAIL', 'SITE_OPERATOR']) if (!v(k).disabled) body[k] = v(k).value;
+  } else {
+    body = { SERVER_SCRAPE_STORES: [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value) };
+    if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
+  }
+  try {
+    await api('/api/admin/settings', { method: 'PUT', body });
+    toast('Saved');
+    await loadConfig();
+    loadAdmin();
+  } catch (err) {
+    formError(f, err);
+  }
+});
+
+$('#admin-root').addEventListener('click', async (e) => {
+  const t = e.target;
+  try {
+    if (t.dataset.useAddress) {
+      t.closest('form').elements.SITE_URL.value = t.dataset.useAddress;
+    } else if (t.id === 'test-email') {
+      t.disabled = true;
+      const r = await api('/api/admin/settings/test-email', { method: 'POST' });
+      toast(`Test email sent to ${r.to}`);
+      t.disabled = false;
+    } else if (t.id === 'remove-smtp') {
+      if (!confirm('Stop sending email? Emails will go to the outbox on this page instead.')) return;
+      await api('/api/admin/settings', { method: 'PUT', body: { smtp: null } });
+      loadAdmin();
+    } else if (t.id === 'make-token') {
+      if (t.textContent.includes('new') && !confirm('Make a new token? The home collector stops working until you give it the new one.')) return;
+      const { token } = await api('/api/admin/settings/collector-token', { method: 'POST' });
+      loadAdminSettings(token);
+    } else if (t.id === 'revoke-token') {
+      if (!confirm('Turn off the home collector? It will be refused until you generate a new token.')) return;
+      await api('/api/admin/settings/collector-token', { method: 'DELETE' });
+      loadAdmin();
+    } else if (t.id === 'copy-token') {
+      copyText($('#new-token').value);
+    }
+  } catch (err) {
+    if (t.id === 'test-email') t.disabled = false;
+    toast(err.message);
+  }
+});
 
 async function loadAdminExtras() {
   const [m, b, em] = await Promise.all([api('/api/admin/match-reports'), api('/api/admin/backups'), api('/api/admin/emails')]);
@@ -1601,7 +1744,7 @@ async function loadAdminExtras() {
         <td><a href="/api/admin/backups/${encodeURIComponent(x.name)}" download>Download</a></td></tr>`).join('')}</tbody></table>` : ''}`;
   $('#admin-emails').innerHTML = `<p class="hint">${em.mailConfigured
     ? 'Sending through your mail server (SMTP_URL). Recent emails:'
-    : '<span class="warn">No mail server set up (SMTP_URL)</span>, so emails are not sent — they’re kept here instead. You can pass a reset link on to someone by hand.'}</p>
+    : '<span class="warn">No mail server set up</span>, so emails are not sent — they’re kept here instead. You can pass a reset link on to someone by hand, or set up email in <a href="#site-settings">Site settings</a>.'}</p>
     ${em.emails.length ? `<div class="table-scroll"><table class="data"><thead><tr><th>When</th><th>To</th><th>Subject</th><th></th></tr></thead><tbody>
       ${em.emails.map((x) => `<tr><td>${fmtDate(x.sent_at)}</td><td>${esc(x.to_email)}</td><td>${esc(x.subject)}${x.error ? ` <span class="warn">failed: ${esc(x.error)}</span>` : ''}</td>
         <td>${x.body ? `<details><summary>Show</summary><pre class="order-log">${esc(x.body)}</pre></details>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">None yet.</p>'}

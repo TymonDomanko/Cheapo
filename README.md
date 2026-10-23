@@ -65,7 +65,7 @@ When **self-hosting on your own computer**, set `ENABLE_TROLLEY_FILL=true` and r
 
 ## Configuration
 
-See `.env.example`. The main settings:
+See `.env.example`. Settings marked *Also on the Admin page* can be changed by an admin under **Site settings**. If they're also in `.env`, the `.env` value wins and the Admin page shows them locked. The main settings:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -77,9 +77,9 @@ See `.env.example`. The main settings:
 | `TZ` | server's | Time zone for the refresh schedule, e.g. `Australia/Sydney` |
 | `SCRAPE_CRON` | `15 4 * * *` | When to refresh prices (server time); empty disables it |
 | `IGA_STORE_ID` | `32600` | Default IGA store for visitors who haven't picked one |
-| `SMTP_URL`, `MAIL_FROM`, `SITE_URL` | — | Sending email (see DEPLOY.md). Without them, emails go to the admin outbox |
-| `CONTACT_EMAIL`, `SITE_OPERATOR` | — | Shown on the privacy page |
-| `COLLECTOR_TOKEN`, `SERVER_SCRAPE_STORES` | — | Accept prices from a home collector, and leave those stores out of the server's own crawl |
+| `SMTP_URL`, `MAIL_FROM`, `SITE_URL` | — | Sending email (see DEPLOY.md). Without them, emails go to the admin outbox. *Also on the Admin page* |
+| `CONTACT_EMAIL`, `SITE_OPERATOR` | — | Shown on the privacy page. *Also on the Admin page* |
+| `COLLECTOR_TOKEN`, `SERVER_SCRAPE_STORES` | — | Accept prices from a home collector, and leave those stores out of the server's own crawl. *Also on the Admin page* |
 | `LITESTREAM_*` | — | Continuous off-site backup (see DEPLOY.md) |
 | `BACKUP_KEEP_DAYS` | `7` | Daily on-disk snapshots to keep |
 | `COLES_BARCODE_BUDGET` | `1500` | Coles product pages fetched per day for barcodes |

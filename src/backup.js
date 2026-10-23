@@ -51,3 +51,15 @@ export function backupPath(name) {
 export function litestreamEnabled() {
   return !!process.env.LITESTREAM_BUCKET;
 }
+
+/** Where Litestream copies to (no secrets), for the admin page. Litestream starts before the app, so it's .env only. */
+export function litestreamInfo() {
+  if (!litestreamEnabled()) return { enabled: false };
+  let host = null;
+  try {
+    host = process.env.LITESTREAM_ENDPOINT ? new URL(process.env.LITESTREAM_ENDPOINT).host : 'Amazon S3';
+  } catch {
+    host = process.env.LITESTREAM_ENDPOINT;
+  }
+  return { enabled: true, bucket: process.env.LITESTREAM_BUCKET, path: process.env.LITESTREAM_PATH || 'grocery', host };
+}

@@ -5,17 +5,22 @@
 
 import nodemailer from 'nodemailer';
 import { getDb, nowIso } from './db.js';
+import { getSetting, onSettingChange } from './settings.js';
 
-const FROM = () => process.env.MAIL_FROM || 'Grocery Price Compare <no-reply@localhost>';
+const FROM = () => getSetting('MAIL_FROM') || 'Grocery Price Compare <no-reply@localhost>';
 let transport = null;
+// Reconnect with the new details when an admin changes the mail server.
+onSettingChange((key) => {
+  if (key === 'SMTP_URL') transport = null;
+});
 
 export function mailConfigured() {
-  return !!process.env.SMTP_URL;
+  return !!getSetting('SMTP_URL');
 }
 
 /** Base URL for links in emails: SITE_URL, else the address the request came in on. */
 export function siteUrl(req) {
-  const base = process.env.SITE_URL || (req ? `${req.protocol}://${req.get('host')}` : 'http://localhost:3000');
+  const base = getSetting('SITE_URL') || (req ? `${req.protocol}://${req.get('host')}` : 'http://localhost:3000');
   return base.replace(/\/$/, '');
 }
 
@@ -40,7 +45,7 @@ export async function sendMail(msg) {
     return { outbox: true };
   }
   try {
-    transport ||= nodemailer.createTransport(process.env.SMTP_URL);
+    transport ||= nodemailer.createTransport(getSetting('SMTP_URL'));
     await transport.sendMail({ from: FROM(), to: msg.to, subject: msg.subject, text: msg.text, html: msg.html, headers: msg.headers });
     log.run(msg.to, msg.subject, msg.kind, nowIso(), null, null);
     return { sent: true };
