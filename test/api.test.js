@@ -359,6 +359,10 @@ test('multi-buys and member prices change what a list costs', async () => {
   assert.equal(v.items[0].cheapest, 'woolworths', '5 for $9 beats 5 × $1.95 = $9.75');
   assert.equal(v.plan.total, 9);
   assert.equal(v.plan.byStore.woolworths.items[0].dealSaving, 5.5);
+  // The in-the-shop checklist knows which section of the shop each item is in.
+  assert.equal(v.plan.byStore.woolworths.items[0].aisle, 'dairy', 'yoghurt pouches are in the fridges');
+  assert.equal(v.items[0].aisle, 'dairy');
+  assert.equal(v.aisles[0].key, 'produce', 'sections in walking order');
 });
 
 test('member prices only count for members', async () => {

@@ -982,7 +982,9 @@ async function loadList() {
     Object.assign(state, { lists: cached.lists, list: cached.list, listId: cached.list.id });
     $('#offline-banner').hidden = false;
   }
-  if (!state.list.items.length) state.shopping = false;
+  // Reopening the app mid-shop goes straight back to the checklist.
+  if (!state.shopping && shopPref('on', false)) setShopping(true);
+  if (!state.list.items.length && state.shopping) setShopping(false);
   if (state.shopping) renderShopping();
   else renderList();
   refreshListCount().catch(() => {});
@@ -1028,37 +1030,115 @@ function lineCost(p, qty) {
 }
 
 // ------------------------------------------------------------------ in the shop
-// A big-tick checklist grouped by shop and aisle category. Ticks sync to
-// everyone on the list; offline, they're kept on the phone and sent later.
+// Shopping in person: the list split into one checklist per shop, each sorted
+// by product type in the order you walk a supermarket. Ticking crosses an item
+// out. Ticks sync to everyone on the list; offline, they're kept on the phone
+// and sent later. Which shop you're looking at and "hide ticked" are
+// remembered on this device.
 
 state.shopping = false;
 
+const shopPref = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(`shop:${key}:${state.listId}`)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+const setShopPref = (key, value) => {
+  try {
+    localStorage.setItem(`shop:${key}:${state.listId}`, JSON.stringify(value));
+  } catch {
+    /* storage blocked */
+  }
+};
+
+// Keep the phone's screen on while shopping, where the browser allows it.
+let wakeLock = null;
+async function keepScreenOn(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => (wakeLock = null));
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+    }
+  } catch {
+    /* not allowed (battery saver etc.) */
+  }
+}
+document.addEventListener('visibilitychange', () => state.shopping && keepScreenOn(true));
+
+function setShopping(on) {
+  state.shopping = on;
+  setShopPref('on', on);
+  keepScreenOn(on);
+}
+
 function renderShopping() {
   const L = state.list;
-  const byStore = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
   const itemById = Object.fromEntries(L.items.map((it) => [it.id, it]));
   const pending = pendingTicks();
   const isChecked = (it) => (it.id in pending ? pending[it.id] : !!it.checkedAt);
+  const aisleOrder = Object.fromEntries(L.aisles.map((a, i) => [a.key, i]));
+  const aisleLabel = Object.fromEntries(L.aisles.map((a) => [a.key, a.label]));
+
+  // One list per shop, plus the things none of your shops have.
+  const lists = state.allStores.filter((s) => L.plan.byStore[s]?.items.length).map((store) => ({
+    id: store,
+    title: `${dot(store)} ${esc(storeName(store))}`,
+    name: storeName(store),
+    total: L.plan.byStore[store].total,
+    rows: L.plan.byStore[store].items.map((x) => ({
+      it: itemById[x.itemId], aisle: x.aisle, name: x.product.name, size: x.product.size_text,
+      deal: x.product.promo_text || (x.product.multi_qty ? `${x.product.multi_qty} for ${money(x.product.multi_price)}` : ''),
+      price: x.lineTotal,
+    })).filter((r) => r.it),
+  }));
+  const missing = L.plan.unavailable.map((u) => itemById[u.id]).filter(Boolean);
+  if (missing.length) {
+    lists.push({
+      id: 'missing', title: 'Not at your shops', name: 'Not at your shops', total: null,
+      rows: missing.map((it) => ({ it, aisle: it.aisle, name: it.anchor.name, size: it.anchor.size_text, deal: '', price: null })),
+    });
+  }
+  for (const l of lists) {
+    l.left = l.rows.filter((r) => !isChecked(r.it)).length;
+  }
   const ticked = L.items.filter(isChecked).length;
-  const section = (store) => {
-    const rows = L.plan.byStore[store].items.map((x) => ({ x, it: itemById[x.itemId] }));
+
+  let current = shopPref('store', 'all');
+  if (current !== 'all' && !lists.some((l) => l.id === current)) current = 'all';
+  const hideTicked = shopPref('hideTicked', false);
+  const showing = current === 'all' ? lists : lists.filter((l) => l.id === current);
+
+  const row = (r) => `
+    <li class="${isChecked(r.it) ? 'done' : ''}"><label>
+      <input type="checkbox" data-tick="${r.it.id}" ${isChecked(r.it) ? 'checked' : ''}>
+      <span class="ck-name"><strong>${r.it.quantity} ×</strong> ${esc(r.name)}
+        <span class="ck-meta">${[r.size && esc(r.size), r.deal && `<span class="deal-tag">${esc(r.deal)}</span>`,
+          r.it.checkedBy && isChecked(r.it) && L.members.length > 1 && `✓ ${esc(r.it.checkedBy)}`].filter(Boolean).join(' · ')}</span></span>
+      <span class="ck-price">${r.price != null ? money(r.price) : ''}</span></label></li>`;
+
+  const section = (l) => {
     const groups = new Map();
-    for (const r of rows) {
-      const cat = r.x.product.category || 'Other';
-      if (!groups.has(cat)) groups.set(cat, []);
-      groups.get(cat).push(r);
+    for (const r of [...l.rows].sort((a, b) => (aisleOrder[a.aisle] ?? 99) - (aisleOrder[b.aisle] ?? 99) || a.name.localeCompare(b.name))) {
+      if (!groups.has(r.aisle)) groups.set(r.aisle, []);
+      groups.get(r.aisle).push(r);
     }
-    const sorted = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    return `<section class="shop-section"><h2>${dot(store)} ${esc(storeName(store))} <span class="hint">${money(L.plan.byStore[store].total)}</span></h2>
-      ${sorted.map(([cat, list]) => `<h3 class="aisle">${esc(cat)}</h3><ul class="checklist">${list.map(({ x, it }) => `
-        <li class="${isChecked(it) ? 'done' : ''}"><label>
-          <input type="checkbox" data-tick="${it.id}" ${isChecked(it) ? 'checked' : ''}>
-          <span class="ck-name"><strong>${x.quantity} ×</strong> ${esc(x.product.name)}
-            ${it.checkedBy && isChecked(it) && L.members.length > 1 ? `<span class="hint"> · ${esc(it.checkedBy)}</span>` : ''}</span>
-          <span class="ck-price">${money(x.lineTotal)}</span></label></li>`).join('')}</ul>`).join('')}
+    const body = [...groups.entries()].map(([aisle, rows]) => {
+      const left = rows.filter((r) => !isChecked(r.it));
+      const shown = hideTicked ? left : rows;
+      if (!shown.length) return '';
+      return `<h3 class="aisle">${esc(aisleLabel[aisle] || 'Other')} <span class="aisle-count">${rows.length - left.length}/${rows.length}</span></h3>
+        <ul class="checklist">${shown.map(row).join('')}</ul>`;
+    }).join('');
+    return `<section class="shop-section">
+      <h2>${l.title} <span class="hint">${l.left ? `${l.left} to get` : '✓ all done'}${l.total != null ? ` · ${money(l.total)}` : ''}</span></h2>
+      ${body || `<p class="all-done">✓ Everything from ${esc(l.name)} is ticked off.</p>`}
     </section>`;
   };
-  const missing = L.plan.unavailable.map((u) => itemById[u.id]).filter(Boolean);
+
   $('#list-root').innerHTML = `
     <div class="list-head">
       <h2>🛒 ${esc(L.name)} <span class="hint">${ticked} of ${L.items.length} ticked</span></h2>
@@ -1067,11 +1147,17 @@ function renderShopping() {
         <button class="primary" id="finish-shop" ${ticked ? '' : 'disabled'}>Finish shop</button>
       </div>
     </div>
-    <p class="hint">Grouped by shop, then by section. ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
-    ${byStore.map(section).join('')}
-    ${missing.length ? `<section class="shop-section"><h2>Not available at your shops</h2><ul class="checklist">${missing.map((it) => `
-      <li class="${isChecked(it) ? 'done' : ''}"><label><input type="checkbox" data-tick="${it.id}" ${isChecked(it) ? 'checked' : ''}>
-        <span class="ck-name"><strong>${it.quantity} ×</strong> ${esc(it.anchor.name)}</span></label></li>`).join('')}</ul></section>` : ''}`;
+    <div class="shop-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${L.items.length}" aria-valuenow="${ticked}">
+      <span style="width:${L.items.length ? (ticked / L.items.length) * 100 : 0}%"></span></div>
+    ${lists.length > 1 ? `<div class="shop-tabs" role="tablist" aria-label="Which shop">
+      <button role="tab" data-shop-store="all" aria-selected="${current === 'all'}">All shops</button>
+      ${lists.map((l) => `<button role="tab" data-shop-store="${l.id}" aria-selected="${current === l.id}">${l.title}
+        <span class="tab-count">${l.left || '✓'}</span></button>`).join('')}
+    </div>` : ''}
+    <label class="check hide-ticked"><input type="checkbox" id="hide-ticked" ${hideTicked ? 'checked' : ''}> Hide ticked items</label>
+    <p class="hint">Each shop’s list is sorted by section, in the order most supermarkets are laid out. Tap an item to cross it out.
+      ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
+    ${showing.map(section).join('')}`;
 }
 
 function pendingTicks() {
@@ -1093,6 +1179,12 @@ async function tick(itemId, checked) {
   const pending = pendingTicks();
   pending[itemId] = checked;
   savePendingTicks(pending);
+  // Update our copy too: once the tick is sent, it's no longer "pending".
+  const item = state.list.items.find((it) => it.id === itemId);
+  if (item) {
+    item.checkedAt = checked ? new Date().toISOString() : null;
+    item.checkedBy = checked ? user()?.name : null;
+  }
   renderShopping();
   await flushTicks();
 }
@@ -1268,6 +1360,10 @@ function renderSummary(L) {
 $('#list-root').addEventListener('change', async (e) => {
   const t = e.target;
   if (t.dataset.tick) return tick(Number(t.dataset.tick), t.checked);
+  if (t.id === 'hide-ticked') {
+    setShopPref('hideTicked', t.checked);
+    return renderShopping();
+  }
   try {
     if (t.id === 'list-select') {
       selectList(Number(t.value));
@@ -1302,6 +1398,13 @@ $('#list-root').addEventListener('change', async (e) => {
 
 $('#list-root').addEventListener('click', async (e) => {
   const t = e.target;
+  const shopTab = t.closest('[data-shop-store]');
+  if (shopTab) {
+    setShopPref('store', shopTab.dataset.shopStore);
+    renderShopping();
+    window.scrollTo(0, 0);
+    return;
+  }
   if (t.closest('[data-list-iga]')) {
     // The button sits inside the shop's <label>; don't let it toggle the shop.
     e.preventDefault();
@@ -1354,7 +1457,7 @@ $('#list-root').addEventListener('click', async (e) => {
       case 'order-btn':
         return openOrder();
       case 'shop-mode':
-        state.shopping = !state.shopping;
+        setShopping(!state.shopping);
         window.scrollTo(0, 0);
         return state.shopping ? renderShopping() : renderList();
       case 'finish-shop': {
@@ -1362,7 +1465,7 @@ $('#list-root').addEventListener('click', async (e) => {
         if (!confirm('Finished? Ticked items come off the list and are saved under “Past shops” so you can repeat them.')) return;
         const r = await api(`/api/lists/${state.listId}/finish`, { method: 'POST' });
         toast(`${r.name} saved — ${plural(r.items, 'item')} done`);
-        state.shopping = false;
+        setShopping(false);
         return loadList();
       }
       case 'snapshots-btn':

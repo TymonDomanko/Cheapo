@@ -324,3 +324,17 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .stack > label .env-tag, .stack h3 .env-tag { align-self: flex-start; }
 .shop-picker > label.check { display: flex; margin: 6px 0; }
 .download-row { flex-wrap: wrap; }
+
+/* In the shop: one tab per shop, sections in walking order */
+.shop-progress { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin: 4px 0 12px; }
+.shop-progress span { display: block; height: 100%; background: var(--accent, #2a78d6); transition: width .2s; }
+.shop-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 8px; }
+.shop-tabs button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border-radius: 999px; }
+.shop-tabs button[aria-selected="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.shop-tabs .tab-count { font-size: 12px; font-variant-numeric: tabular-nums; opacity: .8; }
+.hide-ticked { margin: 4px 0; }
+.aisle-count { font-weight: normal; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.ck-meta { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; }
+.deal-tag { color: var(--good); font-weight: 600; }
+.checklist li.done .ck-meta { text-decoration: none; }
+.all-done { color: var(--muted); }

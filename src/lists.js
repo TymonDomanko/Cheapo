@@ -9,6 +9,7 @@ import { lineCost, unitPriceFor } from './promos.js';
 import { getUser } from './auth.js';
 import { getStore, defaultStoreId } from './iga.js';
 import { matchScore } from './matcher.js';
+import { AISLES, aisleFor } from './aisles.js';
 
 const INVITE_DAYS = 7;
 const MATCH_MODES = ['similar', 'exact', 'this'];
@@ -290,6 +291,7 @@ export function planFor(items, stores, memberships = []) {
     const plain = round2(p.price * it.quantity);
     byStore[s].items.push({
       itemId: it.id, quantity: it.quantity, product: p, lineTotal, unitPrice: unitPriceFor(p, memberships),
+      aisle: aisleFor(p), // where it is in the shop
       dealSaving: plain > lineTotal ? round2(plain - lineTotal) : 0, // from a multi-buy or member price
     });
     byStore[s].total = round2(byStore[s].total + lineTotal);
@@ -348,6 +350,7 @@ export function listView(listId, userId) {
       return {
         ...it,
         cheapest: chosen,
+        aisle: aisleFor(chosen ? it.perStore[chosen].product : it.anchor),
         lineTotal: chosen ? costAt(it, chosen, memberships) : null,
         // A different pack size that's cheaper per kg / L / item, if there is one.
         betterValue: chosen ? betterValue(it.perStore[chosen].product, { igaStore: summary.igaStoreId, stores: included, memberships }) : null,
@@ -356,6 +359,7 @@ export function listView(listId, userId) {
     plan: { byStore: plan.byStore, total: plan.total, unavailable: plan.unavailable },
     impact: storeImpact(items, included, memberships),
     singleStore,
+    aisles: AISLES,
   };
 }
 
