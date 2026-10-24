@@ -1,6 +1,6 @@
 {
-  "name": "Grocery Price Compare",
-  "short_name": "Groceries",
+  "name": "Cheapo",
+  "short_name": "Cheapo",
   "description": "Compare Australian supermarket prices and shop from a shared list.",
   "start_url": "/#list",
   "display": "standalone",

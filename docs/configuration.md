@@ -9,7 +9,7 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | Variable | Default | What it does |
 |---|---|---|
 | `ADMIN_EMAILS` | — | Accounts with these emails (comma-separated) become admins when they sign up |
-| `SITE_NAME` | `Grocery Price Compare` | The site's name: page title, header, the installed app and emails |
+| `SITE_NAME` | `Cheapo` | The site's name: page title, header, the installed app and emails |
 | `TZ` | server's | Time zone for the schedules, e.g. `Australia/Sydney` |
 | `ALLOW_SIGNUPS` | `true` | `false` stops new sign-ups (existing accounts can still log in) |
 | `PORT` | `3000` | The port the app listens on (inside the container) |

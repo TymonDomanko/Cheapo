@@ -1,6 +1,6 @@
-# Grocery Price Compare
+# Cheapo
 
-**Find the cheapest groceries across Woolworths, Coles, ALDI, IGA and Harris Farm, and shop from one list.**
+**The cheapest groceries across Woolworths, Coles, ALDI, IGA and Harris Farm, on one shopping list.**
 
 A self-hosted price comparison site for Australian supermarkets. It collects every product and price from each chain daily (about 75,000 products), matches the same item across shops, and keeps a shared shopping list that always knows where each thing is cheapest. Run it for your household on a home server, or host it publicly with accounts.
 
@@ -28,7 +28,7 @@ The full list is in [docs/features.md](docs/features.md).
 **Docker (any machine):**
 
 ```bash
-git clone https://github.com/tymondomanko/supermarket-tools.git && cd supermarket-tools
+git clone https://github.com/tymondomanko/cheapo.git && cd cheapo
 cp .env.example .env        # set ADMIN_EMAILS, and SECURE_COOKIES=false for plain http on your network
 docker compose up -d        # http://localhost:3000
 ```
@@ -45,7 +45,7 @@ npm run seed:demo                         # optional: demo data to try the site 
 ADMIN_EMAILS=you@example.com npm start    # http://localhost:3000
 ```
 
-The image is published to `ghcr.io/tymondomanko/supermarket-tools` on every push to `main`.
+The image is published to `ghcr.io/tymondomanko/cheapo` on every push to `main`.
 
 ## Documentation
 

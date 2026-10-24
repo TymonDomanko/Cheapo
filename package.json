@@ -1,5 +1,5 @@
 {
-  "name": "supermarket-tools",
+  "name": "cheapo",
   "version": "0.1.0",
   "description": "Self-hosted grocery price comparison, shared shopping lists and price tracking for Woolworths, Coles, ALDI, IGA and Harris Farm (Australia).",
   "type": "module",

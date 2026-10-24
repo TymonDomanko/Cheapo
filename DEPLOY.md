@@ -15,7 +15,7 @@ In every option you become admin the same way: put your email in `ADMIN_EMAILS`,
 Each push to `main` runs the tests, then builds and publishes the image to GitHub Container Registry:
 
 ```
-ghcr.io/tymondomanko/supermarket-tools:latest
+ghcr.io/tymondomanko/cheapo:latest
 ```
 
 The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (most servers) and `arm64` (Raspberry Pi, ARM VPSs). Each image is also tagged with its commit (`:sha-1361da1`), and tagging a release `v1.2.3` also publishes `:1.2.3`.
@@ -25,7 +25,9 @@ The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (m
 Before using the published image the first time:
 
 1. **Merge to `main`** (or run the workflow from the Actions tab) so the image gets built.
-2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **supermarket-tools**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
+2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **cheapo**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
+
+The project used to be called *supermarket-tools*. The image is still published as `ghcr.io/tymondomanko/supermarket-tools` too, so older installs keep updating. To move one over, change its image to `ghcr.io/tymondomanko/cheapo:latest`; the data stays where it is.
 
 You can also skip the registry and build from a checkout: uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`. Pulling won't update it after that, because it runs whatever is checked out.
 
@@ -34,8 +36,8 @@ You can also skip the registry and build from a checkout: uncomment `build: .` i
 ## 1. Docker on your own machine
 
 ```bash
-git clone https://github.com/tymondomanko/supermarket-tools.git
-cd supermarket-tools
+git clone https://github.com/tymondomanko/cheapo.git
+cd cheapo
 cp .env.example .env
 ```
 
@@ -73,7 +75,7 @@ These examples keep the data in a share called `supermarket`. Use your own share
 1. **Docker → Add Container**, and switch on **Advanced View** (top right).
 2. Fill in:
    - **Name:** `supermarket`
-   - **Repository:** `ghcr.io/tymondomanko/supermarket-tools:latest`
+   - **Repository:** `ghcr.io/tymondomanko/cheapo:latest`
    - **Network Type:** `Bridge`
    - **WebUI:** `http://[IP]:[PORT:3000]/`
 3. Add each of these with **Add another Path, Port, Variable…**:
@@ -95,7 +97,7 @@ These examples keep the data in a share called `supermarket`. Use your own share
 ```yaml
 services:
   app:
-    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    image: ghcr.io/tymondomanko/cheapo:latest
     container_name: supermarket
     restart: unless-stopped
     ports:
@@ -130,9 +132,9 @@ The files you need are in [`deploy/docker/`](deploy/docker):
 
 ```bash
 mkdir grocery && cd grocery
-curl -fsSLO https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/Caddyfile
-curl -fsSL  https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/Caddyfile
+curl -fsSL  https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/.env.example -o .env
 nano .env          # set DOMAIN and ADMIN_EMAILS
 docker compose up -d
 ```
@@ -194,7 +196,7 @@ Then press **Send test email**. If it fails, the page says why, e.g. a wrong pas
 
 ```
 SMTP_URL=smtps://USERNAME:PASSWORD@smtp.example.com:465
-MAIL_FROM=Grocery Price Compare <alerts@groceries.example.com>
+MAIL_FROM=Cheapo <alerts@groceries.example.com>
 SITE_URL=https://groceries.example.com
 ```
 

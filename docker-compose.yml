@@ -6,7 +6,7 @@
 # `docker compose up -d --build` (then pulling no longer updates it: it runs what's checked out here).
 services:
   app:
-    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    image: ghcr.io/tymondomanko/cheapo:latest
     # build: .
     restart: unless-stopped
     ports:

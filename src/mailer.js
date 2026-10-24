@@ -24,7 +24,7 @@ export function siteUrl(req) {
   return base.replace(/\/$/, '');
 }
 
-export const siteName = () => process.env.SITE_NAME || 'Grocery Price Compare';
+export const siteName = () => process.env.SITE_NAME || 'Cheapo';
 
 // Tests read sent mail from here instead of a mail server.
 export const capturedMail = [];

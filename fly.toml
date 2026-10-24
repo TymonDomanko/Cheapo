@@ -3,7 +3,7 @@
 #   fly volumes create grocery_data --region syd --size 3
 #   fly secrets set ADMIN_EMAILS=you@example.com
 #   fly deploy
-app = "grocery-compare"
+app = "cheapo"
 primary_region = "syd"
 
 [build]

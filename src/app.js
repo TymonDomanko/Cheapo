@@ -78,7 +78,8 @@ function versionedIndex() {
   const tag = (file) => crypto.createHash('sha256').update(fs.readFileSync(path.join(pub, file))).digest('hex').slice(0, 10);
   const name = escapeHtml(siteName());
   return fs.readFileSync(path.join(pub, 'index.html'), 'utf8')
-    .replaceAll('Grocery Price Compare', name) // SITE_NAME
+    .replace('<title>Cheapo</title>', `<title>${name}</title>`) // SITE_NAME
+    .replace('<h1>Cheapo</h1>', `<h1>${name}</h1>`)
     .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
 }
