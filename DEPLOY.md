@@ -4,7 +4,7 @@ There are three ways to run the site. They all use the same Docker image and kee
 
 | Option | Best for | HTTPS | Rough cost |
 |---|---|---|---|
-| [1. Docker on your own machine](#1-docker-on-your-own-machine) | Just you, or your household on your home network | No (local network) | Free |
+| [1. Docker on your own machine](#1-docker-on-your-own-machine) (including [Unraid](#on-unraid)) | Just you, or your household on your home network | No (local network) | Free |
 | [2. Docker on a server with a domain](#2-docker-on-a-server-with-your-own-domain) | A public site on a VPS or home server | Automatic (Caddy + Let's Encrypt) | VPS from ~A$6/month |
 | [3. Cloud platform](#3-cloud-platform-flyio-or-render) | A public site without managing a server | Automatic | ~US$5–7/month |
 
@@ -18,14 +18,16 @@ Each push to `main` runs the tests, then builds and publishes the image to GitHu
 ghcr.io/tymondomanko/supermarket-tools:latest
 ```
 
-The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (most servers) and `arm64` (Raspberry Pi, ARM VPSs). Tagging a release `v1.2.3` also publishes `:1.2.3`.
+The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (most servers) and `arm64` (Raspberry Pi, ARM VPSs). Each image is also tagged with its commit (`:sha-1361da1`), and tagging a release `v1.2.3` also publishes `:1.2.3`.
+
+**Which version is running?** The Admin page shows *Running version* (the commit it was built from), and so do the container's first log line and `/healthz`. After an update it should match the latest commit on `main`. The page loads its code by a fingerprint of its contents, so browsers pick up a new version on the next load.
 
 Before using the published image the first time:
 
 1. **Merge to `main`** (or run the workflow from the Actions tab) so the image gets built.
 2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **supermarket-tools**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
 
-You can also skip the registry and build from a checkout. Both Docker options below work with `docker compose up -d --build`.
+You can also skip the registry and build from a checkout: uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`. Pulling won't update it after that, because it runs whatever is checked out.
 
 ---
 
@@ -64,7 +66,31 @@ A home connection is the most reliable place to scrape from, because Woolworths 
 
 ### On Unraid
 
-Use the **Compose Manager** plugin (or Portainer) with this, swapping in your share's name. This example uses a share called `supermarket`:
+These examples keep the data in a share called `supermarket`. Use your own share's name.
+
+**From the Docker tab (no plugins):**
+
+1. **Docker → Add Container**, and switch on **Advanced View** (top right).
+2. Fill in:
+   - **Name:** `supermarket`
+   - **Repository:** `ghcr.io/tymondomanko/supermarket-tools:latest`
+   - **Network Type:** `Bridge`
+   - **WebUI:** `http://[IP]:[PORT:3000]/`
+3. Add each of these with **Add another Path, Port, Variable…**:
+
+   | Type | Container side | Value |
+   |---|---|---|
+   | Path | `/data` | `/mnt/user/supermarket` |
+   | Port | `3000` | `3000` (or any free port) |
+   | Variable | `PUID` | `99` |
+   | Variable | `PGID` | `100` |
+   | Variable | `ADMIN_EMAILS` | your email |
+   | Variable | `TZ` | `Australia/Sydney` (or yours) |
+   | Variable | `SECURE_COOKIES` | `false` (while you use plain `http://`) |
+
+4. **Apply.** Then open the WebUI and sign up with your admin email.
+
+**Or with the Compose Manager plugin** (or Portainer):
 
 ```yaml
 services:
@@ -196,17 +222,17 @@ LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
 ```
 
-Litestream starts before the app, so it can restore the database onto a new server, which means these settings can only go in `.env`. The Admin page shows whether it's on and where it copies to. Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers. The Admin page shows whether off-site backup is on.
+Litestream starts before the app, so it can restore the database onto a new server, which means these settings can only go in `.env`. The Admin page shows whether it's on and where it copies to. Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers.
 
 **To restore onto a new server:** start the container with the same `LITESTREAM_*` settings and an empty `/data`.
 
-## Home collector (Woolworths and ALDI)
+## Home collector (for shops that block your server)
 
-Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site.
+Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site. If the site already runs at home (say on Unraid), you don't need this.
 
 **Easiest: download it from the Admin page.**
 
-1. Go to **Admin → Site settings → Home collector** and untick Woolworths and ALDI under "This server crawls". Save.
+1. Go to **Admin → Site settings → Home collector** and untick the blocked shops (usually Woolworths and ALDI) under "This server crawls". Save.
 2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
    - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
@@ -283,12 +309,14 @@ The configs above create a **3 GB** disk. Most of the space goes on IGA, because
 
 With no cap (the default), every one of the ~540 IGAs with online prices would come to about 1.1 GB, plus price history that grows slowly as prices change. Set `IGA_MAX_STORES` if you want to limit it. The Admin page shows how many IGA stores are being followed.
 
-## Scraping from the cloud
+## When a shop blocks the server
 
-Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI sometimes block datacentre IP addresses.** If their refreshes fail on the Admin page:
+IGA and Harris Farm work from anywhere. **Woolworths and ALDI sometimes block datacentre IP addresses**, and **Coles blocks any connection that asks for too much**, home ones included.
 
-- **Run the home collector** (above). This is the simplest dependable fix.
-- **Or use a residential proxy.** Set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
+The Admin page and the summary email say which shop failed and why. Things to try:
+- **Coles:** usually nothing. The crawl backs off and carries on later by itself. If even the first request is blocked, leave it alone for a day.
+- **Woolworths or ALDI from a cloud server:** run the home collector (above). This is the simplest dependable fix.
+- **Or use a residential proxy:** set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
 
 ## Checklist before going public
 

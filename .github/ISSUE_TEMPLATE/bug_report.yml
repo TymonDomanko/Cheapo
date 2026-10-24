@@ -1,0 +1,32 @@
+name: Something's wrong
+description: A page doesn't work, a price or match looks wrong, or something errors.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Running version
+      description: From Admin → Product data → "Running version" (e.g. 1361da1).
+  - type: dropdown
+    id: where
+    attributes:
+      label: How is it installed?
+      options:
+        - Unraid (Docker tab)
+        - Unraid (Compose Manager)
+        - Docker Compose
+        - Fly.io / Render / other cloud
+        - npm start
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Anything relevant from the container's log or the Admin page's error messages.
+      render: text
