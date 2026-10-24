@@ -4,6 +4,7 @@
 import express from 'express';
 import compression from 'compression';
 import path from 'node:path';
+import fs from 'node:fs';
 import { getDb } from './db.js';
 import { STORES, STORE_INFO } from './stores.js';
 import { compareSearch, productDetail, lookupBarcode, alcoholCategories, NO_ALCOHOL_SQL } from './compare.js';
@@ -71,6 +72,15 @@ const h = (fn) => async (req, res) => {
   }
 };
 
+/** index.html with its script and stylesheet addresses tagged by their contents. */
+function versionedIndex() {
+  const pub = path.resolve('public');
+  const tag = (file) => crypto.createHash('sha256').update(fs.readFileSync(path.join(pub, file))).digest('hex').slice(0, 10);
+  return fs.readFileSync(path.join(pub, 'index.html'), 'utf8')
+    .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
+    .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
+}
+
 export function createApp() {
   const app = express();
   // Number of reverse proxies in front of the app (e.g. 1), so req.ip / HTTPS detection are right.
@@ -94,15 +104,19 @@ export function createApp() {
   const smallJson = express.json({ limit: '50kb' });
   const bigJson = express.json({ limit: '5mb' });
   app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
-  app.use(express.static(path.resolve('public')));
+  // The page asks for app.js?v=<hash of its contents> (and styles.css the same way), so after an
+  // update no cache anywhere — the browser's, a proxy's or the offline copy — can hand back old code.
+  const indexHtml = versionedIndex();
+  const spa = (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
+  app.get('/', spa);
+  app.use(express.static(path.resolve('public'), { index: false, setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
   // Libraries only change when the app is upgraded, so browsers may keep them for a day.
   const vendor = { maxAge: '1d' };
   app.use('/vendor/chart.js', express.static(path.resolve('node_modules/chart.js/dist'), vendor));
   // Barcode reading for phones without a built-in barcode reader (iPhone Safari).
   app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd'), vendor));
   // Pages handled by the single-page app.
-  const spa = (req, res) => res.sendFile(path.resolve('public/index.html'));
-  app.get(['/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
+  app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
   // For load balancers / platform health checks.
   app.get('/healthz', (req, res) => {
     getDb().prepare('SELECT 1').get();
