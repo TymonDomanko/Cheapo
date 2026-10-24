@@ -44,7 +44,7 @@ export function recordBatch(run, items) {
  * Finish a run. Only a complete crawl can tell us a product has disappeared,
  * so `complete` controls marking unseen products unavailable.
  */
-export function finishRun(run, { complete, error = null }) {
+export function finishRun(run, { complete, error = null, seenSince = null }) {
   const d = getDb();
   const fresh = getRun(run.id);
   if (error) {
@@ -52,7 +52,12 @@ export function finishRun(run, { complete, error = null }) {
     checkRun(getRun(run.id)); // emails admins if this needs a look (doesn't wait)
     return fresh;
   }
-  if (complete && fresh.products > 0) markUnseenUnavailable(run.store, run.started_at, run.location || null);
+  if (complete && fresh.products > 0) markUnseenUnavailable(run.store, seenSince || run.started_at, run.location || null);
+  if (complete && seenSince) {
+    // A crawl spread over several runs: this run finished it, so count everything it found.
+    const total = d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND last_seen >= ?').get(run.store, seenSince).n;
+    d.prepare('UPDATE scrape_runs SET products = ? WHERE id = ?').run(total, run.id);
+  }
   if (run.store === 'iga' && (complete || fresh.products > 0)) igaStores.markScraped(run.location, fresh.products);
   d.prepare("UPDATE scrape_runs SET finished_at = ?, status = 'ok' WHERE id = ?").run(nowIso(), run.id);
   const done = getRun(run.id);
@@ -86,25 +91,62 @@ export async function scrapeStore(storeName, opts = {}) {
 
   let products = 0;
   let priceChanges = 0;
+  // Where a crawl that was blocked part-way got to, so the next run carries on (Coles).
+  const progress = crawlProgress(storeName);
+  const result = {};
   try {
-    for await (const batch of scraper.scrape({ ...opts, log })) {
+    for await (const batch of scraper.scrape({ ...opts, log, progress, result, startedAt })) {
       const r = recordBatch(run, batch);
       products += r.upserted;
       priceChanges += r.priceChanges;
       status.products = products;
     }
-    const complete = !opts.onlyCategories?.length && !Number.isFinite(opts.maxPagesPerCategory ?? Infinity);
-    finishRun(run, { complete });
+    const complete = result.complete ?? (!opts.onlyCategories?.length && !Number.isFinite(opts.maxPagesPerCategory ?? Infinity));
+    finishRun(run, { complete, seenSince: result.seenSince });
     log(`${storeName}: done — ${products} products, ${priceChanges} price changes`);
     return { store: storeName, products, priceChanges };
   } catch (e) {
     finishRun(run, { error: e.message || e });
     log(`${storeName}: failed — ${e.message}`);
+    if (e.blocked) carryOnLater(storeName, progress);
     throw e;
   } finally {
     running.delete(key);
     status.running = [...running].some((k) => k === storeName || k.startsWith(`${storeName}:`));
   }
+}
+
+// A blocked crawl tries again (carrying on where it stopped) a few hours later,
+// a few times, rather than waiting for tomorrow's refresh.
+const RETRY_HOURS = Number(process.env.BLOCKED_RETRY_HOURS ?? 4);
+const MAX_RETRIES = 4;
+const retryTimers = {};
+
+function carryOnLater(storeName, progress) {
+  const state = progress.load();
+  if (!RETRY_HOURS || retryTimers[storeName] || (state?.runs || 0) > MAX_RETRIES) return;
+  console.log(`${storeName}: blocked — trying again in ${RETRY_HOURS} hours`);
+  retryTimers[storeName] = setTimeout(() => {
+    delete retryTimers[storeName];
+    if (!running.has(storeName)) scrapeStore(storeName).catch(() => {});
+  }, RETRY_HOURS * 3600 * 1000);
+  retryTimers[storeName].unref?.();
+}
+
+/** Where a store's crawl got to, kept between runs. */
+export function crawlProgress(storeName) {
+  const key = `crawl-progress:${storeName}`;
+  const d = getDb();
+  return {
+    load: () => JSON.parse(d.prepare('SELECT value FROM app_settings WHERE key = ?').get(key)?.value || 'null'),
+    save: (state) => {
+      if (!state) d.prepare('DELETE FROM app_settings WHERE key = ?').run(key);
+      else {
+        d.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
+          .run(key, JSON.stringify(state));
+      }
+    },
+  };
 }
 
 /**

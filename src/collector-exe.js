@@ -113,21 +113,52 @@ export function configTrailer(config) {
   return Buffer.from(CONFIG_MARK + Buffer.from(JSON.stringify(config)).toString('base64') + CONFIG_END, 'latin1');
 }
 
-/** Send a platform's program with `config` appended. */
+/** A tar header for one executable file. */
+function tarHeader(name, size) {
+  const h = Buffer.alloc(512);
+  const octal = (n, len) => `${n.toString(8).padStart(len - 1, '0')}\0`;
+  h.write(name, 0, 100);
+  h.write(octal(0o755, 8), 100); // rwxr-xr-x
+  h.write(octal(0, 8), 108);
+  h.write(octal(0, 8), 116);
+  h.write(octal(size, 12), 124);
+  h.write(octal(Math.floor(Date.now() / 1000), 12), 136);
+  h.write('        ', 148); // checksum: counted as spaces
+  h.write('0', 156); // a regular file
+  h.write('ustar\0' + '00', 257);
+  let sum = 0;
+  for (const b of h) sum += b;
+  h.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148);
+  return h;
+}
+
+/** Send a platform's program with `config` appended (for Linux, inside a .tar.gz). */
 export function sendExe(res, target, config) {
   const t = TARGETS[target];
   const found = findProgram(target);
   const trailer = configTrailer(config);
+  const size = found.bytes + trailer.length;
   res.set({
-    'Content-Type': 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="${t.filename}"`,
-    'Content-Length': String(found.bytes + trailer.length),
+    'Content-Type': t.archive ? 'application/gzip' : 'application/octet-stream',
+    'Content-Disposition': `attachment; filename="${t.archive || t.filename}"`,
     'Cache-Control': 'no-store',
   });
+  if (!t.archive) res.set('Content-Length', String(size));
   const raw = fs.createReadStream(found.file);
   const stream = found.gz ? raw.pipe(zlib.createGunzip()) : raw;
   raw.on('error', () => res.destroy());
   stream.on('error', () => res.destroy());
-  stream.on('end', () => res.end(trailer));
-  stream.pipe(res, { end: false });
+  let out = res;
+  if (t.archive) {
+    out = zlib.createGzip();
+    out.on('error', () => res.destroy());
+    out.pipe(res);
+    out.write(tarHeader(t.filename, size));
+  }
+  stream.on('end', () => {
+    if (!t.archive) return res.end(trailer);
+    // The file's last block is padded to 512 bytes, and two empty blocks end the archive.
+    out.end(Buffer.concat([trailer, Buffer.alloc((512 - (size % 512)) % 512), Buffer.alloc(1024)]));
+  });
+  stream.pipe(out, { end: false });
 }

@@ -8,6 +8,7 @@ import { getDb } from './db.js';
 import { STORES } from './stores.js';
 import { getProduct, findEquivalents } from './compare.js';
 import { dealQuality } from './insights.js';
+import { isAlcohol } from './aisles.js';
 
 const CACHE_MS = 60 * 60 * 1000;
 const WEIGHT = { rare: 3, deeper: 2, uncommon: 1 };
@@ -42,12 +43,12 @@ function allUnusual() {
   return unusualCache.list;
 }
 
-export function unusualDeals({ stores = STORES, limit = 8 } = {}) {
+export function unusualDeals({ stores = STORES, limit = 8, alcohol = true } = {}) {
   const allowed = stores?.length ? stores : STORES;
   const out = [];
   for (const deal of allUnusual()) {
     const product = getProduct(deal.id);
-    if (!product?.available || !allowed.includes(product.store)) continue;
+    if (!product?.available || !allowed.includes(product.store) || (!alcohol && isAlcohol(product))) continue;
     out.push({ product, deal });
     if (out.length >= limit) break;
   }
@@ -95,14 +96,14 @@ function regulars(userId) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([id, n]) => ({ id, n }));
 }
 
-export function regularsOnSale(userId, { stores = STORES, igaStore = null, memberships = [], limit = 8 } = {}) {
+export function regularsOnSale(userId, { stores = STORES, igaStore = null, memberships = [], limit = 8, alcohol = true } = {}) {
   const allowed = stores?.length ? stores : STORES;
   const out = [];
   const seen = new Set();
   for (const { id, n } of regulars(userId).slice(0, 60)) {
     if (seen.has(id)) continue;
     const anchor = getProduct(id, igaStore);
-    if (!anchor) continue;
+    if (!anchor || (!alcohol && isAlcohol(anchor))) continue;
     const eq = findEquivalents(anchor, 'similar', igaStore).filter((m) => allowed.includes(m.product.store) && m.product.available && m.product.price != null);
     for (const m of eq) seen.add(m.product.id);
     let best = null;

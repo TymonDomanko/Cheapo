@@ -1,6 +1,7 @@
 // Search and cross-store comparison.
 
-import { getDb } from './db.js';
+import { getDb, catalogueVersion } from './db.js';
+import { isAlcohol } from './aisles.js';
 import { STORES } from './stores.js';
 import { rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
 import { unitPriceFor } from './promos.js';
@@ -68,11 +69,29 @@ export function searchProducts(q, opts = {}) {
   return runSearch(q, opts);
 }
 
-export function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false, size = null } = {}) {
+/** The shops' alcohol categories (worked out from the category names, kept for a minute). */
+let alcoholCats = null;
+export function alcoholCategories() {
+  if (alcoholCats && alcoholCats.version === catalogueVersion() && Date.now() - alcoholCats.at < 60000) return alcoholCats.json;
+  const list = getDb().prepare('SELECT DISTINCT category FROM products WHERE category IS NOT NULL').all()
+    .map((r) => r.category).filter((category) => isAlcohol({ category }));
+  alcoholCats = { version: catalogueVersion(), at: Date.now(), json: JSON.stringify(list) };
+  return alcoholCats.json;
+}
+
+/** SQL (and its parameter) leaving out alcohol, for a query over products `p`. */
+export const NO_ALCOHOL_SQL = '(p.category IS NULL OR p.category NOT IN (SELECT value FROM json_each(?)))';
+
+/** @param {{alcohol?: boolean}} opts alcohol: false leaves alcohol out */
+export function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false, size = null, alcohol = true } = {}) {
   const d = getDb();
   const match = ftsQuery(q);
   const where = [AVAILABLE_SQL];
   const params = [];
+  if (!alcohol) {
+    where.push(NO_ALCOHOL_SQL);
+    params.push(alcoholCategories());
+  }
   const allowed = store && STORES.includes(store) ? [store] : storeSet(stores);
   if (allowed.length < STORES.length) {
     where.push(`p.store IN (${allowed.map(() => '?').join(',')})`);

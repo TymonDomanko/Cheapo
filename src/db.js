@@ -357,6 +357,7 @@ function migrateAccountsAndShopping(d) {
   add('users', 'alerts_weekly', 'INTEGER NOT NULL DEFAULT 1');
   add('users', 'alerts_price', 'INTEGER NOT NULL DEFAULT 1');
   add('users', 'memberships', "TEXT NOT NULL DEFAULT '[]'"); // loyalty schemes for member prices
+  add('users', 'show_alcohol', 'INTEGER NOT NULL DEFAULT 0'); // alcohol is left out of search and deals unless turned on
   add('products', 'barcode', 'TEXT');
   add('products', 'barcode_checked_at', 'TEXT'); // Coles: barcode comes from the product page
   for (const t of ['products', 'store_prices']) {

@@ -259,6 +259,7 @@ function fillSettings() {
   const af = $('#alerts-form');
   af.alertsWeekly.checked = u.alertsWeekly;
   af.alertsPrice.checked = u.alertsPrice;
+  af.showAlcohol.checked = !!u.showAlcohol;
   $('#email-status').innerHTML = u.emailVerified
     ? `Emails go to <strong>${esc(u.email)}</strong>.`
     : `<span class="warn">Confirm your email first</span> — we only email confirmed addresses. <button type="button" class="linkish" data-resend-verify>Send the link again</button>`;
@@ -329,7 +330,10 @@ $('#alerts-form').addEventListener('submit', async (e) => {
   try {
     await api('/api/me', {
       method: 'PATCH',
-      body: { alertsWeekly: f.alertsWeekly.checked, alertsPrice: f.alertsPrice.checked, memberships: new FormData(f).getAll('memberships') },
+      body: {
+        alertsWeekly: f.alertsWeekly.checked, alertsPrice: f.alertsPrice.checked, memberships: new FormData(f).getAll('memberships'),
+        showAlcohol: f.showAlcohol.checked,
+      },
     });
     await loadConfig();
     formError(f, null);
@@ -2378,8 +2382,9 @@ function collectorDownloads(programs) {
   return `<div class="actions download-row">${ordered.map(button).join('')}
       <a class="button ${mine === 'mac' ? 'primary' : 'small'}" href="/api/admin/collector/download" download>⬇ Mac / zip</a></div>
     <p class="hint" id="program-progress" hidden></p>${errors}
-    <p class="hint"><strong>Windows / Linux:</strong> one file — run it and leave it running. Nothing to install; it’s already set up for this site and keeps itself up to date.
-      Windows may warn that it’s from an unknown publisher (choose <em>More info → Run anyway</em>). To start it with the computer, run it once with <code>--autostart</code>.<br>
+    <p class="hint"><strong>Windows / Linux:</strong> one program — run it and leave it running. Nothing to install; it’s already set up for this site and keeps itself up to date.
+      Windows may warn that it’s from an unknown publisher (choose <em>More info → Run anyway</em>). On Linux, extract it first: <code>tar xzf grocery-collector-linux-*.tar.gz && ./grocery-collector</code>.
+      To start it with the computer, run it once with <code>--autostart</code>.<br>
       <strong>Mac, or anywhere with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>:</strong> unzip and run <code>start.sh</code> (or <code>start.bat</code>).
       Prefer Docker? Use <code>deploy/collector</code>.<br>
       It collects the stores this server doesn’t crawl (below).</p>

@@ -5,7 +5,7 @@
 // fetched once (re-checked after 90 days if none was found).
 
 import { getDb, nowIso } from './db.js';
-import { createClient } from './scrapers/http.js';
+import { createClient, isBotCheck } from './scrapers/http.js';
 
 const ORIGIN = 'https://www.coles.com.au';
 const RECHECK_DAYS = 90;
@@ -16,9 +16,16 @@ export function colesBarcodeProgress() {
     FROM products WHERE store = 'coles' AND available = 1`).get();
 }
 
-export async function backfillColesBarcodes({ budget = Number(process.env.COLES_BARCODE_BUDGET) || 1500, log = console.log } = {}) {
+// Kept small: every page is another request to Coles, which blocks connections that ask for too much.
+export async function backfillColesBarcodes({ budget = Number(process.env.COLES_BARCODE_BUDGET) || 300, log = console.log } = {}) {
   if (barcodeStatus.running) return { skipped: true };
   const d = getDb();
+  // Coles blocked the last price refresh: leave it alone for now.
+  const last = d.prepare("SELECT status, error, finished_at FROM scrape_runs WHERE store = 'coles' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").get();
+  if (last?.status === 'error' && /bot check/i.test(last.error || '') && Date.now() - Date.parse(last.finished_at) < 24 * 3600 * 1000) {
+    log('coles barcodes: skipped — Coles is blocking this connection at the moment');
+    return { skipped: true };
+  }
   const due = new Date(Date.now() - RECHECK_DAYS * 86400000).toISOString();
   const todo = d.prepare(`
     SELECT p.id, p.product_url FROM products p
@@ -38,22 +45,29 @@ export async function backfillColesBarcodes({ budget = Number(process.env.COLES_
     await client.init();
     const html = await client.getText(`${ORIGIN}/`);
     const buildId = html.match(/"buildId":"([^"]+)"/)?.[1];
-    if (!buildId) throw new Error('Coles: could not find Next.js buildId');
+    if (!buildId) throw new Error(isBotCheck(html) ? 'Coles is showing a bot check — stopped for today' : 'Coles: could not find Next.js buildId');
     for (const p of todo) {
       const path = new URL(p.product_url).pathname; // /product/<slug>-<id>
       try {
-        let json = await client.getText(`${ORIGIN}/_next/data/${buildId}/en${path}.json`);
+        const page = async (url) => {
+          const t = await client.getText(url);
+          // A bot check isn't "no barcode": stop, and leave the product to try another day.
+          if (isBotCheck(t)) throw Object.assign(new Error('Coles is showing a bot check — stopped for today'), { blocked: true });
+          return t;
+        };
+        let json = await page(`${ORIGIN}/_next/data/${buildId}/en${path}.json`);
         let canonical = null;
         // Our slug may differ from Coles' own; follow their redirect once (and keep the right link).
         const redirect = json.match(/"__N_REDIRECT":"(\/product\/[^"]+)"/)?.[1];
         if (redirect) {
           canonical = ORIGIN + redirect;
-          json = await client.getText(`${ORIGIN}/_next/data/${buildId}/en${redirect}.json`);
+          json = await page(`${ORIGIN}/_next/data/${buildId}/en${redirect}.json`);
         }
         const gtin = json.match(/"gtin":"(\d{8,14})"/)?.[1] || null;
         save.run(gtin, canonical, nowIso(), p.id);
         if (gtin) barcodeStatus.found++;
       } catch (e) {
+        if (e.blocked) throw e;
         failures++;
         if (failures > 20 && failures > barcodeStatus.done / 2) throw new Error(`stopping: ${e.message}`);
       }

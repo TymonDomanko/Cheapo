@@ -204,7 +204,7 @@ Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from
 2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
    - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
-     - On Linux, make it executable first: `chmod +x grocery-collector && ./grocery-collector`.
+     - On Linux it comes as a `.tar.gz` (so it stays executable): `tar xzf grocery-collector-linux-x64.tar.gz && ./grocery-collector`.
      - To start it with the computer, run it once with `--autostart` (undo with `--no-autostart`). On Windows this adds it to the Startup folder; on a Linux desktop it adds a log-in entry. On a Linux server, use a systemd service instead (below).
    - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside; `COLLECT_CRON` sets the time.
 
@@ -251,7 +251,7 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
 2. **Refreshes prices** for every supermarket (except the ones a home collector sends) and every followed IGA store.
-3. **Fills in Coles barcodes:** up to `COLES_BARCODE_BUDGET` product pages a day (default 1,500), products on lists first. This lets Coles products match Woolworths ones exactly.
+3. **Fills in Coles barcodes:** up to `COLES_BARCODE_BUDGET` product pages a day (default 300; it stops for the day if Coles shows a bot check), products on lists first. This lets Coles products match Woolworths ones exactly.
 4. **Sends price alerts** to people whose watched products got cheaper.
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
@@ -260,7 +260,7 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** about 30 minutes or more. Coles challenges a server after roughly every 30 requests however slowly they're made, and gets stricter as a crawl goes on. The crawler tries a fresh session first, then waits, and skips a department that stays blocked (the rest is saved). Coles is far more relaxed with home internet connections, so if Coles refreshes keep failing, let the home collector fetch Coles too.
+- **Coles:** about 40 minutes when it isn't blocked (one page every 2.5 seconds, `COLES_DELAY_MS`). Coles protects its site with a bot check ("Pardon Our Interruption") and blocks connections that ask for too much — home connections too. Pushing on through a block only makes it last longer, so when Coles blocks, the crawl stops, remembers where it got to, and tries again 4 hours later (`BLOCKED_RETRY_HOURS`, up to 4 times), carrying on from the same page. Products are only marked unavailable once a crawl has got through the whole shop. If Coles blocks even the first request ("bot check instead of its website"), the connection itself is blocked for now; leaving it alone for a day usually clears it.
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
