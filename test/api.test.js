@@ -1124,3 +1124,20 @@ test('fruit and veg: bananas, not banana bread, compared by the kilo and each', 
   const names = (await api('GET', '/api/search?q=testfruit+bananas')).body.map((g) => g.anchor.name);
   assert.ok(!/Bread/.test(names[0]), `fruit before banana bread: ${names.join(', ')}`);
 });
+
+test('the Add box suggests the best value per litre / kilo first', async () => {
+  upsertProducts('coles', [
+    { store_product_id: 'vt1', name: 'Valuetest Full Cream Milk', size_text: '1L', category: 'Milk', price: 2 },
+    { store_product_id: 'vt2', name: 'Valuetest Full Cream Milk', size_text: '2L', category: 'Milk', price: 3 },
+    { store_product_id: 'vt3', name: 'Valuetest Full Cream Milk', size_text: '3L', category: 'Milk', price: 5.4 },
+  ]);
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'valuer@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const [row] = (await api('POST', `/api/lists/${list.id}/paste-preview`, { text: 'valuetest milk' })).body;
+  const cheapest = row.options.filter((o) => o.cheapest);
+  assert.deepEqual(cheapest.map((o) => o.size), ['2L', '3L', '1L'], '$1.50/L, then $1.80/L, then $2/L');
+  assert.equal(cheapest[0].bestValue, true);
+  assert.equal(cheapest[0].perUnit, 1.5);
+  assert.equal(cheapest[0].query, 'valuetest milk 2L', 'adding it keeps the cheapest 2L');
+});

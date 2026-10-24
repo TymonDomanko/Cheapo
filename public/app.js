@@ -1568,7 +1568,7 @@ async function openPaste(text = '', noteItem = null, direct = false) {
           <div class="paste-pick">
             ${noteItem ? '' : `<input class="qty" type="number" min="1" max="99" name="qty${i}" value="${r.quantity}" aria-label="Quantity">`}
             <select name="pick${i}" aria-label="Product for ${esc(r.line)}">
-               ${r.options.map((o, j) => `<option value="${o.cheapest && o.query ? `cheapest:${esc(o.query)}` : o.productId}" ${j === 0 && pickFirst(r) ? 'selected' : ''}>${o.cheapest ? (o.query ? '★ Cheapest, updates itself: ' : '★ Cheapest: ') : ''}${esc(o.name)}${o.size ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — ${o.cheapest ? '' : 'from '}${money(o.price)} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
+               ${r.options.map((o, j) => `<option value="${o.cheapest && o.query ? `cheapest:${esc(o.query)}` : o.productId}" ${j === 0 && pickFirst(r) ? 'selected' : ''}>${o.bestValue ? `★ Best value per ${esc(o.unitWord)}${o.query ? ', updates itself' : ''}: ` : o.cheapest ? (o.query ? '★ Cheapest, updates itself: ' : '★ Cheapest: ') : ''}${esc(o.name)}${o.size && !o.name.toLowerCase().replace(/\s+/g, '').includes(o.size.toLowerCase().replace(/\s+/g, '')) ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — ${o.cheapest ? '' : 'from '}${money(o.price)}${o.perUnit != null ? ` (${money(o.perUnit)}/${esc(o.unitWord)})` : ''} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
               ${noteItem ? '' : `<option value="note" ${pickFirst(r) ? '' : 'selected'}>Keep as a note: “${esc(r.query)}”</option>`}
             </select>
           </div></li>`).join('')}</ul>
