@@ -2197,6 +2197,17 @@ async function loadChanges() {
 let adminTimer;
 async function loadAdmin() {
   const [o, users] = await Promise.all([api('/api/admin/overview'), api('/api/admin/users')]);
+  // Redrawing (after saving a setting, say): keep what the slower sections
+  // showed until they've reloaded, so the page doesn't shrink and jump.
+  const was = (id, loading) => $(`#${id}`)?.innerHTML || `<p class="hint">${loading}</p>`;
+  const prev = {
+    health: was('admin-health', 'Checking the data… (this can take a few seconds on a big catalogue)'),
+    matches: was('admin-matches', 'Loading…'),
+    backups: was('admin-backups', 'Loading…'),
+    emails: was('admin-emails', 'Loading…'),
+    settings: was('admin-settings', 'Loading…'),
+  };
+  const scroll = window.scrollY;
   $('#admin-root').innerHTML = `
     <div class="list-head"><h2>Product data</h2>
       <button class="primary" id="scrape-all" ${o.stores.some((s) => s.status.running) ? 'disabled' : ''}>Refresh all prices</button></div>
@@ -2208,10 +2219,10 @@ async function loadAdmin() {
     <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed${o.iga.maxStores ? ` of ${o.iga.maxStores} allowed` : ' (no limit)'} — prices are collected only for stores people have picked</span></h2>
     <div id="admin-live-iga-stores">${adminIgaStores(o)}</div>
     <h2 class="section">Data health <button class="small ghost" id="health-refresh">Check again</button></h2>
-    <div id="admin-health"><p class="hint">Checking the data… (this can take a few seconds on a big catalogue)</p></div>
+    <div id="admin-health">${prev.health}</div>
 
     <h2 class="section">Wrong matches ${o.openMatchReports ? `<span class="pill">${o.openMatchReports}</span>` : ''}</h2>
-    <div id="admin-matches"><p class="hint">Loading…</p></div>
+    <div id="admin-matches">${prev.matches}</div>
 
     <h2 class="section">Barcodes</h2>
     <div id="admin-live-barcodes">${adminBarcodes(o)}</div>
@@ -2223,19 +2234,20 @@ async function loadAdmin() {
       : 'Not set up. If Woolworths or ALDI refreshes fail from this server, set up the home collector in <a href="#site-settings">Site settings</a> below.'}</p>
 
     <h2 class="section">Backups</h2>
-    <div id="admin-backups"><p class="hint">Loading…</p></div>
+    <div id="admin-backups">${prev.backups}</div>
 
     <h2 class="section">Emails</h2>
-    <div id="admin-emails"><p class="hint">Loading…</p></div>
+    <div id="admin-emails">${prev.emails}</div>
 
     <h2 class="section" id="site-settings">Site settings</h2>
-    <div id="admin-settings"><p class="hint">Loading…</p></div>
+    <div id="admin-settings">${prev.settings}</div>
 
     <h2 class="section">Users <span class="hint">${plural(o.users, 'account')} · ${plural(o.lists, 'list')}</span></h2>
     <div class="table-scroll"><table class="data"><thead><tr><th>Name</th><th>Email</th><th>Joined</th><th class="num">Lists</th><th>Admin</th></tr></thead><tbody>
       ${users.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${fmtDate(u.created_at)}</td><td class="num">${u.lists}</td>
         <td><input type="checkbox" data-admin-user="${u.id}" ${u.is_admin ? 'checked' : ''} ${u.id === user().id ? 'disabled' : ''} aria-label="Admin"></td></tr>`).join('')}
     </tbody></table></div>`;
+  window.scrollTo(0, scroll);
   clearTimeout(adminTimer);
   loadAdminExtras();
   loadAdminSettings();
@@ -2268,6 +2280,12 @@ async function refreshAdminProgress() {
   if (all) all.disabled = o.stores.some((s) => s.status.running);
   if (adminBusy(o)) adminTimer = setTimeout(refreshAdminProgress, 3000);
   else loadHealth(); // finished: the product counts and freshness have changed
+}
+
+/** Something was started: follow its progress in place (the rest of the page stays put). */
+function watchAdminProgress(delay = 800) {
+  clearTimeout(adminTimer);
+  adminTimer = setTimeout(refreshAdminProgress, delay);
 }
 
 function adminStoreTiles(o) {
@@ -2522,16 +2540,33 @@ $('#admin-root').addEventListener('click', async (e) => {
 });
 
 /** Per-shop data checks: freshness, sorting into sections, and how much can be compared. */
+let lastHealthHtml = null; // shown straight away next time, while it's re-checked
+
 async function loadHealth(refresh = false) {
   const box = $('#admin-health');
   if (!box) return;
+  if (lastHealthHtml && !box.querySelector('table')) box.innerHTML = lastHealthHtml;
+  // Keep the old table (faded) while checking, so the page doesn't jump.
+  const btn = $('#health-refresh');
+  box.classList.add('busy');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+  }
   let hh;
   try {
     hh = await api(`/api/admin/health${refresh ? '?refresh=1' : ''}`);
   } catch (err) {
     box.innerHTML = `<p class="warn">${esc(err.message)}</p>`;
     return;
+  } finally {
+    box.classList.remove('busy');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Check again';
+    }
   }
+  const open = box.querySelector('details')?.open;
   const pctCell = (v, bad, good, invert = false) => {
     const cls = invert ? (v >= good ? 'ok' : v < bad ? 'bad' : '') : (v <= good ? 'ok' : v > bad ? 'bad' : '');
     return `<td class="num ${cls}">${v}%</td>`;
@@ -2556,6 +2591,8 @@ async function loadHealth(refresh = false) {
     <p class="hint">Checked ${ago(hh.at)}. “Comparable” is from a random sample of up to 150 products per shop; own-brand-heavy shops (ALDI) and fresh food naturally match less.</p>
     ${unsorted.length ? `<details><summary>Categories that don’t sort into a section</summary>
       ${unsorted.map((x) => `<p><strong>${esc(storeName(x.store))}:</strong> ${x.aisles.unsorted.map((u) => `${esc(u.category)} (${u.products})`).join(', ')}</p>`).join('')}</details>` : ''}`;
+  if (open && box.querySelector('details')) box.querySelector('details').open = true;
+  lastHealthHtml = box.innerHTML;
 }
 
 async function loadAdminExtras() {
@@ -2593,7 +2630,7 @@ $('#admin-root').addEventListener('click', async (e) => {
     if (t.dataset.resolve) {
       await api(`/api/admin/match-reports/${t.dataset.resolve}`, { method: 'POST', body: { decision: t.dataset.decision } });
       toast(t.dataset.decision === 'accept' ? 'Fixed for everyone' : 'Dismissed');
-      return loadAdmin();
+      return loadAdminExtras();
     }
     if (t.dataset.unrule) {
       await api(`/api/admin/match-rules/${t.dataset.unrule}`, { method: 'DELETE' });
@@ -2604,14 +2641,11 @@ $('#admin-root').addEventListener('click', async (e) => {
       toast(`Backed up (${(r.bytes / 1e6).toFixed(1)} MB)`);
       return loadAdminExtras();
     }
-    if (t.id === 'health-refresh') {
-      $('#admin-health').innerHTML = '<p class="hint">Checking…</p>';
-      return loadHealth(true);
-    }
+    if (t.id === 'health-refresh') return loadHealth(true);
     if (t.id === 'barcodes-now') {
       await api('/api/admin/barcodes', { method: 'POST' });
       toast('Fetching Coles barcodes…');
-      return setTimeout(loadAdmin, 800);
+      return watchAdminProgress();
     }
     if (t.id === 'send-alerts') {
       const r = await api('/api/admin/send-alerts', { method: 'POST', body: {} });
@@ -2624,18 +2658,18 @@ $('#admin-root').addEventListener('click', async (e) => {
   if (t.id === 'iga-check') {
     await api('/api/admin/iga/check', { method: 'POST', body: {} });
     toast('Checking IGA stores…');
-    return setTimeout(loadAdmin, 800);
+    return watchAdminProgress();
   }
   if (t.dataset.untrackIga) {
     if (!confirm('Stop collecting prices for this IGA store? People who picked it will see no IGA prices until it’s picked again.')) return;
     await api(`/api/admin/iga/${encodeURIComponent(t.dataset.untrackIga)}`, { method: 'DELETE' });
-    return loadAdmin();
+    return watchAdminProgress(0);
   }
   const stores = t.id === 'scrape-all' ? state.allStores : t.dataset.scrape ? [t.dataset.scrape] : null;
   if (!stores) return;
   await api('/api/admin/scrape', { method: 'POST', body: { stores } });
   toast('Refresh started');
-  setTimeout(loadAdmin, 500);
+  watchAdminProgress(500);
 });
 $('#admin-root').addEventListener('change', async (e) => {
   const t = e.target;
