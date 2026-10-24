@@ -34,13 +34,16 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | Variable | Default | What it does |
 |---|---|---|
 | `SCRAPE_CRON` | `15 4 * * *` | When prices refresh, in `TZ`. Empty turns the schedule off |
+| `LIQUOR_STATE` | `nsw` | The state whose Liquorland prices are collected (`nsw`, `vic`, `qld`, `wa`, `sa`, `tas`, `act`, `nt`) |
 | `IGA_STORE_ID` | `32600` | The IGA shown to visitors who haven't picked one |
 | `IGA_MAX_STORES` | no limit | Cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the refresh and about 2 MB |
 | `BLOCKED_RETRY_HOURS` | `4` | When a shop blocks a crawl part-way (Coles), try again this much later, carrying on where it stopped (up to 4 times). `0` waits for the next scheduled refresh |
-| `COLES_PAGES_PER_HOUR` | `30` | Coles is refreshed steadily, one page at a time, at most this many an hour (see [how it works](how-it-works.md#coles-a-little-at-a-time)). `0` goes back to crawling all of Coles each night |
+| `COLES_PAGES_PER_HOUR` | `30` | Coles is refreshed steadily, one page at a time, at most this many an hour **for this server and all collectors together** (see [how it works](how-it-works.md#coles-a-little-at-a-time)). `0` goes back to crawling all of Coles each night. **Admin page** |
+| `COLES_MAX_PER_CONNECTION` | `40` | The most Coles pages an hour any one connection fetches, this server included. A helper can be set lower on the Admin page. The total stays within `COLES_PAGES_PER_HOUR`; what a capped connection can't use goes to the others. **Admin page** |
 | `COLES_FULL_EVERY_DAYS` | `2` | Steady mode: how often to go through the whole Coles shop, counted from when the last pass started (specials are done daily). For every Coles price within a day, set this to `1` and `COLES_PAGES_PER_HOUR` to `40` |
 | `COLES_BARCODE_BUDGET` | `300` | Nightly mode only: Coles product pages fetched per day to fill in barcodes (steady mode fits them into spare time) |
-| `WOOLWORTHS_CONCURRENCY` | `2` | Woolworths departments fetched at once, each in its own session |
+| `WOOLWORTHS_CONCURRENCY` | `2` | Woolworths departments fetched at once, each in its own session. When the refresh is shared with collectors, this is for all of them together |
+| `ALDI_CONCURRENCY`, `HARRISFARM_CONCURRENCY`, `DANMURPHYS_CONCURRENCY`, `BWS_CONCURRENCY`, `LIQUORLAND_CONCURRENCY` | `1` | Shared refreshes: parts of that shop fetched at once, by all connections together |
 | `IGA_CONCURRENCY` | `3` | IGA stores fetched at once |
 | `*_DELAY_MS` | per shop | Pause between requests, e.g. `COLES_DELAY_MS=2500` |
 | `*_SKIP_CATEGORIES` | per shop | Categories to leave out, comma-separated, e.g. `WOOLWORTHS_SKIP_CATEGORIES` |
@@ -56,6 +59,10 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | `COLLECTOR_EXE_PREBUILT` | `/app/collector-exe` in Docker | A folder of ready-made collector programs |
 | `NODE_DIST_MIRROR` | `https://nodejs.org/dist` | Where to download Node.js from when building collector programs |
 | `COLLECTOR_CHECK_CRON` | `0 11 * * *` | When to check the collector has been sending prices |
+| `COLLECT_STORES` | any | On a collector: only refresh these shops, e.g. `woolworths,aldi`. Unset, it does whatever the site asks |
+| `COLLECT_COLES` | `true` | On a collector: `false` stops it fetching Coles pages for the site |
+
+Helpers (collectors on other people's connections, each with its own token) are added on the Admin page; see [DEPLOY.md](../DEPLOY.md#sharing-the-work-helpers).
 
 ## Email
 

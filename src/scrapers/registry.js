@@ -5,5 +5,8 @@ import * as coles from './coles.js';
 import * as aldi from './aldi.js';
 import * as iga from './iga.js';
 import * as harrisfarm from './harrisfarm.js';
+import * as danmurphys from './danmurphys.js';
+import * as bws from './bws.js';
+import * as liquorland from './liquorland.js';
 
-export const SCRAPERS = { woolworths, coles, aldi, iga, harrisfarm };
+export const SCRAPERS = { woolworths, coles, aldi, iga, harrisfarm, danmurphys, bws, liquorland };

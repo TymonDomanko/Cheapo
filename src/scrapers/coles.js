@@ -8,7 +8,8 @@ const ORIGIN = 'https://www.coles.com.au';
 const IMAGE_BASE = 'https://cdn.productimages.coles.com.au/productimages';
 // Top-level categories that are duplicates of others or not groceries.
 export const SKIP = new Set(
-  (process.env.COLES_SKIP_CATEGORIES ?? 'bonus-credit-products,back-to-school,big-pack-value,deliver-more-range,tobacco')
+  // Liquorland is its own shop (src/scrapers/liquorland.js), so its department here would list it twice.
+  (process.env.COLES_SKIP_CATEGORIES ?? 'bonus-credit-products,back-to-school,big-pack-value,deliver-more-range,tobacco,liquorland')
     .split(',').map((s) => s.trim()).filter(Boolean),
 );
 

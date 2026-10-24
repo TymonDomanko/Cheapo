@@ -22,6 +22,9 @@
   --store-woolworths: #1baf7a;
   --store-iga: #eda100;
   --store-harrisfarm: #e87ba4;
+  --store-danmurphys: #2e7d57;
+  --store-bws: #6b6b6b;
+  --store-liquorland: #c2410c;
   --cost: #c0392b;
   --brand: #e3262f;
   /* Shop badges: each chain's own colour, dark enough for white text. Coles/IGA (both red) and
@@ -31,6 +34,9 @@
   --brand-aldi: #1b2a7a;
   --brand-iga: #9b1b30;
   --brand-harrisfarm: #24502f;
+  --brand-danmurphys: #12452f;
+  --brand-bws: #222222;
+  --brand-liquorland: #b3261e;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -56,6 +62,9 @@
     --store-woolworths: #199e70;
     --store-iga: #c98500;
     --store-harrisfarm: #d55181;
+    --store-danmurphys: #3f9a6d;
+    --store-bws: #9a9a9a;
+    --store-liquorland: #e0612a;
     --cost: #ef7a6c;
     --brand: #ffe11a;
   }
@@ -68,6 +77,7 @@
   --good: #4cc27a; --bad: #ef7a6c; --special: #f0a14a;
   --store-aldi: #3987e5; --store-coles: #d95926; --store-woolworths: #199e70;
   --store-iga: #c98500; --store-harrisfarm: #d55181; --cost: #ef7a6c;
+  --store-danmurphys: #3f9a6d; --store-bws: #9a9a9a; --store-liquorland: #e0612a;
   --brand: #ffe11a;
 }
 
@@ -575,3 +585,14 @@ a.plain-link:hover { text-decoration: underline; }
 @supports not (text-box: trim-both cap alphabetic) {
   .store-chip { padding: .32em .6em .24em; }
 }
+
+/* Admin: helpers, and who's doing what in the Coles steady refresh */
+.helper-row { border-top: 1px solid var(--border); padding-top: 10px; }
+.helper-row p { margin: 0 0 6px; }
+.helper-row.off strong { color: var(--muted); }
+.helper-row .actions { flex-wrap: wrap; }
+.worker-list { margin: 4px 0 0; padding-left: 18px; }
+.helper-downloads summary { cursor: pointer; color: var(--link, inherit); margin: 4px 0 8px; }
+.helper-cap { margin: 0 0 6px; }
+.helper-cap label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .92em; }
+.helper-cap input { width: 5.5em; }

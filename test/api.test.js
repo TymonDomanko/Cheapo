@@ -591,6 +591,127 @@ test('home collector download, version check and self-update bundle', async () =
   if (saved) process.env.COLLECTOR_TOKEN = saved;
 });
 
+test('helpers: approved by an admin, each with its own token, handed shops to refresh', async () => {
+  const zlib = await import('node:zlib');
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const anon = client();
+  assert.equal((await anon('POST', '/api/admin/helpers', { name: 'Sam' })).status, 401, 'admins only');
+  assert.equal((await admin('POST', '/api/admin/helpers', { name: ' ' })).status, 400, 'needs a name');
+  const sam = (await admin('POST', '/api/admin/helpers', { name: 'Sam’s PC' })).body;
+  const alex = (await admin('POST', '/api/admin/helpers', { name: 'Alex' })).body;
+  const as = (token) => (method, p, body) => fetch(base + p, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Collector-Version': 'v1', 'X-Collector-Mode': 'exe' },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  // Downloading for a helper makes it a new token, baked in; the old one stops working.
+  assert.equal((await as(sam.token)('GET', '/api/collector/latest')).status, 200);
+  const cookie = (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }) }))
+    .headers.get('set-cookie').split(';')[0];
+  const zip = Buffer.from(await (await fetch(`${base}/api/admin/collector/download?helper=${sam.id}`, { headers: { Cookie: cookie } })).arrayBuffer());
+  const files = {};
+  for (let at = 0; zip.readUInt32LE(at) === 0x04034b50;) {
+    const size = zip.readUInt32LE(at + 18);
+    const nameLen = zip.readUInt16LE(at + 26);
+    files[zip.subarray(at + 30, at + 30 + nameLen).toString().replace(/^[^/]+\//, '')] = zlib.inflateRawSync(zip.subarray(at + 30 + nameLen, at + 30 + nameLen + size)).toString();
+    at += 30 + nameLen + size;
+  }
+  const token = files['.env'].match(/COLLECTOR_TOKEN=(\S+)/)[1];
+  assert.match(files['README.txt'], /Sam’s PC/);
+  assert.ok(files['src/scrapers/coles-pages.js'], 'it can fetch Coles pages');
+  assert.equal((await as(sam.token)('GET', '/api/collector/latest')).status, 401, 'old token stops working');
+  assert.equal((await fetch(`${base}/api/admin/collector/download?helper=999`, { headers: { Cookie: cookie } })).status, 404);
+  const samApi = as(token);
+
+  // Shops' refreshes are shared out a part at a time; Harris Farm one block of pages at a time.
+  assert.deepEqual((await samApi('GET', '/api/collector/sharing')).body.shops, ['woolworths', 'aldi', 'harrisfarm', 'danmurphys', 'bws', 'liquorland']);
+  const job = (await samApi('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body;
+  assert.deepEqual([job.store, job.part.key, job.part.from, job.part.to], ['harrisfarm', 'p1', 1, 3]);
+  assert.equal((await as(alex.token)('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body.part, undefined, 'one part of Harris Farm at a time');
+  const send = (api, what, body) => api('POST', `/api/collector/parts/${what}`, { store: 'harrisfarm', part: 'p1', ...body });
+  assert.equal((await send(as(alex.token), 'items', { items: [] })).status, 409, 'only Sam sends for Sam’s part');
+  await send(samApi, 'items', { items: [{ store_product_id: 'hf1', name: 'Harris Farm Bananas', size_text: '1kg', price: 3.5 }] });
+  assert.equal((await samApi('GET', '/api/admin/helpers')).status, 401);
+  const doing = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id).shops;
+  assert.deepEqual(doing, [{ store: 'harrisfarm', part: 'pages 1–3' }]);
+  assert.equal((await send(samApi, 'done', { more: false })).body.ok, true);
+
+  // The admin page lists helpers with when they last connected and what they last did.
+  const listed = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id);
+  assert.equal(listed.name, 'Sam’s PC');
+  assert.ok(listed.last_seen_at);
+  assert.equal(listed.mode, 'exe');
+  assert.ok(!('token_hash' in listed), 'token hashes stay on the server');
+
+  // Coles page sharing is off when steady mode is (as in these tests).
+  assert.equal((await samApi('POST', '/api/collector/coles/next', {})).body.off, true);
+  // The Coles page limit is a site setting.
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 'lots' })).status, 400);
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 45 })).body.settings.COLES_PAGES_PER_HOUR.value, '45');
+  await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: '' });
+  // No one connection over a cap (the server included); a helper can be set lower.
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: 0 })).status, 400);
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: 20 })).body.settings.COLES_MAX_PER_CONNECTION.value, '20');
+  assert.equal((await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: 'lots' })).status, 400);
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: 8 });
+  assert.equal((await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id).coles_max, 8);
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: null });
+  await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: '' });
+
+  // An invite link, emailed: the helper downloads it themselves, set up with a token of its own.
+  assert.equal((await admin('POST', '/api/admin/helpers', { name: 'Jo', email: 'jo@example.com', send: true })).status, 400, 'no mail server yet');
+  await admin('PUT', '/api/admin/settings', { smtp: { host: 'smtp.example.com', port: 465, secure: true, user: 'u', password: 'p' } });
+  const { capturedMail } = await import('../src/mailer.js');
+  const jo = (await admin('POST', '/api/admin/helpers', { name: 'Jo', email: 'jo@example.com', send: true })).body;
+  assert.equal(jo.invite.emailed, true);
+  const mail = capturedMail.at(-1);
+  assert.equal(mail.to, 'jo@example.com');
+  assert.match(mail.subject, /Help keep .* prices up to date/);
+  assert.match(mail.text, /What|checks in with the site/);
+  assert.match(mail.text, /--autostart/);
+  const link = mail.text.match(/https?:\/\/\S+\/collector\/\S+/)[0];
+  assert.equal(link, jo.invite.link);
+  const path = new URL(link).pathname;
+  const page = await fetch(base + path);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Hi Jo/);
+  assert.match(html, /download\/windows-x64/);
+  const zipRes = await fetch(base + path + '/download/zip');
+  assert.equal(zipRes.headers.get('content-type'), 'application/zip');
+  const joToken = Buffer.from(await zipRes.arrayBuffer()).toString('latin1').length > 0
+    && (await (async () => {
+      const z = Buffer.from(await (await fetch(base + path + '/download/zip')).arrayBuffer());
+      for (let at = 0; z.readUInt32LE(at) === 0x04034b50;) {
+        const size = z.readUInt32LE(at + 18);
+        const nameLen = z.readUInt16LE(at + 26);
+        const name = z.subarray(at + 30, at + 30 + nameLen).toString();
+        if (name.endsWith('/.env')) return zlib.inflateRawSync(z.subarray(at + 30 + nameLen, at + 30 + nameLen + size)).toString().match(/COLLECTOR_TOKEN=(\S+)/)[1];
+        at += 30 + nameLen + size;
+      }
+      return null;
+    })());
+  assert.equal((await as(joToken)('GET', '/api/collector/latest')).status, 200, 'the downloaded copy works');
+  assert.equal((await fetch(base + '/collector/not-a-real-invite-link-at-all')).status, 404);
+  // A new link replaces the old one; cancelling it stops it working.
+  const again = (await admin('POST', `/api/admin/helpers/${jo.id}/invite`, {})).body;
+  assert.equal(again.emailed, false);
+  assert.equal((await fetch(base + path)).status, 404, 'the older link stopped working');
+  await admin('DELETE', `/api/admin/helpers/${jo.id}/invite`);
+  assert.equal((await fetch(base + new URL(again.link).pathname)).status, 404);
+  assert.equal((await fetch(base + new URL(again.link).pathname + '/download/zip', { redirect: 'manual' })).status, 302, 'no download either');
+  await admin('PUT', '/api/admin/settings', { smtp: null });
+  await admin('DELETE', `/api/admin/helpers/${jo.id}`);
+
+  // Turned off, then removed.
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { disabled: true });
+  assert.equal((await samApi('GET', '/api/collector/latest')).status, 401);
+  await admin('DELETE', `/api/admin/helpers/${sam.id}`);
+  await admin('DELETE', `/api/admin/helpers/${alex.id}`);
+  assert.deepEqual((await admin('GET', '/api/admin/helpers')).body.helpers, []);
+});
+
 test('home collector as a single program: download with settings appended, and the launcher fetching its code', async () => {
   const zlib = await import('node:zlib');
   const { spawn } = await import('node:child_process');
@@ -646,7 +767,7 @@ test('home collector as a single program: download with settings appended, and t
   const latest = (await (await fetch(base + '/api/collector/latest', { headers: { Authorization: `Bearer ${config.COLLECTOR_TOKEN}` } })).json()).version;
   for (let i = 0; i < 100 && !out.includes('Collecting on schedule'); i++) await new Promise((r) => setTimeout(r, 100));
   child.kill();
-  assert.match(out, new RegExp(`Home collector ${latest} \\(exe\\)`), out);
+  assert.match(out, new RegExp(`Collector ${latest} \\(exe\\)`), out);
   assert.ok(fs.existsSync(path.join(home, 'code', latest, 'src', 'scrapers', 'aldi.js')), 'code cached for offline starts');
 
   fs.rmSync(pre, { recursive: true, force: true });
@@ -1088,6 +1209,37 @@ test('alcohol is left out unless you turn it on in Settings', async () => {
   assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L']);
   assert.equal((await api('PATCH', '/api/me', { showAlcohol: true })).body.user.showAlcohol, true);
   assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L', 'Settingtest Lager Cans 375mL x 6 pack']);
+});
+
+test('liquor shops only appear for people with alcohol on, mixers and all', async () => {
+  upsertProducts('danmurphys', [
+    { store_product_id: 'dm1-each', name: 'Liqtest Tonic Water 1L', brand: 'Liqtest', size_text: '1L', category: 'Mixers', price: 3 },
+    { store_product_id: 'dm2-case', name: 'Liqtest Lager Case', brand: 'Liqtest', size_text: '24 x 375mL', category: 'Beer', price: 50 },
+  ]);
+  upsertProducts('coles', [{ store_product_id: 'lq1', name: 'Coles Liqtest Tonic Water 1L', brand: 'Coles', size_text: '1L', category: 'Soft Drinks', price: 2.5 }]);
+  const stores = async (api, q) => [...new Set((await api('GET', `/api/search?q=${q}`)).body
+    .flatMap((g) => [g.anchor.store, ...Object.keys(g.best || {}).filter((k) => g.best[k])]))].sort();
+  const config = (await client()('GET', '/api/config')).body;
+  assert.equal(config.stores.find((s) => s.id === 'danmurphys').liquor, true, 'the page is told which shops are liquor shops');
+
+  const visitor = client();
+  assert.deepEqual(await stores(visitor, 'liqtest%20tonic'), ['coles'], 'not even Dan Murphy’s tonic water');
+
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'liq@example.com', password: 'password123', preferredStores: ['coles', 'woolworths'] });
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles']);
+  const listId = (await api('GET', '/api/lists')).body[0].id;
+  assert.ok(!(await api('GET', `/api/lists/${listId}`)).body.stores.includes('danmurphys'), 'nor on their lists');
+  // Turning alcohol on adds the liquor shops to the ones they picked.
+  const me = (await api('PATCH', '/api/me', { showAlcohol: true })).body.user;
+  assert.deepEqual(me.preferredStores, ['coles', 'woolworths', 'danmurphys', 'bws', 'liquorland']);
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles', 'danmurphys']);
+  assert.ok((await api('GET', `/api/lists/${listId}`)).body.stores.includes('danmurphys'));
+  // And off again: gone, though they're still in the saved choice for next time.
+  await api('PATCH', '/api/me', { showAlcohol: false });
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles']);
+  const changes = (await visitor('GET', '/api/changes?days=90')).body;
+  assert.ok(!changes.some((c) => c.store === 'danmurphys'), 'price changes leave them out too');
 });
 
 test('the page asks for its script by content, so updates are never hidden by a cache', async () => {

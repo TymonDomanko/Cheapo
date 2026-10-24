@@ -61,6 +61,22 @@ const SETTINGS = {
       return v;
     },
   },
+  // Coles pages an hour, this server and every helper together.
+  COLES_PAGES_PER_HOUR: {
+    check(v) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0 || n > 600) throw httpError(400, 'Coles pages an hour should be a whole number from 0 to 600');
+      return String(n);
+    },
+  },
+  // The most Coles pages an hour any one connection fetches (this server or a helper); 40 when unset.
+  COLES_MAX_PER_CONNECTION: {
+    check(v) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 1 || n > 600) throw httpError(400, 'Coles pages an hour per connection should be a whole number from 1 to 600');
+      return String(n);
+    },
+  },
   SERVER_SCRAPE_STORES: {
     check(v) {
       const list = [...new Set(String(v).split(',').map((s) => s.trim()).filter(Boolean))];

@@ -1,6 +1,18 @@
 #!/usr/bin/env node
 // Home collector: crawls stores that block cloud servers (Woolworths, ALDI)
-// from your own connection and sends the products to your public site.
+// from your own connection and sends the products to your public site. It can
+// also be a helper on someone else's connection (the site's Admin page makes
+// one per helper), sharing the work with the site.
+//
+// Left running (COLLECT_CRON set, as a downloaded one is), it checks in every
+// few minutes and does what the site asks:
+//   - fetch part of a shop's daily refresh (a department, say), shared out
+//     with the site and other collectors (src/sharing.js). COLLECT_STORES
+//     limits which shops it will do;
+//   - fetch Coles a page at a time, at its share of the site's pace
+//     (src/coles-live.js). COLLECT_COLES=false turns that off.
+// With shops named on the command line (or an older site), it just crawls
+// those, daily at COLLECT_CRON.
 //
 // Easiest: download it from your site's Admin page (Site settings → Home
 // collector) — a single program for Windows or Linux, or a zip with
@@ -33,7 +45,10 @@ const server = (flag('server') || process.env.COLLECTOR_SERVER || '').replace(/\
 const token = flag('token') || process.env.COLLECTOR_TOKEN;
 const schedule = flag('cron') || process.env.COLLECT_CRON;
 const named = args.filter((a) => !a.startsWith('--'));
-const stores = named.length ? named : (process.env.COLLECT_STORES || 'woolworths,aldi').split(',').map((s) => s.trim());
+const listed = (process.env.COLLECT_STORES || '').split(',').map((s) => s.trim()).filter(Boolean);
+// The shops it does when the site doesn't share out the work (named, or the usual two).
+const stores = named.length ? named : listed.length ? listed : ['woolworths', 'aldi'];
+const helpColes = process.env.COLLECT_COLES !== 'false';
 
 // How this copy runs: a downloaded bundle can update itself; inside the Docker
 // image or a git checkout it can't (pull the new image / code instead).
@@ -44,6 +59,8 @@ const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf
 // Scrapers read proxy settings when loaded, so load them after .env.
 const { SCRAPERS } = await import('../scrapers/registry.js');
 const { sleep } = await import('../scrapers/http.js');
+const { colesPages } = await import('../scrapers/coles-pages.js');
+const { index: indexParts, fetchPart } = await import('../scrapers/parts.js');
 const cron = await import('../mini-cron.js');
 
 if (!server || !token) {
@@ -78,7 +95,7 @@ async function call(method, urlPath, body) {
       const res = await fetch(server + urlPath, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
       if (res.ok) return data;
-      if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true });
+      if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true, status: res.status });
       throw new Error(data.error || `HTTP ${res.status}`);
     } catch (e) {
       if (e.fatal || attempt >= 4) throw e;
@@ -159,9 +176,97 @@ async function run() {
   return results.every((r) => r.status === 'fulfilled');
 }
 
-console.log(`Home collector ${VERSION} (${MODE}) for ${server}: ${stores.join(', ')}`);
-if (schedule) {
-  console.log(`Collecting on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
+// ---------------------------------------------------------------- sharing the work
+
+/** Parts of shops' daily refreshes, one at a time, for as long as the site has them. */
+async function partsLoop() {
+  const canDo = named.length ? named : listed;
+  for (;;) {
+    let wait = 300;
+    try {
+      const r = await post('/api/collector/parts/next', { stores: canDo });
+      wait = r.wait;
+      if (r.part) await doPart(r);
+    } catch (e) {
+      if (e.status === 404) return; // an older site
+      console.warn(`Couldn't ask for work: ${e.message}`);
+    }
+    await sleep(Math.min(3600, Math.max(0, Number(wait) || 0)) * 1000);
+  }
+}
+
+async function doPart({ store, part }) {
+  const send = (what, body) => post(`/api/collector/parts/${what}`, { store, part: part.key, ...body });
+  console.log(`${store}: fetching ${part.label} (the site asked)`);
+  try {
+    if (part.kind === 'index') return void await send('done', { cats: await indexParts(SCRAPERS[store]) });
+    const result = {};
+    let sent = 0;
+    for await (const batch of fetchPart(SCRAPERS[store], part, { log: (m) => console.log(m), result })) {
+      if (!batch.length) continue;
+      await send('items', { items: batch });
+      sent += batch.length;
+    }
+    await send('done', { more: !!result.more });
+    console.log(`${store}: sent ${sent} products for ${part.label}`);
+  } catch (e) {
+    if (e.status === 409) return console.log(`${store}: ${part.label} was handed to someone else`);
+    console.error(`${store}: ${part.label} failed — ${e.message}`);
+    await send('done', e.blocked ? { blocked: e.message } : { error: e.message }).catch(() => {});
+  }
+}
+
+/** Coles, a page at a time, for as long as the site wants. */
+async function colesLoop() {
+  const coles = colesPages();
+  for (;;) {
+    let wait = 60;
+    try {
+      const r = await post('/api/collector/coles/next', {});
+      wait = r.wait;
+      if (r.job) {
+        let body;
+        try {
+          body = { job: r.job, ...(await coles.run(r.job)) };
+        } catch (e) {
+          body = e.blocked ? { job: r.job, blocked: e.message, requests: e.requests } : { job: r.job, error: e.message, requests: e.requests };
+          console.warn(`Coles: ${e.message}`);
+        }
+        wait = (await post('/api/collector/coles/result', body)).wait;
+      }
+    } catch (e) {
+      if (e.status === 404) return; // an older site
+      console.warn(`Coles: couldn't reach the site (${e.message})`);
+    }
+    await sleep(Math.min(3600, Math.max(5, Number(wait) || 60)) * 1000);
+  }
+}
+
+async function shareWork() {
+  if (await updateIfNeeded()) process.exit(RESTART);
+  try {
+    await call('GET', '/api/collector/sharing'); // does this site share out work?
+  } catch (e) {
+    if (e.status === 404) return false;
+  }
+  console.log('Checking in with the site for work.');
+  partsLoop().catch((e) => console.error(e.message));
+  if (helpColes) colesLoop().catch((e) => console.error(`Coles: ${e.message}`));
+  setInterval(async () => {
+    if (await updateIfNeeded()) process.exit(RESTART); // between parts is fine: the site hands on anything unfinished
+  }, 3600 * 1000);
+  return true;
+}
+
+console.log(`Collector ${VERSION} (${MODE}) for ${server}`);
+if (schedule && !named.length) {
+  if (!(await shareWork())) {
+    console.log(`This site doesn't share out work; collecting ${stores.join(', ')} on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
+    cron.schedule(schedule, () => run().catch((e) => console.error(e.message)), { timezone: process.env.TZ || undefined });
+    if (process.env.COLLECT_ON_START === 'true') run().catch((e) => console.error(e.message));
+  }
+} else if (schedule) {
+  console.log(`Collecting ${stores.join(', ')} on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
   cron.schedule(schedule, () => run().catch((e) => console.error(e.message)), { timezone: process.env.TZ || undefined });
   if (process.env.COLLECT_ON_START === 'true') run().catch((e) => console.error(e.message));
   else if (await updateIfNeeded()) process.exit(RESTART);

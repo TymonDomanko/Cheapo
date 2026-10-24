@@ -50,20 +50,24 @@ if %errorlevel%==75 goto loop\r
 pause\r
 `;
 
-function readme(serverUrl) {
-  return `Home collector for ${serverUrl}
-${'='.repeat(20 + serverUrl.length)}
+function readme(serverUrl, helper) {
+  const title = helper ? `Price collector for ${serverUrl} (${helper})` : `Home collector for ${serverUrl}`;
+  return `${title}
+${'='.repeat(title.length)}
 
-Some supermarkets (Woolworths, ALDI) block cloud servers. This small program
-runs on a computer at home, fetches their prices from your home connection and
-sends them to your site every day.
+Some supermarkets block servers, or block connections that ask for too much.
+This small program runs on a computer at home and shares the work of keeping
+${serverUrl} up to date: the site tells it which shop to refresh, or which
+Coles pages to fetch, it fetches them from this connection at a gentle pace
+and sends the prices back. The site sets one pace for all its collectors
+together, so this one never adds to how much is asked of a shop.
 
 1. Install Node.js 20 or newer: https://nodejs.org
 2. Start it:
      Windows:      double-click start.bat
      Mac / Linux:  open a terminal here and run  sh start.sh
-3. Leave it running (or set it to start when the computer starts). It collects
-   once straight away and then every day at the time in .env (COLLECT_CRON).
+3. Leave it running (or set it to start when the computer starts). It checks
+   in with the site every few minutes for work.
 
 It keeps itself up to date: before each collection it asks your site whether
 there's a newer version, and if so downloads it and restarts. To turn that
@@ -76,23 +80,23 @@ the collector last connected and whether it's up to date.
 }
 
 /** Files in the bundle (no .env), as { path: text }. */
-export function bundleFiles(serverUrl) {
+export function bundleFiles(serverUrl, helper = null) {
   const files = Object.fromEntries(COLLECTOR_CODE.map((p) => [p, readRepo(p)]));
   files['package.json'] = PACKAGE_JSON;
   files['start.sh'] = START_SH;
   files['start.bat'] = START_BAT;
-  files['README.txt'] = readme(serverUrl);
+  files['README.txt'] = readme(serverUrl, helper);
   files['.collector-bundle'] = 'This folder is a downloaded home collector; it may update itself.\n';
   return files;
 }
 
-export function envFile({ serverUrl, token, stores, cron }) {
+export function envFile({ serverUrl, token, cron }) {
   return [
-    '# Home collector settings. Keep this file private: the token lets it send prices to your site.',
+    '# Collector settings. Keep this file private: the token lets it send prices to the site.',
     `COLLECTOR_SERVER=${serverUrl}`,
     `COLLECTOR_TOKEN=${token}`,
-    `COLLECT_STORES=${stores.join(',')}`,
-    '# When to collect each day (cron: minute hour * * *), in TZ.',
+    '# The site says which shops to refresh. To only ever do some, list them, e.g. COLLECT_STORES=woolworths,aldi',
+    '# Set: keep running and check in for work (the time only matters for sites from before work sharing).',
     `COLLECT_CRON=${cron}`,
     'TZ=Australia/Sydney',
     '# Collect once as soon as it starts (handy to check it works).',

@@ -2,7 +2,7 @@
 
 ## Searching and comparing
 
-- **Every product and price** from Woolworths, Coles, ALDI, IGA and Harris Farm (about 75,000 products), refreshed every night. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
+- **Every product and price** from Woolworths, Coles, ALDI, IGA and Harris Farm (about 75,000 products), and the liquor shops Dan Murphy's, BWS and Liquorland, refreshed every night. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
 - **The cheapest of it, any brand.** Search `1l milk` and the top of the page shows the cheapest 1L milk at your shops, whatever the brand, then the next cheapest and the cheapest at each shop. Search `milk` and it shows each common size with its cheapest, highlighting the best value per litre, kilo or item.
   - "Milk" means plain milk. Lite, lactose-free, oat and so on are one tap away as chips. Free range, barn and cage eggs count as grades of the same thing.
   - Nicknames work: `coke` finds Coca-Cola, and `tp` finds toilet paper.
@@ -13,6 +13,7 @@
 - **Your shops.** Pick the shops you use at sign-up or in Settings, and search only compares those.
 - **Your IGA.** Every IGA sets its own prices, so you pick yours by suburb, postcode or "Near me". Only IGAs that publish prices online can be picked, and which ones do is re-checked daily.
 - **Alcohol** is hidden unless you turn on **Show alcohol** in Settings. It's recognised by each shop's own category, so ginger beer soft drinks and cooking wine still show.
+- **Liquor shops.** With Show alcohol on, Dan Murphy's, BWS and Liquorland join the comparison. Bottles, packs and cases are compared like for like ("24 x 375mL"), and "any six" prices count as multi-buys. With it off, the liquor shops don't appear anywhere, not even for mixers.
 
 ## Prices over time
 
@@ -64,6 +65,10 @@
 - **Problems come to you.** If a refresh has problems, admins get **one summary email** after it finishes: what failed, what found far fewer products, and what has recovered. Admins are also emailed if the home collector goes quiet.
 - **Fresh Coles prices without getting blocked.** Coles is refreshed a page every couple of minutes instead of all at once. Searching something whose Coles prices are over a day old fetches them there and then.
 - **Blocked shops back off.** When a shop blocks the crawler (Coles' bot check), the crawl stops, remembers where it got to, and carries on a few hours later. It doesn't push through the block.
+- **Helpers share the work.** People you trust can run the collector on their own connection.
+  - Each shop's refresh is split into departments that the server and collectors share. Coles pages are shared out under one combined limit. Helpers make refreshes more reliable without asking the shops for more.
+  - **Invite them by email:** they get what it is, how to set it up and a link to download it themselves, set up for your site.
+  - Each helper has its own token and can be turned off.
 - **Home collector, one click.** For shops that block your server, the Admin page has a ready-configured download:
   - a single program for Windows or Linux (including a Raspberry Pi);
   - a zip for a Mac.

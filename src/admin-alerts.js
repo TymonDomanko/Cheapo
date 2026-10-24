@@ -197,7 +197,7 @@ export async function checkCollector({ serverStores } = {}) {
     const crawled = serverStores ? serverStores() : STORES;
     const fromCollector = STORES.filter((s) => !crawled.includes(s));
     if (!fromCollector.length) return null;
-    const last = getDb().prepare(`SELECT MAX(finished_at) at FROM scrape_runs WHERE source = 'collector' AND status = 'ok'
+    const last = getDb().prepare(`SELECT MAX(finished_at) at FROM scrape_runs WHERE source IN ('collector', 'shared') AND status = 'ok'
       AND store IN (${fromCollector.map(() => '?').join(',')})`).get(...fromCollector).at;
     const quiet = !last || Date.now() - Date.parse(last) > COLLECTOR_QUIET_MS;
     const names = fromCollector.map(storeName).join(' and ');

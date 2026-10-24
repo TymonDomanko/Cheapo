@@ -6,7 +6,7 @@ import compression from 'compression';
 import path from 'node:path';
 import fs from 'node:fs';
 import { getDb } from './db.js';
-import { STORES, STORE_INFO } from './stores.js';
+import { STORES, STORE_INFO, LIQUOR_STORES, visibleStores } from './stores.js';
 import { compareSearch, productDetail, lookupBarcode, alcoholCategories, NO_ALCOHOL_SQL } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
@@ -22,6 +22,9 @@ import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
 import * as colesLive from './coles-live.js';
+import * as helpers from './helpers.js';
+import * as sharing from './sharing.js';
+import { invitePage, preparingPage, inviteEmail } from './helper-invite.js';
 import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
@@ -41,6 +44,15 @@ const APP_VERSION = process.env.APP_VERSION || 'dev';
 
 // Alcohol is left out of search, deals and price changes unless you've turned it on in Settings.
 const wantsAlcohol = (req) => !!req.user?.showAlcohol;
+/**
+ * The shops to compare for this person: the ones they picked (or all), less
+ * liquor shops unless they've turned on Show alcohol.
+ */
+const shopsFor = (req) => {
+  const visible = visibleStores(wantsAlcohol(req));
+  const picked = (req.user?.preferredStores || []).filter((s) => visible.includes(s));
+  return picked.length ? picked : visible;
+};
 
 const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
 // Filling trolleys drives a browser on the *server* machine, so it only makes
@@ -107,7 +119,7 @@ export function createApp() {
   // Home collectors send product batches, which can be large; everything else is small.
   const smallJson = express.json({ limit: '50kb' });
   const bigJson = express.json({ limit: '5mb' });
-  app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
+  app.use((req, res, next) => (req.path.startsWith('/api/ingest/') || req.path.startsWith('/api/collector/') ? bigJson : smallJson)(req, res, next));
   // The page asks for app.js?v=<hash of its contents> (and styles.css the same way), so after an
   // update no cache anywhere — the browser's, a proxy's or the offline copy — can hand back old code.
   const indexHtml = versionedIndex();
@@ -172,7 +184,7 @@ export function createApp() {
     const { q = '', store, specials, mode } = req.query;
     const groups = compareSearch(String(q).slice(0, 100), {
       store,
-      stores: req.user?.preferredStores,
+      stores: shopsFor(req),
       igaStore: igaFor(req),
       memberships: req.user?.memberships || [],
       alcohol: wantsAlcohol(req),
@@ -191,7 +203,7 @@ export function createApp() {
   app.get('/api/best-price', searchLimit, h((req) => {
     const q = String(req.query.q || '').slice(0, 100);
     const best = bestPrices(q, {
-      stores: req.user?.preferredStores,
+      stores: shopsFor(req),
       igaStore: igaFor(req),
       memberships: req.user?.memberships || [],
       alcohol: wantsAlcohol(req),
@@ -204,7 +216,7 @@ export function createApp() {
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {
-    const stores = req.user?.preferredStores;
+    const stores = shopsFor(req);
     return {
       unusual: unusualDeals({ stores, alcohol: wantsAlcohol(req) }),
       regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [], alcohol: wantsAlcohol(req) }) : null,
@@ -213,13 +225,13 @@ export function createApp() {
 
   // A barcode scanned in the shop.
   app.get('/api/barcode/:code', searchLimit, h((req) => {
-    const out = lookupBarcode(req.params.code, { stores: req.user?.preferredStores, igaStore: igaFor(req), memberships: req.user?.memberships || [] });
+    const out = lookupBarcode(req.params.code, { stores: shopsFor(req), igaStore: igaFor(req), memberships: req.user?.memberships || [] });
     if (!out) throw bad('That doesn’t look like a product barcode');
     return out;
   }));
 
   app.get('/api/products/:id', h((req) => {
-    const out = productDetail(id(req.params.id), req.user?.preferredStores, igaFor(req));
+    const out = productDetail(id(req.params.id), shopsFor(req), igaFor(req));
     if (!out) throw bad('Not found', 404);
     out.insight = productInsight(out.product, igaFor(req));
     if (req.user) {
@@ -233,7 +245,8 @@ export function createApp() {
   app.get('/api/changes', h((req) => {
     const days = Math.min(Number(req.query.days) || 7, 90);
     const dir = req.query.direction === 'up' ? 'AND h.price > old_price' : req.query.direction === 'down' ? 'AND h.price < old_price' : '';
-    const drinks = wantsAlcohol(req) ? '' : `AND ${NO_ALCOHOL_SQL}`;
+    // Without alcohol: no drinks, and nothing from liquor shops (their mixers and snacks too).
+    const drinks = wantsAlcohol(req) ? '' : `AND ${NO_ALCOHOL_SQL} AND p.store NOT IN (${LIQUOR_STORES.map((s) => `'${s}'`).join(', ')})`;
     return getDb().prepare(`
       SELECT p.id, p.store, p.name, p.size_text, p.image_url, h.price AS new_price, h.recorded_at,
         (SELECT price FROM price_history e WHERE e.product_id = h.product_id AND e.location IS h.location AND e.id < h.id
@@ -319,7 +332,13 @@ export function createApp() {
   // ------------------------------------------------------------ your account
 
   app.patch('/api/me', requireUser, h((req) => {
-    const { name, preferredStores, applyToLists, alertsWeekly, alertsPrice, memberships, showAlcohol } = req.body || {};
+    const { name, applyToLists, alertsWeekly, alertsPrice, memberships, showAlcohol } = req.body || {};
+    let { preferredStores } = req.body || {};
+    // Turning alcohol on adds the liquor shops to the shops someone picked (they can untick them).
+    if (showAlcohol && !req.user.showAlcohol) {
+      const picked = Array.isArray(preferredStores) ? preferredStores : req.user.preferredStores;
+      if (picked?.length && !picked.some((s) => LIQUOR_STORES.includes(s))) preferredStores = [...picked, ...LIQUOR_STORES];
+    }
     const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships, showAlcohol });
     if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
     return { user };
@@ -397,7 +416,7 @@ export function createApp() {
     const list = lists.getListSummary(listId, req.user.id);
     const text = String(req.body?.text || '').slice(0, 5000);
     return previewPaste(text, {
-      stores: STORES.filter((s) => !list.excludedStores.includes(s)),
+      stores: list.stores.filter((s) => !list.excludedStores.includes(s)),
       igaStore: list.igaStoreId,
       memberships: req.user.memberships || [],
       alcohol: wantsAlcohol(req),
@@ -490,12 +509,17 @@ export function createApp() {
   // Stores that block cloud servers (Woolworths, ALDI) can be crawled from a
   // home connection by `npm run collect`, which sends the products here.
 
+  // The site's own token (COLLECTOR_TOKEN) or an approved helper's (src/helpers.js).
   function requireCollector(req, res, next) {
-    const want = getSetting('COLLECTOR_TOKEN');
-    const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const ok = want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
-    if (!ok) return res.status(401).json({ error: want ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
-    collectorBundle.recordCollector({ version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') });
+    const worker = helpers.identify(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    if (!worker) {
+      const any = getSetting('COLLECTOR_TOKEN') || helpers.list().length;
+      return res.status(401).json({ error: any ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
+    }
+    const seen = { version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') };
+    if (worker.id === 'home') collectorBundle.recordCollector(seen);
+    helpers.touch(worker, seen);
+    req.worker = worker;
     next();
   }
 
@@ -508,15 +532,30 @@ export function createApp() {
   })));
   const collectorRun = (req) => {
     const run = getRun(id(req.params.runId));
-    if (!run || run.source !== 'collector') throw bad('Unknown run', 404);
+    if (!run || run.source !== 'collector' || (run.worker && run.worker !== req.worker.id)) throw bad('Unknown run', 404);
     return run;
   };
 
   app.post('/api/ingest/runs', requireCollector, h((req) => {
     const { store, location } = req.body || {};
     if (!STORES.includes(store)) throw bad('Unknown store');
-    return startRun(store, { location: location ? String(location) : null, source: 'collector' });
+    const run = startRun(store, { location: location ? String(location) : null, source: 'collector' });
+    getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(req.worker.id, run.runId);
+    return run;
   }));
+  // What this site shares out (an older site has no such page, and collectors fall back to fixed times).
+  app.get('/api/collector/sharing', requireCollector, h(() => ({ shops: sharing.SHARED, coles: colesLive.enabled() })));
+  // A part of a shop's daily refresh to fetch, out of the shops the collector can do (src/sharing.js).
+  app.post('/api/collector/parts/next', requireCollector, h((req) => {
+    const canDo = Array.isArray(req.body?.stores) ? req.body.stores.filter((x) => STORES.includes(x)) : [];
+    const job = sharing.take(req.worker.id, canDo);
+    return job ? { ...job, wait: 0 } : { wait: 300 };
+  }));
+  app.post('/api/collector/parts/items', requireCollector, h((req) => sharing.items(req.worker.id, req.body?.store, String(req.body?.part || ''), req.body?.items)));
+  app.post('/api/collector/parts/done', requireCollector, h((req) => sharing.done(req.worker.id, req.body?.store, String(req.body?.part || ''), req.body || {})));
+  // Coles page by page, shared with this server (src/coles-live.js).
+  app.post('/api/collector/coles/next', requireCollector, h((req) => colesLive.helperNext(req.worker)));
+  app.post('/api/collector/coles/result', requireCollector, h((req) => colesLive.helperResult(req.worker, req.body)));
   app.post('/api/ingest/runs/:runId/items', requireCollector, h((req) => {
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length > 2000) throw bad('Send { items: [...] } (up to 2000 per batch)');
@@ -534,6 +573,7 @@ export function createApp() {
     return {
       version: APP_VERSION,
       colesLive: colesLive.status(),
+      shared: sharing.status(),
       stores: STORES.map((s) => ({
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
@@ -566,9 +606,13 @@ export function createApp() {
     // Coles in steady mode: start its whole-shop pass again rather than crawl it all at once.
     const steady = colesLive.enabled() && wanted.includes('coles');
     if (steady) colesLive.restartPass();
-    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles'));
+    // Shops shared out with collectors: start today's refresh again, a part at a time.
+    const shared = wanted.filter((s) => sharing.SHARED.includes(s));
+    for (const s of shared) sharing.restart(s);
+    if (shared.length && process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') sharing.pump();
+    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles') && !shared.includes(s));
     scrapeAll(stores).catch(() => {});
-    return { started: stores, colesSteady: steady };
+    return { started: [...stores, ...shared], colesSteady: steady };
   }));
 
   // Site settings (email, site details, home collector). .env values win and can't be changed here.
@@ -588,6 +632,9 @@ export function createApp() {
     for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
       if (body[key] !== undefined) updates.push([key, body[key]]);
     }
+    for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) {
+      if (body[k] !== undefined) updates.push([k, body[k] === '' || body[k] === null ? null : String(body[k])]);
+    }
     if (body.SERVER_SCRAPE_STORES !== undefined) {
       const list = Array.isArray(body.SERVER_SCRAPE_STORES) ? body.SERVER_SCRAPE_STORES : null;
       // Every store ticked = the default (crawl everything), so store nothing.
@@ -606,24 +653,34 @@ export function createApp() {
     settings.setSetting('COLLECTOR_TOKEN', token);
     return { token };
   }));
-  // What a downloaded collector is set up with: this site, its token (made now
-  // if there isn't one) and the stores this server doesn't crawl itself (if it
-  // crawls everything, the usual two).
+  // What a downloaded collector is set up with: this site and a token. For a
+  // helper (?helper=<id>) that's a new token for it, so an older download of
+  // theirs stops working; otherwise the site's own token (made now if there
+  // isn't one). Which shops it does is up to this server (src/sharing.js).
   function collectorSetup(req) {
-    let token = getSetting('COLLECTOR_TOKEN');
+    const helper = req.query.helper ? helpers.list().find((x) => x.id === Number(req.query.helper)) : null;
+    if (req.query.helper && !helper) throw bad('No such helper', 404);
+    let token = helper ? helpers.newToken(helper.id) : getSetting('COLLECTOR_TOKEN');
     if (!token) {
       token = settings.newCollectorToken();
       settings.setSetting('COLLECTOR_TOKEN', token);
     }
-    const notCrawled = STORES.filter((x) => !serverStores().includes(x));
-    return { serverUrl: siteUrl(req), token, stores: notCrawled.length ? notCrawled : ['woolworths', 'aldi'], cron: '0 4 * * *' };
+    return { serverUrl: siteUrl(req), token, helper: helper?.name || null, cron: '0 4 * * *' };
   }
 
   // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
   app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
-    const setup = collectorSetup(req);
+    let setup;
+    try {
+      setup = collectorSetup(req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
+    sendZip(res, setup);
+  });
+  function sendZip(res, setup) {
     const files = {
-      ...collectorBundle.bundleFiles(setup.serverUrl),
+      ...collectorBundle.bundleFiles(setup.serverUrl, setup.helper),
       '.env': collectorBundle.envFile(setup),
     };
     res.set({
@@ -632,7 +689,17 @@ export function createApp() {
       'Cache-Control': 'no-store',
     });
     res.send(collectorBundle.zip(files, 'grocery-home-collector'));
-  });
+  }
+  function sendProgram(res, target, setup) {
+    collectorExe.sendExe(res, target, {
+      COLLECTOR_SERVER: setup.serverUrl,
+      COLLECTOR_TOKEN: setup.token,
+      COLLECT_CRON: setup.cron,
+      TZ: 'Australia/Sydney',
+      COLLECT_ON_START: 'true',
+      AUTO_UPDATE: 'true',
+    });
+  }
 
   // The home collector as a single program per platform. Built in the
   // background the first time (it takes a minute), then served from a cache.
@@ -645,19 +712,96 @@ export function createApp() {
     const { target } = req.params;
     if (!collectorExe.TARGETS[target]) return res.status(404).json({ error: 'Unknown platform' });
     if (!collectorExe.exeStatus(target).ready) return res.status(409).json({ error: 'Not built yet — start the build first' });
-    const setup = collectorSetup(req);
-    collectorExe.sendExe(res, target, {
-      COLLECTOR_SERVER: setup.serverUrl,
-      COLLECTOR_TOKEN: setup.token,
-      COLLECT_STORES: setup.stores.join(','),
-      COLLECT_CRON: setup.cron,
-      TZ: 'Australia/Sydney',
-      COLLECT_ON_START: 'true',
-      AUTO_UPDATE: 'true',
-    });
+    let setup;
+    try {
+      setup = collectorSetup(req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
+    sendProgram(res, target, setup);
+  });
+
+  // A helper's invite link: a page explaining the collector, with downloads set up for them
+  // (each makes them a new token). No login; the link itself is the key, for a week.
+  const inviteLimit = rateLimit({ windowMs: 60000, max: 30 });
+  app.get('/collector/:invite', inviteLimit, (req, res) => {
+    const helper = helpers.byInvite(req.params.invite);
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }).status(helper ? 200 : 404).type('html')
+      .send(invitePage({ siteUrl: siteUrl(req), helper, inviteToken: req.params.invite, until: helper?.until }));
+  });
+  app.get('/collector/:invite/download/:target', inviteLimit, (req, res) => {
+    const helper = helpers.byInvite(req.params.invite);
+    const { target } = req.params;
+    if (!helper) return res.redirect(`/collector/${encodeURIComponent(req.params.invite)}`);
+    if (target !== 'zip' && !collectorExe.TARGETS[target]) return res.status(404).type('text').send('Unknown platform');
+    if (target !== 'zip' && !collectorExe.exeStatus(target).ready) {
+      if (collectorExe.exeStatus(target).error && !collectorExe.exeStatus(target).building) {
+        return res.status(503).type('text').send('That program couldn’t be prepared on this server. Go back and use the zip instead.');
+      }
+      collectorExe.buildExe(target); // the first time: about a minute
+      return res.set('Cache-Control', 'no-store').type('html').send(preparingPage());
+    }
+    const setup = { serverUrl: siteUrl(req), token: helpers.newToken(helper.id), helper: helper.name, cron: '0 4 * * *' };
+    if (target === 'zip') sendZip(res, setup);
+    else sendProgram(res, target, setup);
   });
 
   app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
+
+  // Helpers: collectors on other connections that share the work (src/helpers.js).
+  app.get('/api/admin/helpers', requireAdmin, h(() => {
+    const latest = collectorBundle.latestCollectorVersion();
+    const coles = colesLive.status();
+    const shared = Object.entries(sharing.status());
+    return {
+      helpers: helpers.list().map((x) => ({
+        ...x,
+        upToDate: x.version === latest,
+        shops: shared.flatMap(([store, s]) => s.doing.filter((d) => d.id === x.worker).map((d) => ({ store, part: d.part }))),
+        blockedBy: shared.filter(([, s]) => s.barred.includes(x.name)).map(([store]) => store),
+        coles: coles.workers?.find((w) => w.id === x.worker) || null,
+      })),
+    };
+  }));
+  // A new invite link for a helper (an older one stops working), emailed to them if asked.
+  const mailNeeded = () => bad('Set up a mail server first (Email, above), or copy the link instead');
+  async function invite(req, helper, { email, send }) {
+    const to = email || helper.email;
+    if (send && to && !mailConfigured()) throw mailNeeded();
+    const { token, until } = helpers.newInvite(helper.id, email || undefined);
+    const link = `${siteUrl(req)}/collector/${token}`;
+    let emailed = false;
+    if (send && to) {
+      await sendMail({ to, kind: 'helper-invite', ...inviteEmail({ helper, link, until }) });
+      emailed = true;
+    }
+    return { link, until, emailed, to: emailed ? to : null };
+  }
+  app.post('/api/admin/helpers', requireAdmin, h(async (req) => {
+    if (req.body?.send && req.body?.email && !mailConfigured()) throw mailNeeded(); // before adding anyone
+    const made = helpers.add(req.body?.name, req.body?.email || null);
+    return { ...made, invite: await invite(req, made, { email: made.email, send: !!req.body?.send }) };
+  }));
+  app.post('/api/admin/helpers/:id/invite', requireAdmin, h(async (req) => {
+    const helper = helpers.list().find((x) => x.id === id(req.params.id));
+    if (!helper) throw bad('No such helper', 404);
+    return invite(req, helper, { email: req.body?.email || null, send: !!req.body?.send });
+  }));
+  app.delete('/api/admin/helpers/:id/invite', requireAdmin, h((req) => {
+    helpers.cancelInvite(id(req.params.id));
+    return { ok: true };
+  }));
+  app.post('/api/admin/helpers/:id/token', requireAdmin, h((req) => ({ token: helpers.newToken(id(req.params.id)) })));
+  app.patch('/api/admin/helpers/:id', requireAdmin, h((req) => {
+    const b = req.body || {};
+    if ('colesMax' in b) helpers.setColesMax(id(req.params.id), b.colesMax === null || b.colesMax === '' ? null : Number(b.colesMax));
+    if ('disabled' in b) helpers.setDisabled(id(req.params.id), !!b.disabled);
+    return { ok: true };
+  }));
+  app.delete('/api/admin/helpers/:id', requireAdmin, h((req) => {
+    helpers.remove(id(req.params.id));
+    return { ok: true };
+  }));
 
   app.post('/api/admin/settings/test-email', requireAdmin, h(async (req) => {
     if (!mailConfigured()) throw bad('Set up a mail server first');

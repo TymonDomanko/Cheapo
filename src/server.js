@@ -6,6 +6,7 @@ import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
 import * as colesLive from './coles-live.js';
+import * as sharing from './sharing.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
 import { checkCollector, resumeSummary } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
@@ -40,7 +41,9 @@ if (SCRAPE_CRON) {
     // First update which IGA stores have prices online, so today's fetch covers the right ones.
     await checkOnlineStores().catch(() => {});
     // Coles refreshes steadily through the day instead (src/coles-live.js), unless that's turned off.
-    const tonight = serverStores().filter((s) => !scrapeStatus[s].running && !(s === 'coles' && colesLive.enabled()));
+    // Woolworths, ALDI and Harris Farm are shared out with collectors, a part at a time (src/sharing.js).
+    sharing.pump();
+    const tonight = serverStores().filter((s) => !scrapeStatus[s].running && !(s === 'coles' && colesLive.enabled()) && !sharing.SHARED.includes(s));
     await scrapeAll(tonight).catch(() => {});
     // Then fill in more Coles barcodes for matching (a daily budget of product pages).
     if (serverStores().includes('coles') && !colesLive.enabled()) await backfillColesBarcodes().catch((e) => console.error(`barcodes: ${e.message}`));
@@ -68,5 +71,8 @@ app.listen(PORT, () => {
   console.log(`Cheapo (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
   resumeSummary(); // a refresh's admin summary that was waiting when the server stopped
-  if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') colesLive.start();
+  if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') {
+    colesLive.start(); // each checks every 30s whether it has work
+    sharing.start();
+  }
 });

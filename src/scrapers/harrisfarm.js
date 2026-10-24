@@ -10,14 +10,20 @@ const SKIP_TYPES = /hamper|gift|flower|voucher|merch|non food/i;
 
 export const store = 'harrisfarm';
 
-export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity } = {}) {
+// One list of pages, no departments: a shared-out crawl is split into blocks of pages instead.
+export const PAGED = true;
+
+/** fromPage/toPage: just those pages; result.more says whether there are pages after toPage. */
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, fromPage = 1, toPage = Infinity, result = {} } = {}) {
   const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.HARRISFARM_DELAY_MS ?? 800) });
   await client.init();
+  result.more = false;
   try {
-    for (let page = 1; page <= maxPagesPerCategory; page++) {
+    for (let page = fromPage; page <= Math.min(toPage, maxPagesPerCategory); page++) {
       const json = await client.getJson(`${ORIGIN}/products.json?limit=${PAGE_SIZE}&page=${page}`);
       const products = json.products || [];
       if (!products.length) break;
+      if (page === toPage) result.more = products.length === PAGE_SIZE;
       const items = products.filter((p) => !SKIP_TYPES.test(p.product_type || '')).flatMap(mapProduct);
       log(`harrisfarm: page ${page} (${items.length})`);
       yield items;

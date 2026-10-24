@@ -50,7 +50,7 @@ async function loadConfig() {
   } catch {
     /* storage blocked */
   }
-  state.allStores = state.config.stores.map((s) => s.id);
+  state.allStores = shopsShown(!!state.config.user?.showAlcohol).map((s) => s.id);
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
@@ -197,6 +197,11 @@ function requireLogin(reason, after) {
   return false;
 }
 
+/** The shops someone sees: liquor shops only with Show alcohol on. */
+function shopsShown(alcohol) {
+  return state.config.stores.filter((s) => alcohol || !s.liquor);
+}
+
 /** Tick boxes for each shop, pre-ticked with the user's choice (or all). */
 function renderShopBoxes(el) {
   // Keep any ticks the person has already changed; otherwise start from their saved choice.
@@ -205,7 +210,9 @@ function renderShopBoxes(el) {
   const signup = !!el.closest('#signup-form');
   // On the sign-up page nothing is saved yet; elsewhere it's the store in use.
   const igaStore = signup ? state.signupIga : state.config.igaStore;
-  el.innerHTML = state.config.stores.map((s) => `<label class="check shop-box">
+  // Liquor shops appear once Show alcohol is ticked (in Settings; never at sign-up, where it's off).
+  const alcohol = !signup && !!($('[name=showAlcohol]')?.checked ?? user()?.showAlcohol);
+  el.innerHTML = shopsShown(alcohol).map((s) => `<label class="check shop-box">
     <input type="checkbox" name="shops" value="${s.id}" ${chosen.includes(s.id) ? 'checked' : ''}>
     <span>${chip(s.id, s.name)} <span class="hint">${esc(s.note || '')}</span></span></label>
     ${s.id === 'iga' ? `<div class="iga-choice">${igaStore
@@ -363,6 +370,10 @@ $('#alerts-form').addEventListener('submit', async (e) => {
       },
     });
     await loadConfig();
+    // Liquor shops come and go from "Shops I use" with Show alcohol: redraw it from the saved choice.
+    const boxes = $('#shops-form [data-shop-boxes]');
+    boxes.innerHTML = '';
+    renderShopBoxes(boxes);
     formError(f, null);
     toast('Saved');
     runSearch();
@@ -828,7 +839,7 @@ function unitText(p) {
 }
 
 // Short enough for five across a phone screen.
-const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.' };
+const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.', danmurphys: 'Dan’s', liquorland: 'Liquorl.' };
 
 function renderBestPrice(b) {
   if (!b || !b.groups?.length) return '';
@@ -2475,8 +2486,9 @@ async function loadAdmin() {
 
     <h2 class="section">Home collector</h2>
     <p class="hint">${o.collectorEnabled
-      ? 'This server accepts prices from a home collector. Stores marked “Collected from home” above come from it.'
-      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, set up the home collector in <a href="#site-settings">Site settings</a> below.'}</p>
+      ? 'This server accepts prices from a home collector. Stores marked “Collected from home” above come from it, and it covers any shop this server is blocked by.'
+      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, set up the home collector in <a href="#site-settings">Site settings</a> below.'}
+      Helpers (other people’s collectors) can share the work too — see Site settings.</p>
 
     <h2 class="section">Backups</h2>
     <div id="admin-backups">${prev.backups}</div>
@@ -2546,23 +2558,39 @@ function adminStoreTiles(o) {
       const status = s.status.running
         ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
-      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : '';
+      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : o.shared?.[s.store] ? sharedNote(o.shared[s.store]) : '';
       return `<div class="tile"><div class="label">${chip(s.store)}</div>
         <div class="value">${s.products.toLocaleString()}</div>
         <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
-        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
+        <p>${s.fedByCollector ? `<span class="hint">${s.store === 'coles' && o.colesLive?.enabled ? 'Fetched page by page by collectors (not this server)' : o.shared?.[s.store] ? 'Shared out to collectors (not crawled by this server)' : 'Collected from home (not crawled by this server)'}</span>`
           : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>`;
 }
 
-/** Coles in steady mode: what it's up to. */
+/** A shop shared out a part at a time: how today's refresh is going, and who's doing what. */
+function sharedNote(x) {
+  const what = x.of == null ? 'reading its departments' : x.finished ? `all ${x.of} parts done` : `${x.done} of ${x.of} parts done`;
+  const doing = x.doing.map((d) => `<li>${esc(d.worker)}: ${esc(d.part)}</li>`).join('');
+  return `<br><span class="hint">Shared refresh (started ${fmtDate(x.startedAt)}): ${what}</span>${doing ? `<ul class="worker-list hint">${doing}</ul>` : ''}`
+    + (x.barred.length ? `<br><span class="warn">Blocked today: ${x.barred.map(esc).join(', ')}</span>` : '')
+    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed and waiting for another connection: ${x.stuck.map(esc).join(', ')}</span>` : '');
+}
+
+const timeOf = (iso) => new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+
+/** Coles in steady mode: what it's up to, and what each connection sharing it is doing. */
 function colesSteadyNote(c) {
-  const parts = [`${c.lastHour} of ${c.perHour} requests in the last hour`];
-  if (c.specials) parts.push(`specials ${c.specials.done}/${c.specials.of} pages today`);
-  if (c.pass) parts.push(`whole shop ${c.pass.of ? Math.round((c.pass.done / c.pass.of) * 100) : 0}% (started ${fmtDate(c.pass.startedAt)})`);
-  else if (c.lastPassAt) parts.push(`whole shop last done ${fmtDate(c.lastPassAt)}`);
+  const parts = [`${c.lastHour} of ${c.perHour} pages in the last hour`];
+  if (c.specials) parts.push(`specials ${c.specials.done}/${c.specials.of ?? '?'} pages today`);
+  if (c.pass) {
+    const pct = c.pass.pages ? Math.round((c.pass.pagesDone / c.pass.pages) * 100) : 0;
+    parts.push(`whole shop ${pct}% (started ${fmtDate(c.pass.startedAt)})`);
+  } else if (c.lastPassAt) parts.push(`whole shop last done ${fmtDate(c.lastPassAt)}`);
   if (c.waiting) parts.push(`${c.waiting} searches waiting`);
-  return `<br><span class="hint">Steady refresh: ${parts.join(' · ')}</span>${c.blockedUntil ? `<br><span class="warn">Paused by a Coles bot check until ${new Date(c.blockedUntil).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })}</span>` : ''}`;
+  const workers = (c.workers || []).map((w) => `<li>${esc(w.name)}: ${w.blockedUntil
+    ? `<span class="warn">paused by a bot check until ${timeOf(w.blockedUntil)}</span>`
+    : `${w.doing ? esc(w.doing) : 'waiting for work'} · ${w.lastHour} of at most ${w.cap} pages in the last hour`}</li>`).join('');
+  return `<br><span class="hint">Steady refresh: ${parts.join(' · ')}</span>${workers ? `<ul class="worker-list hint">${workers}</ul>` : ''}`;
 }
 
 function adminIgaCheck(o) {
@@ -2638,7 +2666,7 @@ function collectorDownloads(programs) {
       To start it with the computer, run it once with <code>--autostart</code>.<br>
       <strong>Mac, or anywhere with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>:</strong> unzip and run <code>start.sh</code> (or <code>start.bat</code>).
       Prefer Docker? Use <code>deploy/collector</code>.<br>
-      It collects the stores this server doesn’t crawl (below).</p>
+      It does what this site asks: shops this server doesn’t crawl or is blocked by, and its share of Coles pages.</p>
 `;
 }
 
@@ -2660,15 +2688,71 @@ async function downloadProgram(btn) {
   progress.hidden = true;
   if (!status.ready) throw new Error(`Couldn’t prepare it: ${status.error || 'unknown error'}`);
   const a = document.createElement('a');
-  a.href = `/api/admin/collector/programs/${id}`;
+  a.href = `/api/admin/collector/programs/${id}${btn.dataset.helper ? `?helper=${btn.dataset.helper}` : ''}`;
   a.download = '';
   document.body.append(a);
   a.click();
   a.remove();
 }
 
-async function loadAdminSettings(justMadeToken = null) {
-  const { settings: st, stores, currentAddress, litestream, collector } = await api('/api/admin/settings');
+/** "Last connected 2 hours ago · up to date · last refreshed Woolworths: ok" for a helper. */
+function helperStatus(x, latest) {
+  const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
+  if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
+  for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
+  for (const s of x.blockedBy || []) parts.push(`<span class="warn">blocked by ${esc(storeName(s))} today</span>`);
+  if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
+  else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);
+  return parts.join(' · ');
+}
+
+const dayMonth = (iso) => new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+
+/** A link just made for a helper: sent, or to copy. */
+function inviteNotice(name, inv, token = null) {
+  return `<div class="notice">${inv.emailed ? `Emailed ${esc(name)} at ${esc(inv.to)} with what it is, how to set it up and this link.` : `Send ${esc(name)} this link: it explains what the collector is and lets them download it, set up for this site.`}
+    <span class="copy-row"><input readonly value="${esc(inv.link)}" data-copy-source><button type="button" class="small" data-copy-input>Copy</button></span>
+    It works until ${dayMonth(inv.until)} and won’t be shown again here (you can always make a new one).
+    ${token ? `<br><span class="hint">For Docker or running from the code instead, their token is <code>${esc(token)}</code>.</span>` : ''}</div>`;
+}
+
+/** Helpers: other people's collectors, sharing the work. */
+function helpersCard(list, programs, justMade, canEmail, siteCap) {
+  const rows = list.map((x) => `<div class="helper-row${x.disabled ? ' off' : ''}">
+      <p><strong>${esc(x.name)}</strong>${x.disabled ? ' <span class="state">turned off</span>' : ''}${x.email ? ` <span class="hint">${esc(x.email)}</span>` : ''}<br><span class="hint">${helperStatus(x)}</span>
+        <br><span class="hint">${x.inviteUntil ? `Invite link works until ${dayMonth(x.inviteUntil)}` : 'No invite link open'}</span></p>
+      ${justMade?.id === x.id && justMade.invite ? inviteNotice(x.name, justMade.invite, justMade.token) : ''}
+      <form class="copy-row helper-cap" data-helper-cap="${x.id}"><label>Coles: at most <input name="colesMax" type="number" min="1" max="600" value="${x.coles_max ?? ''}" placeholder="${esc(siteCap)}"> pages an hour</label><button class="small" type="submit">Set</button></form>
+      <details class="helper-downloads"><summary>Download it for them</summary><div class="actions">
+        ${programs.map((p) => `<button type="button" class="small" data-program="${p.id}" data-helper="${x.id}">⬇ ${esc(p.label)}</button>`).join('')}
+        <a class="button small" href="/api/admin/collector/download?helper=${x.id}" data-helper-zip="${x.id}" download>⬇ Mac / zip</a>
+      </div></details>
+      <div class="actions">
+        <button type="button" class="small" data-helper-invite="${x.id}" data-email="${esc(x.email || '')}" data-can-email="${canEmail ? '1' : ''}">${x.email && canEmail ? '✉ Email a new link' : '🔗 New invite link'}</button>
+        <button type="button" class="small ghost" data-helper-toggle="${x.id}" data-off="${x.disabled ? '' : '1'}">${x.disabled ? 'Turn on' : 'Turn off'}</button>
+        <button type="button" class="small ghost" data-helper-remove="${x.id}" data-name="${esc(x.name)}">Remove</button>
+      </div></div>`).join('');
+  return `<div class="card stack" id="helpers-card">
+      <h3>Helpers</h3>
+      <p class="hint">People you trust can run the collector on their own internet connection to share the work. Each shop is refreshed by whichever connection isn’t blocked, and Coles pages are shared out. They split the one pace above between them, so helpers make refreshes more reliable without asking the shops for more. A helper’s prices go straight into everyone’s comparisons, so only add people you trust.</p>
+      ${rows || '<p class="hint">No helpers yet.</p>'}
+      <form id="add-helper" class="stack">
+        <h4>Add a helper</h4>
+        <label>Name<input name="name" maxlength="60" placeholder="e.g. Sam’s PC" required></label>
+        <label>Their email <span class="hint">(optional)</span><input name="email" type="email" maxlength="200" placeholder="sam@example.com"></label>
+        ${canEmail ? '<label class="check"><input type="checkbox" name="send" checked> Email them a link to download it, with what it is and how to set it up</label>'
+          : '<p class="hint">Set up email (above) to send them the link; otherwise you’ll get a link to pass on.</p>'}
+        <button class="small" type="submit">Add helper</button>
+      </form>
+      <p class="warn" data-form-error hidden></p>
+    </div>`;
+}
+
+const HELPER_NEW_KEY = 'Downloading makes this helper a new key. A copy they already have stops working until they run this one. Carry on?';
+
+async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
+  const [{ settings: st, stores, currentAddress, litestream, collector }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
+  const canEmail = st.SMTP_URL.set;
   const locked = (key) => st[key].source === 'env';
   const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
@@ -2719,13 +2803,20 @@ async function loadAdminSettings(justMadeToken = null) {
           <div class="copy-row"><input readonly value="${esc(justMadeToken)}" id="new-token"><button type="button" class="small" id="copy-token">Copy</button></div></div>` : ''}
         ${locked('COLLECTOR_TOKEN') ? '' : `<div class="actions"><button type="button" class="small" id="make-token">${st.COLLECTOR_TOKEN.set ? 'Generate a new token' : 'Generate token'}</button>
           ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
+        <label>Coles pages an hour, all connections together${envTag('COLES_PAGES_PER_HOUR')}
+          <input name="COLES_PAGES_PER_HOUR" type="number" min="0" max="600" value="${esc(st.COLES_PAGES_PER_HOUR.value ?? 30)}" ${dis('COLES_PAGES_PER_HOUR')}></label>
+        <label>Most Coles pages an hour for any one connection${envTag('COLES_MAX_PER_CONNECTION')}
+          <input name="COLES_MAX_PER_CONNECTION" type="number" min="1" max="600" value="${esc(st.COLES_MAX_PER_CONNECTION.value ?? 40)}" ${dis('COLES_MAX_PER_CONNECTION')}></label>
+        <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day. This server, the home collector and helpers share the pages above rather than adding to them, and no one connection (this server included) fetches more than the second figure; a helper can be set lower below. More an hour means a greater chance of a bot check. 0 pages an hour goes back to one big crawl each night.</p>
         <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
-          <p class="hint">Untick the stores the home collector sends instead.</p>
+          <p class="hint">Untick the stores the home collector sends instead. If this server is blocked by a shop it does crawl, a collector covers it.</p>
           ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
         <p class="warn" data-form-error hidden></p>
-        ${locked('SERVER_SCRAPE_STORES') ? '' : '<button class="primary" type="submit">Save</button>'}
+        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
+
+      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 40)}
 
       <div class="card stack">
         <h3>Off-site backup</h3>
@@ -2739,6 +2830,28 @@ async function loadAdminSettings(justMadeToken = null) {
 
 $('#admin-root').addEventListener('submit', async (e) => {
   const f = e.target;
+  if (f.dataset.helperCap) {
+    e.preventDefault();
+    try {
+      await api(`/api/admin/helpers/${f.dataset.helperCap}`, { method: 'PATCH', body: { colesMax: f.elements.colesMax.value || null } });
+      toast('Saved');
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
+  if (f.id === 'add-helper') {
+    e.preventDefault();
+    try {
+      const made = await api('/api/admin/helpers', {
+        method: 'POST', body: { name: f.elements.name.value, email: f.elements.email.value || null, send: !!f.elements.send?.checked && !!f.elements.email.value },
+      });
+      await loadAdminSettings(null, made);
+    } catch (err) {
+      formError(f.closest('.card'), err);
+    }
+    return;
+  }
   if (!['email-settings', 'site-details', 'collector-settings'].includes(f.id)) return;
   e.preventDefault();
   const v = (name) => f.elements[name];
@@ -2753,8 +2866,11 @@ $('#admin-root').addEventListener('submit', async (e) => {
   } else if (f.id === 'site-details') {
     for (const k of ['CONTACT_EMAIL', 'SITE_OPERATOR']) if (!v(k).disabled) body[k] = v(k).value;
   } else {
-    body = { SERVER_SCRAPE_STORES: [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value) };
-    if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
+    if (!f.querySelector('[name=crawl]').disabled) {
+      body.SERVER_SCRAPE_STORES = [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value);
+      if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
+    }
+    for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) if (!v(k).disabled) body[k] = v(k).value;
   }
   try {
     await api('/api/admin/settings', { method: 'PUT', body });
@@ -2790,8 +2906,32 @@ $('#admin-root').addEventListener('click', async (e) => {
       loadAdmin();
     } else if (t.id === 'copy-token') {
       copyText($('#new-token').value);
+    } else if (t.dataset.copyInput !== undefined) {
+      copyText(t.parentElement.querySelector('[data-copy-source]').value);
+    } else if (t.dataset.helperInvite) {
+      let email = t.dataset.email;
+      let send = false;
+      if (t.dataset.canEmail) {
+        const answer = prompt('Email the new link to (leave empty to just get the link):', email);
+        if (answer === null) return;
+        email = answer.trim();
+        send = !!email;
+      }
+      if (!confirm('Make a new invite link? Any older link for this helper stops working.')) return;
+      const inv = await api(`/api/admin/helpers/${t.dataset.helperInvite}/invite`, { method: 'POST', body: { email: email || null, send } });
+      await loadAdminSettings(null, { id: Number(t.dataset.helperInvite), invite: inv });
     } else if (t.dataset.program) {
+      if (t.dataset.helper && !confirm(HELPER_NEW_KEY)) return;
       await downloadProgram(t);
+    } else if (t.dataset.helperZip) {
+      if (!confirm(HELPER_NEW_KEY)) e.preventDefault();
+    } else if (t.dataset.helperToggle) {
+      await api(`/api/admin/helpers/${t.dataset.helperToggle}`, { method: 'PATCH', body: { disabled: !!t.dataset.off } });
+      loadAdminSettings();
+    } else if (t.dataset.helperRemove) {
+      if (!confirm(`Remove ${t.dataset.name}? Their collector will be refused.`)) return;
+      await api(`/api/admin/helpers/${t.dataset.helperRemove}`, { method: 'DELETE' });
+      loadAdminSettings();
     }
   } catch (err) {
     if (t.dataset.program) {
@@ -2959,7 +3099,7 @@ try {
   const cached = JSON.parse(localStorage.getItem('lastConfig') || 'null');
   if (!cached) throw new Error('offline');
   state.config = cached;
-  state.allStores = cached.stores.map((x) => x.id);
+  state.allStores = shopsShown(!!cached.user?.showAlcohol).map((x) => x.id);
   state.names = Object.fromEntries(cached.stores.map((x) => [x.id, x.name]));
   state.stores = state.allStores;
   renderAccount();

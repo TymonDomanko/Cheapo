@@ -13,9 +13,16 @@ export const COLLECTOR_CODE = [
   'src/scrapers/http.js',
   'src/scrapers/woolworths.js',
   'src/scrapers/coles.js',
+  'src/scrapers/coles-pages.js',
+  'src/scrapers/parts.js',
   'src/scrapers/aldi.js',
   'src/scrapers/iga.js',
   'src/scrapers/harrisfarm.js',
+  'src/scrapers/endeavour.js',
+  'src/scrapers/danmurphys.js',
+  'src/scrapers/bws.js',
+  'src/scrapers/coles-liquor.js',
+  'src/scrapers/liquorland.js',
 ];
 
 // The collector needs no npm packages (so it can run as a single executable).
