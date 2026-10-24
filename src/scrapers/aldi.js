@@ -15,14 +15,33 @@ const SKIP = new Set(
 
 export const store = 'aldi';
 
-export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
+const newClient = async () => {
   const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.ALDI_DELAY_MS ?? 500) });
   await client.init();
+  return client;
+};
+async function categoryTree(client) {
+  const tree = await client.getJson(`${API}/v2/product-category-tree`);
+  return (tree.data || [])
+    .map((c) => ({ key: c.key ?? c.id, name: c.name, slug: c.urlSlugText ?? c.slug }))
+    .filter((c) => c.key && !SKIP.has(c.slug));
+}
+
+/** The departments to crawl: [{ key, name, slug }] (one request). */
+export async function departments() {
+  const client = await newClient();
   try {
-    const tree = await client.getJson(`${API}/v2/product-category-tree`);
-    let cats = (tree.data || [])
-      .map((c) => ({ key: c.key ?? c.id, name: c.name, slug: c.urlSlugText ?? c.slug }))
-      .filter((c) => c.key && !SKIP.has(c.slug));
+    return await categoryTree(client);
+  } finally {
+    await client.close();
+  }
+}
+
+/** `categories`: departments already fetched with departments() (when the crawl is shared out). */
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories } = {}) {
+  const client = await newClient();
+  try {
+    let cats = categories || await categoryTree(client);
     if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
     log(`aldi: ${cats.length} categories`);
 

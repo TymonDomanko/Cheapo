@@ -283,13 +283,22 @@ The token inside the downloaded program (or the zip's `.env`) is what lets it se
 
 The server and every collector share the refreshing, and the site decides who does what:
 
-- **Each shop's daily refresh** (Woolworths, ALDI, Harris Farm) goes to one connection. The server gets the first 90 minutes after `SCRAPE_CRON` for the shops it crawls. After that, or straight away if the server failed, the first collector to check in takes it. A connection whose refresh of a shop failed that day isn't given it again, so another one tries. IGA stays on the server.
-- **Coles** is shared page by page. Each connection takes a department, or the specials, and fetches its pages. **The page limit (Admin → Site settings → "Coles pages an hour, all connections together", or `COLES_PAGES_PER_HOUR`) is for everyone together.** With two connections, each fetches at half the rate. More connections make it more reliable, never heavier on Coles. A bot check pauses just the connection that got it, and its department goes to another. Searches, list items and barcodes stay on the server.
+- **Each shop's daily refresh** (Woolworths, ALDI, Harris Farm) is split into parts after `SCRAPE_CRON`: Woolworths and ALDI by department, Harris Farm by blocks of 3 pages. The server and collectors each take a part at a time, and all the parts make one refresh, finished when the last one is in.
+  - A shop has at most as many parts on the go at once as one connection would fetch at once: two for Woolworths (`WOOLWORTHS_CONCURRENCY`), one for the others (`ALDI_CONCURRENCY`, `HARRISFARM_CONCURRENCY`). So sharing it out doesn't ask the shop for more at a time; it means a refresh carries on when one connection is blocked or switched off.
+  - A part nothing is heard about for 10 minutes is handed on. A connection that fails a part isn't given it again, and one that's blocked by a shop gets no more of that shop that day.
+  - Parts still missing when the next refresh is due are reported as a failed refresh.
+  - IGA stays on the server.
+- **Coles** is shared page by page. Each connection takes a department, or the specials, and fetches its pages. **The page limit (Admin → Site settings → "Coles pages an hour, all connections together", or `COLES_PAGES_PER_HOUR`) is for everyone together.** With two connections, each fetches at half the rate. More connections make it more reliable, never heavier on Coles.
+  - Each answer tells a collector when to come back. One that's 3 minutes late stops counting straight away, so the others speed back up, and its department goes to another connection.
+  - A bot check pauses just the connection that got it.
+  - Searches, list items and barcodes stay on the server.
 
 **Helpers** are collectors run by other people you trust, on their own internet connection. Add one under **Admin → Site settings → Helpers**:
-- Give it a name, then download the collector for them with the buttons on its row, and send it to them.
-- Each helper has its own token. Downloading again makes a new one, and the copy they already have stops working.
-- The card shows when each helper last connected, what it last refreshed, and what it's doing for Coles. **Turn off** refuses it until you turn it back on; **Remove** deletes it.
+- **Name and email.** With an email (and a mail server set up), they're sent a message saying what the collector is, what it does on their computer, how to set it up, and a link.
+- **The invite link** opens a page with the same explanation and downloads for Windows, Linux, Raspberry Pi and Mac, each already set up for your site. It works for a week. Without email, copy the link and send it yourself. **New invite link** (or **Email a new link**) on the helper's row makes another, and the old one stops working.
+- **Or download it for them** from the helper's row and pass the file on.
+- **Tokens:** each helper has its own. Every download makes it a new one, so only the newest copy works.
+- **The card** shows when each helper last connected, what it's fetching now, and whether a shop has blocked it today. **Turn off** refuses it until you turn it back on; **Remove** deletes it.
 - A helper's prices go straight into everyone's comparisons, so only add people you trust.
 
 Collectors from before work sharing keep working. Once updated (they update themselves), they check in for work instead of collecting at a fixed time. If an older one's `.env` still has `COLLECT_STORES=woolworths,aldi`, it only takes those two shops but still helps with Coles.

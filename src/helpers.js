@@ -2,7 +2,7 @@
 // COLLECTOR_TOKEN in Site settings), and helpers — collectors an admin has
 // approved, each with its own token, so they can be named, seen and turned off
 // one by one. They share the work; they don't add to how much is asked of a
-// shop (see src/coles-live.js and src/claims.js).
+// shop (see src/coles-live.js and src/sharing.js).
 
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
@@ -43,8 +43,8 @@ export function nameOf(id) {
 // ---------------------------------------------------------------- the admin page
 
 export function list() {
-  return getDb().prepare('SELECT id, name, created_at, disabled, last_seen_at, version, mode FROM collectors ORDER BY id').all()
-    .map((h) => ({ ...h, disabled: !!h.disabled, worker: `h${h.id}` }));
+  return getDb().prepare('SELECT id, name, email, created_at, disabled, last_seen_at, version, mode, invite_expires FROM collectors ORDER BY id').all()
+    .map(({ invite_expires: until, ...h }) => ({ ...h, disabled: !!h.disabled, worker: `h${h.id}`, inviteUntil: until && Date.parse(until) > Date.now() ? until : null }));
 }
 
 function get(id) {
@@ -53,13 +53,44 @@ function get(id) {
   return row;
 }
 
+const isEmail = (v) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(v);
+
 /** Approve a helper. Returns it with its token (shown once). */
-export function add(name) {
+export function add(name, email = null) {
   name = String(name || '').trim().slice(0, 60);
   if (!name) throw httpError(400, 'Give the helper a name, e.g. “Sam’s PC”');
+  email = email ? String(email).trim().slice(0, 200) : null;
+  if (email && !isEmail(email)) throw httpError(400, 'That email address doesn’t look right');
   const token = newCollectorToken();
-  const id = getDb().prepare('INSERT INTO collectors (name, token_hash, created_at) VALUES (?, ?, ?)').run(name, hash(token), nowIso()).lastInsertRowid;
+  const id = getDb().prepare('INSERT INTO collectors (name, email, token_hash, created_at) VALUES (?, ?, ?, ?)').run(name, email, hash(token), nowIso()).lastInsertRowid;
   return { ...list().find((h) => h.id === Number(id)), token };
+}
+
+const INVITE_DAYS = 7;
+
+/** A link for a helper to download the collector themselves, for a week. Returns its token (shown once); an older link stops working. */
+export function newInvite(id, email = undefined) {
+  get(id);
+  if (email !== undefined && email !== null && email !== '' && !isEmail(String(email).trim())) throw httpError(400, 'That email address doesn’t look right');
+  const token = newCollectorToken();
+  const until = new Date(Date.now() + INVITE_DAYS * 86400000).toISOString();
+  getDb().prepare('UPDATE collectors SET invite_hash = ?, invite_expires = ?, email = COALESCE(?, email) WHERE id = ?')
+    .run(hash(token), until, email ? String(email).trim() : null, Number(id));
+  return { token, until };
+}
+
+/** The helper an invite link is for, if it's still good. */
+export function byInvite(token) {
+  if (!token || String(token).length < 24) return null;
+  const row = getDb().prepare('SELECT id, name, disabled, invite_expires FROM collectors WHERE invite_hash = ?').get(hash(String(token)));
+  if (!row || row.disabled || !(Date.parse(row.invite_expires) > Date.now())) return null;
+  return { id: row.id, name: row.name, until: row.invite_expires };
+}
+
+/** Stop an invite link working. */
+export function cancelInvite(id) {
+  get(id);
+  getDb().prepare('UPDATE collectors SET invite_hash = NULL, invite_expires = NULL WHERE id = ?').run(Number(id));
 }
 
 /** A new token for a helper (its old one stops working). */

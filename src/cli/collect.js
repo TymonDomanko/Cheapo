@@ -6,8 +6,9 @@
 //
 // Left running (COLLECT_CRON set, as a downloaded one is), it checks in every
 // few minutes and does what the site asks:
-//   - refresh a whole shop, when it's due today and nobody else has
-//     (src/claims.js). COLLECT_STORES limits which shops it will do;
+//   - fetch part of a shop's daily refresh (a department, say), shared out
+//     with the site and other collectors (src/sharing.js). COLLECT_STORES
+//     limits which shops it will do;
 //   - fetch Coles a page at a time, at its share of the site's pace
 //     (src/coles-live.js). COLLECT_COLES=false turns that off.
 // With shops named on the command line (or an older site), it just crawls
@@ -59,6 +60,7 @@ const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf
 const { SCRAPERS } = await import('../scrapers/registry.js');
 const { sleep } = await import('../scrapers/http.js');
 const { colesPages } = await import('../scrapers/coles-pages.js');
+const { index: indexParts, fetchPart } = await import('../scrapers/parts.js');
 const cron = await import('../mini-cron.js');
 
 if (!server || !token) {
@@ -176,40 +178,42 @@ async function run() {
 
 // ---------------------------------------------------------------- sharing the work
 
-/** Send one claimed shop's refresh into the run the site started for it. */
-async function collectInto({ store, runId }) {
-  let sent = 0;
-  try {
-    for await (const batch of SCRAPERS[store].scrape({ log: (m) => console.log(m) })) {
-      if (!batch.length) continue;
-      await post(`/api/ingest/runs/${runId}/items`, { items: batch });
-      sent += batch.length;
+/** Parts of shops' daily refreshes, one at a time, for as long as the site has them. */
+async function partsLoop() {
+  const canDo = named.length ? named : listed;
+  for (;;) {
+    let wait = 300;
+    try {
+      const r = await post('/api/collector/parts/next', { stores: canDo });
+      wait = r.wait;
+      if (r.part) await doPart(r);
+    } catch (e) {
+      if (e.status === 404) return; // an older site
+      console.warn(`Couldn't ask for work: ${e.message}`);
     }
-    const r = await post(`/api/ingest/runs/${runId}/finish`, { complete: true });
-    console.log(`${store}: sent ${sent} products — ${r.priceChanges} price changes recorded`);
-  } catch (e) {
-    console.error(`${store}: failed — ${e.message}`);
-    await post(`/api/ingest/runs/${runId}/finish`, { error: e.message }).catch(() => {});
+    await sleep(Math.min(3600, Math.max(0, Number(wait) || 0)) * 1000);
   }
 }
 
-const busy = new Set();
-/** Ask the site which shops to refresh now, and start them. False if the site doesn't share out work. */
-async function claimWork() {
-  let r;
+async function doPart({ store, part }) {
+  const send = (what, body) => post(`/api/collector/parts/${what}`, { store, part: part.key, ...body });
+  console.log(`${store}: fetching ${part.label} (the site asked)`);
   try {
-    r = await post('/api/collector/claim', { stores: named.length ? named : listed });
+    if (part.kind === 'index') return void await send('done', { cats: await indexParts(SCRAPERS[store]) });
+    const result = {};
+    let sent = 0;
+    for await (const batch of fetchPart(SCRAPERS[store], part, { log: (m) => console.log(m), result })) {
+      if (!batch.length) continue;
+      await send('items', { items: batch });
+      sent += batch.length;
+    }
+    await send('done', { more: !!result.more });
+    console.log(`${store}: sent ${sent} products for ${part.label}`);
   } catch (e) {
-    if (e.status === 404) return false;
-    console.warn(`Couldn't ask for work: ${e.message}`);
-    return true;
+    if (e.status === 409) return console.log(`${store}: ${part.label} was handed to someone else`);
+    console.error(`${store}: ${part.label} failed — ${e.message}`);
+    await send('done', e.blocked ? { blocked: e.message } : { error: e.message }).catch(() => {});
   }
-  for (const job of r.runs.filter((x) => SCRAPERS[x.store] && !busy.has(x.store))) {
-    console.log(`Refreshing ${job.store} (the site asked)`);
-    busy.add(job.store);
-    collectInto(job).finally(() => busy.delete(job.store));
-  }
-  return true;
 }
 
 /** Coles, a page at a time, for as long as the site wants. */
@@ -240,17 +244,17 @@ async function colesLoop() {
 
 async function shareWork() {
   if (await updateIfNeeded()) process.exit(RESTART);
-  if (!(await claimWork())) return false;
-  console.log('Checking in with the site for work every 10 minutes.');
+  try {
+    await call('GET', '/api/collector/sharing'); // does this site share out work?
+  } catch (e) {
+    if (e.status === 404) return false;
+  }
+  console.log('Checking in with the site for work.');
+  partsLoop().catch((e) => console.error(e.message));
   if (helpColes) colesLoop().catch((e) => console.error(`Coles: ${e.message}`));
-  let checkedForUpdate = Date.now();
   setInterval(async () => {
-    if (Date.now() - checkedForUpdate > 3600 * 1000 && !busy.size) {
-      checkedForUpdate = Date.now();
-      if (await updateIfNeeded()) process.exit(RESTART);
-    }
-    claimWork().catch(() => {});
-  }, 10 * 60 * 1000);
+    if (await updateIfNeeded()) process.exit(RESTART); // between parts is fine: the site hands on anything unfinished
+  }, 3600 * 1000);
   return true;
 }
 

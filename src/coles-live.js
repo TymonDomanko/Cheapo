@@ -41,7 +41,8 @@ const QUERY_GAP_MS = 3000; // searches go straight away, but not back to back
 const MAX_QUEUE = 20;
 const LIST_REFRESH_MS = 20 * 3600 * 1000;
 const LIST_LIMIT = 40;
-const ACTIVE_MS = 10 * 60 * 1000; // a helper that hasn't asked for work in this long isn't counted
+const GRACE_MS = 3 * 60 * 1000; // a helper this late for its next turn is counted out, and its work handed on
+const LEASE_MAX_MS = 30 * 60 * 1000; // work nobody has touched in this long is handed on, whoever has it
 const MAX_ITEMS = 200; // products in one page's result
 
 export const rate = () => {
@@ -92,7 +93,7 @@ const isBlocked = (st, w) => {
 // Requests made in the last hour, by whom (in memory: a restart just starts counting again).
 const recent = []; // { at, worker }
 const lastAt = new Map(); // worker → when it last started a page
-const askedAt = new Map(); // helper → when it last asked for work
+const dueAt = new Map(); // helper → when it's due to ask again (told in each answer)
 function prune() {
   while (recent.length && recent[0].at < clock() - 3600 * 1000) recent.shift();
 }
@@ -104,10 +105,16 @@ function count(worker, n) {
   for (let i = 0; i < Math.max(1, n || 0); i++) recent.push({ at: clock(), worker });
 }
 
-const recentHelpers = () => [...askedAt].filter(([, at]) => clock() - at < ACTIVE_MS).map(([w]) => w);
-/** Connections sharing the work now (not paused): this server and helpers that asked lately. */
+/** A helper that's late for its turn (or never told when to come back): it's stopped or lost. */
+const overdue = (w) => !dueAt.has(w) || clock() > dueAt.get(w) + GRACE_MS;
+const holds = (st, w) => st.specials?.worker === w || st.pass?.indexWorker === w || !!st.pass?.depts?.some((d) => d.worker === w && !d.done);
+/**
+ * Connections sharing the pages now: this server (unless paused) and helpers
+ * that are part-way through something and on time. A helper that stops
+ * answering drops out as soon as it misses its turn, so the rest speed back up.
+ */
 function activeWorkers(st) {
-  const ids = recentHelpers();
+  const ids = [...dueAt.keys()].filter((w) => !overdue(w) && holds(st, w));
   if (serverWorks()) ids.unshift(SERVER);
   return [...new Set(ids)].filter((w) => !isBlocked(st, w));
 }
@@ -115,8 +122,7 @@ function activeWorkers(st) {
 function gapMs(st) {
   return (Math.max(1, activeWorkers(st).length) * 3600 * 1000) / rate();
 }
-const leaseMs = (st) => 20 * 60 * 1000 + 3 * gapMs(st);
-const leaseFree = (st, holder, touchedAt) => !holder || clock() - Date.parse(touchedAt || 0) > leaseMs(st);
+const leaseFree = (st, holder, touchedAt) => !holder || (holder !== SERVER && overdue(holder)) || clock() - Date.parse(touchedAt || 0) > LEASE_MAX_MS;
 
 const queries = []; // searches waiting: { q }
 const queried = new Map(); // search → when it was last fetched
@@ -303,9 +309,11 @@ function blocked(w, job, message, requests) {
 /** A helper asks for a Coles page: { job, wait } or { wait } (in seconds). */
 export function helperNext(worker) {
   if (!enabled()) return { job: null, wait: 3600, off: true };
-  askedAt.set(worker.id, clock());
+  dueAt.set(worker.id, clock()); // here now
   const r = nextFor(worker.id);
-  return { job: r.job || null, wait: Math.ceil((r.job ? gapMs(load()) : r.wait) / 1000) };
+  const wait = r.job ? gapMs(load()) : r.wait;
+  dueAt.set(worker.id, clock() + wait);
+  return { job: r.job || null, wait: Math.ceil(wait / 1000) };
 }
 
 /** A helper sends back a page: { job, items, pages, cats, requests } or { job, blocked: message } / { job, error }. */
@@ -314,7 +322,7 @@ export function helperResult(worker, body) {
   if (!job || typeof job.kind !== 'string' || ['list', 'barcode', 'search'].includes(job.kind)) {
     throw Object.assign(new Error('Send back the job you were given'), { status: 400 });
   }
-  askedAt.set(worker.id, clock());
+  dueAt.set(worker.id, clock());
   if (body.blocked) blocked(worker.id, job, String(body.blocked).slice(0, 200), body.requests);
   else if (body.error) {
     console.warn(`[coles] ${worker.name}: ${String(body.error).slice(0, 200)}`);
@@ -323,7 +331,9 @@ export function helperResult(worker, body) {
     release(st, worker.id);
     save(st);
   } else complete(worker.id, job, body);
-  return { wait: Math.ceil(nextWaitMs(worker.id) / 1000) };
+  const wait = nextWaitMs(worker.id);
+  dueAt.set(worker.id, clock() + wait);
+  return { wait: Math.ceil(wait / 1000) };
 }
 
 function nextWaitMs(w) {
@@ -439,7 +449,7 @@ export function restartPass() {
 export function status() {
   if (!enabled()) return { enabled: false };
   const st = load();
-  const ids = new Set([...(serverWorks() ? [SERVER] : []), ...recentHelpers(), ...Object.keys(st.workers).filter((w) => isBlocked(st, w))]);
+  const ids = new Set([...(serverWorks() ? [SERVER] : []), ...[...dueAt.keys()].filter((w) => !overdue(w)), ...Object.keys(st.workers).filter((w) => isBlocked(st, w))]);
   const doing = (w) => {
     if (st.specials?.worker === w && st.specials.day === today()) return `specials, page ${st.specials.page} of ${st.specials.pages}`;
     const d = st.pass?.depts?.find((x) => x.worker === w && !x.done);
@@ -475,6 +485,6 @@ export function reset() {
   queries.length = 0;
   queried.clear();
   lastAt.clear();
-  askedAt.clear();
+  dueAt.clear();
   local = null;
 }

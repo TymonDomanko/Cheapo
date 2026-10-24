@@ -16,13 +16,11 @@ process.env.TZ = 'Australia/Sydney';
 
 const { getDb } = await import('../src/db.js');
 const live = await import('../src/coles-live.js');
-const claims = await import('../src/claims.js');
 const helpers = await import('../src/helpers.js');
 const { colesPages } = await import('../src/scrapers/coles-pages.js');
 
 let now = Date.parse('2026-10-20T00:30:00Z'); // 11:30 in Sydney
 live.setClock(() => now);
-claims.setClock(() => now);
 const minutes = (n) => { now += n * 60 * 1000; };
 
 // A stand-in Coles: 3 departments of 2 pages, 2 pages of specials. `blockedFor` holds connections it's blocking.
@@ -153,55 +151,129 @@ test('Coles: helpers can’t send search, list or barcode answers', () => {
   }
 });
 
-// ---------------------------------------------------------------- other shops
-
-const run = (store, status, worker, source, at) => getDb().prepare('INSERT INTO scrape_runs (store, started_at, finished_at, status, source, worker) VALUES (?, ?, ?, ?, ?, ?)')
-  .run(store, at, at, status, source, worker);
-
-test('other shops: the server gets first go at its own, then a helper covers what it couldn’t do', () => {
-  // 2026-10-21 04:20 in Sydney: just after the scheduled time.
-  now = Date.parse('2026-10-20T17:20:00Z');
-  const since = claims.lastScheduled(now).toISOString();
-  assert.equal(since, '2026-10-20T17:15:00.000Z');
-  const alex = helpers.add('Alex’s laptop');
-  const alexWorker = { id: `h${alex.id}`, name: alex.name, helperId: alex.id };
-
-  // This server crawls everything, so for 90 minutes it's all the server's (Coles is shared page by page, IGA stays here).
-  assert.deepEqual(claims.claim(samWorker, []), []);
-  assert.deepEqual(claims.shareable().sort(), ['aldi', 'harrisfarm', 'woolworths']);
-
-  // The server's Woolworths refresh is blocked: Sam can take it straight away.
-  run('woolworths', 'error', null, 'server', '2026-10-20T17:16:00.000Z');
-  const got = claims.claim(samWorker, []);
-  assert.deepEqual(got.map((r) => r.store), ['woolworths']);
-  assert.equal(claims.handledElsewhere('woolworths'), true, 'Sam is on it');
-  assert.deepEqual(claims.claim(alexWorker, []), [], 'and nobody else gets it while Sam is');
-
-  // Sam's refresh fails too: Alex gets it, Sam doesn't get it again today.
-  getDb().prepare("UPDATE scrape_runs SET status = 'error' WHERE id = ?").run(got[0].runId);
-  assert.deepEqual(claims.claim(samWorker, []), []);
-  const alexGot = claims.claim(alexWorker, ['woolworths']);
-  assert.deepEqual(alexGot.map((r) => r.store), ['woolworths']);
-  getDb().prepare("UPDATE scrape_runs SET status = 'ok' WHERE id = ?").run(alexGot[0].runId);
-
-  // After the server's 90 minutes, whatever it hasn't done is up for grabs (ALDI and Harris Farm here)…
-  run('aldi', 'ok', null, 'server', '2026-10-20T17:30:00.000Z');
-  minutes(95);
-  assert.deepEqual(claims.claim(samWorker, []).map((r) => r.store), ['harrisfarm']);
-  // …and nothing is done twice in a day.
-  assert.deepEqual(claims.claim(alexWorker, []), []);
-  minutes(24 * 60 - 95); // 04:20 the next day
-  assert.deepEqual(claims.claim(alexWorker, ['aldi']), [], 'next day, the server gets first go again');
+test('Coles: a helper that stops answering is counted out at once, and its department handed on', async () => {
+  minutes(10);
+  live.restartPass();
+  await live.pump(); // the server reads the department list
+  minutes(5);
+  const job = (await samTurn()); // Sam takes a department and fetches its first page
+  assert.equal(job.kind, 'browse');
+  minutes(4); await live.pump(); // the server's turn: two connections, 4 minutes apart
+  const before = asked.length;
+  minutes(2); await live.pump();
+  assert.equal(asked.length, before, 'still sharing: the server waits its 4 minutes');
+  // Sam goes silent. Three minutes after its turn was due, it no longer counts…
+  minutes(5); await live.pump();
+  const st = live.status();
+  assert.ok(!st.workers.some((w) => w.id === samWorker.id), 'Sam is no longer counted');
+  // …so the server is back to every 2 minutes, and picks up Sam's department where it got to.
+  const n = asked.length;
+  minutes(2); await live.pump();
+  assert.equal(asked.length, n + 1, 'every 2 minutes again');
+  for (let i = 0; i < 6; i++) { minutes(2); await live.pump(); }
+  assert.ok(asked.some(([w, p]) => w === 'server' && p === `browse/${job.dept}.json?slug=${job.dept}&page=2`), 'Sam’s department, from page 2');
 });
 
-test('other shops: one this server doesn’t crawl goes to the first collector to ask, from the scheduled time', async () => {
+// ---------------------------------------------------------------- other shops, a part at a time
+
+const sharing = await import('../src/sharing.js');
+sharing.setClock(() => now);
+const share = (store) => JSON.parse(getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(`share:${store}`).value);
+const products = (store) => getDb().prepare('SELECT store_product_id id, available FROM products WHERE store = ? ORDER BY 1').all(store);
+
+test('other shops: departments are shared out, at most as many at once as one connection would fetch', async () => {
+  now = Date.parse('2026-10-25T17:20:00Z'); // 04:20 in Sydney, just after the scheduled time
+  const alex = helpers.add('Alex’s laptop');
+  const alexWorker = `h${alex.id}`;
+  const sam = samWorker.id;
+  getDb().prepare("INSERT INTO products (store, store_product_id, name, price, first_seen, last_seen) VALUES ('woolworths', 'old', 'No Longer Sold', 1, '2026-10-01', '2026-10-01')").run();
   const settings = await import('../src/settings.js');
-  settings.setSetting('SERVER_SCRAPE_STORES', 'aldi,coles,iga,harrisfarm');
-  getDb().exec('DELETE FROM scrape_runs'); // runs started above are stamped with the real time
-  now = Date.parse('2026-10-22T17:00:00Z'); // 04:00 in Sydney, before the scheduled time: yesterday's run still counts
-  run('woolworths', 'ok', samWorker.id, 'collector', '2026-10-21T17:20:00.000Z');
-  assert.deepEqual(claims.claim(samWorker, ['woolworths']), []);
-  minutes(16); // 04:16
-  assert.deepEqual(claims.claim(samWorker, ['woolworths']).map((r) => r.store), ['woolworths']);
+  settings.setSetting('SERVER_SCRAPE_STORES', 'woolworths,coles,iga'); // so the server's only other choice here is Woolworths
+
+  // Whoever asks first reads the department list; nobody else gets Woolworths until it's in.
+  const first = sharing.take(sam, ['woolworths']);
+  assert.equal(first.part.kind, 'index');
+  assert.equal(sharing.take(alexWorker, ['woolworths']), null);
+  sharing.done(sam, 'woolworths', 'index', { cats: ['dairy', 'pantry', 'frozen'].map((k) => ({ key: k, label: k, dept: { slug: k, name: k, id: k } })) });
+
+  // Two departments at once (Woolworths' usual two), one each.
+  const a = sharing.take(sam, ['woolworths']);
+  const b = sharing.take(alexWorker, ['woolworths']);
+  assert.deepEqual([a.part.key, b.part.key], ['dairy', 'pantry']);
+  assert.equal(a.runId, b.runId, 'all one refresh');
+  assert.equal(sharing.take('server', []), null, 'two on the go already');
+  assert.equal(sharing.take(sam, ['woolworths']), null, 'one at a time each');
+
+  sharing.items(sam, 'woolworths', 'dairy', [{ store_product_id: 'milk', name: 'Milk', size_text: '1L', price: 2 }]);
+  assert.throws(() => sharing.items(alexWorker, 'woolworths', 'dairy', []), /handed on/, 'only the holder sends for a part');
+  sharing.done(sam, 'woolworths', 'dairy', {});
+  // Alex is blocked by Woolworths: pantry goes back, and Alex gets no more Woolworths today.
+  sharing.done(alexWorker, 'woolworths', 'pantry', { blocked: 'Access denied' });
+  assert.equal(sharing.take(alexWorker, ['woolworths']), null);
+  const c = sharing.take('server', []);
+  assert.equal(c.store, 'woolworths');
+  assert.equal(c.part.key, 'pantry');
+  sharing.items('server', 'woolworths', 'pantry', [{ store_product_id: 'rice', name: 'Rice', size_text: '1kg', price: 3 }]);
+  sharing.done('server', 'woolworths', 'pantry', {});
+  const d = sharing.take(sam, ['woolworths']);
+  sharing.items(sam, 'woolworths', 'frozen', [{ store_product_id: 'peas', name: 'Peas', size_text: '1kg', price: 4 }]);
+  sharing.done(sam, 'woolworths', d.part.key, {});
+
+  // The last part in finishes the one refresh: everything counts, and what nobody saw is gone.
+  const run = getDb().prepare('SELECT status, products, source FROM scrape_runs WHERE id = ?').get(a.runId);
+  assert.deepEqual([run.status, run.products, run.source], ['ok', 3, 'shared']);
+  assert.deepEqual(products('woolworths').map((p) => `${p.id}:${p.available}`), ['milk:1', 'old:0', 'peas:1', 'rice:1']);
+  assert.equal(sharing.take(sam, ['woolworths']), null, 'done for today');
+  const st = sharing.status().woolworths;
+  assert.deepEqual([st.done, st.of, st.finished, st.barred], [3, 3, true, ['Alex’s laptop']]);
   settings.setSetting('SERVER_SCRAPE_STORES', null);
+});
+
+test('other shops: a part nothing is heard about for 10 minutes is handed on', () => {
+  const alex = `h${helpers.list().find((x) => x.name === 'Alex’s laptop').id}`;
+  const a = sharing.take(alex, ['aldi']); // the department list
+  assert.equal(a.part.kind, 'index');
+  minutes(11);
+  const b = sharing.take(samWorker.id, ['aldi']);
+  assert.equal(b.part.kind, 'index', 'Sam gets it instead');
+  assert.throws(() => sharing.done(alex, 'aldi', 'index', { cats: [{ key: 'x' }] }), /handed on/, 'Alex’s late answer is refused');
+});
+
+test('other shops: Harris Farm goes in blocks of pages, adding more while the last block is full', () => {
+  const sam = samWorker.id;
+  const keys = () => share('harrisfarm').parts.map((p) => p.key);
+  const first = sharing.take(sam, ['harrisfarm']);
+  assert.deepEqual([first.part.kind, first.part.from, first.part.to], ['pages', 1, 3]);
+  assert.deepEqual(keys(), ['p1', 'p4', 'p7']);
+  sharing.done(sam, 'harrisfarm', 'p1', { more: true });
+  assert.deepEqual(keys(), ['p1', 'p4', 'p7'], 'not the last block: nothing to add');
+  for (const k of ['p4', 'p7']) {
+    assert.equal(sharing.take(sam, ['harrisfarm']).part.key, k);
+    sharing.done(sam, 'harrisfarm', k, { more: true });
+  }
+  assert.deepEqual(keys(), ['p1', 'p4', 'p7', 'p10'], 'pages 7–9 were all full: 10–12 next');
+  assert.equal(sharing.take(sam, ['harrisfarm']).part.key, 'p10');
+  sharing.done(sam, 'harrisfarm', 'p10', { more: false });
+  assert.equal(share('harrisfarm').finished, true);
+});
+
+test('other shops: parts still missing when the next refresh is due make a failed refresh', () => {
+  minutes(24 * 60);
+  sharing.take(samWorker.id, ['aldi']); // starts today's ALDI, reporting yesterday's
+  const runs = getDb().prepare("SELECT status, error FROM scrape_runs WHERE store = 'aldi' AND source = 'shared' ORDER BY id").all();
+  assert.equal(runs[0].status, 'error');
+  assert.match(runs[0].error, /departments couldn’t be fetched/);
+  assert.equal(runs[1].status, 'running');
+});
+
+test('other shops: with the schedule turned off, only a refresh started from the admin page', () => {
+  const saved = process.env.SCRAPE_CRON;
+  process.env.SCRAPE_CRON = '';
+  minutes(3 * 24 * 60);
+  assert.equal(sharing.take(samWorker.id, ['harrisfarm']), null, 'nothing starts by itself');
+  sharing.restart('harrisfarm');
+  assert.equal(sharing.take(samWorker.id, ['harrisfarm']).part.key, 'p1');
+  minutes(60);
+  assert.equal(share('harrisfarm').finished, false, 'and it isn’t replaced by itself');
+  process.env.SCRAPE_CRON = saved;
 });

@@ -624,22 +624,24 @@ test('helpers: approved by an admin, each with its own token, handed shops to re
   assert.equal((await fetch(`${base}/api/admin/collector/download?helper=999`, { headers: { Cookie: cookie } })).status, 404);
   const samApi = as(token);
 
-  // A shop this server doesn't crawl is handed to the first helper to ask, with its run started.
-  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['woolworths', 'coles', 'aldi', 'iga'] });
-  const { runs } = (await samApi('POST', '/api/collector/claim', { stores: ['harrisfarm'] })).body;
-  assert.deepEqual(runs.map((r) => r.store), ['harrisfarm']);
-  assert.deepEqual((await as(alex.token)('POST', '/api/collector/claim', { stores: ['harrisfarm'] })).body.runs, [], 'not twice');
-  assert.equal((await as(alex.token)('POST', `/api/ingest/runs/${runs[0].runId}/items`, { items: [] })).status, 404, 'only Sam can send to Sam’s run');
-  await samApi('POST', `/api/ingest/runs/${runs[0].runId}/items`, { items: [{ store_product_id: 'hf1', name: 'Harris Farm Bananas', size_text: '1kg', price: 3.5 }] });
-  assert.equal((await samApi('POST', `/api/ingest/runs/${runs[0].runId}/finish`, { complete: true })).body.status, 'ok');
-  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: null });
+  // Shops' refreshes are shared out a part at a time; Harris Farm one block of pages at a time.
+  assert.deepEqual((await samApi('GET', '/api/collector/sharing')).body.shops, ['woolworths', 'aldi', 'harrisfarm']);
+  const job = (await samApi('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body;
+  assert.deepEqual([job.store, job.part.key, job.part.from, job.part.to], ['harrisfarm', 'p1', 1, 3]);
+  assert.equal((await as(alex.token)('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body.part, undefined, 'one part of Harris Farm at a time');
+  const send = (api, what, body) => api('POST', `/api/collector/parts/${what}`, { store: 'harrisfarm', part: 'p1', ...body });
+  assert.equal((await send(as(alex.token), 'items', { items: [] })).status, 409, 'only Sam sends for Sam’s part');
+  await send(samApi, 'items', { items: [{ store_product_id: 'hf1', name: 'Harris Farm Bananas', size_text: '1kg', price: 3.5 }] });
+  assert.equal((await samApi('GET', '/api/admin/helpers')).status, 401);
+  const doing = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id).shops;
+  assert.deepEqual(doing, [{ store: 'harrisfarm', part: 'pages 1–3' }]);
+  assert.equal((await send(samApi, 'done', { more: false })).body.ok, true);
 
   // The admin page lists helpers with when they last connected and what they last did.
   const listed = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id);
   assert.equal(listed.name, 'Sam’s PC');
   assert.ok(listed.last_seen_at);
   assert.equal(listed.mode, 'exe');
-  assert.equal(listed.lastRun.store, 'harrisfarm');
   assert.ok(!('token_hash' in listed), 'token hashes stay on the server');
 
   // Coles page sharing is off when steady mode is (as in these tests).
@@ -648,6 +650,51 @@ test('helpers: approved by an admin, each with its own token, handed shops to re
   assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 'lots' })).status, 400);
   assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 45 })).body.settings.COLES_PAGES_PER_HOUR.value, '45');
   await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: '' });
+
+  // An invite link, emailed: the helper downloads it themselves, set up with a token of its own.
+  assert.equal((await admin('POST', '/api/admin/helpers', { name: 'Jo', email: 'jo@example.com', send: true })).status, 400, 'no mail server yet');
+  await admin('PUT', '/api/admin/settings', { smtp: { host: 'smtp.example.com', port: 465, secure: true, user: 'u', password: 'p' } });
+  const { capturedMail } = await import('../src/mailer.js');
+  const jo = (await admin('POST', '/api/admin/helpers', { name: 'Jo', email: 'jo@example.com', send: true })).body;
+  assert.equal(jo.invite.emailed, true);
+  const mail = capturedMail.at(-1);
+  assert.equal(mail.to, 'jo@example.com');
+  assert.match(mail.subject, /Help keep .* prices up to date/);
+  assert.match(mail.text, /What|checks in with the site/);
+  assert.match(mail.text, /--autostart/);
+  const link = mail.text.match(/https?:\/\/\S+\/collector\/\S+/)[0];
+  assert.equal(link, jo.invite.link);
+  const path = new URL(link).pathname;
+  const page = await fetch(base + path);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Hi Jo/);
+  assert.match(html, /download\/windows-x64/);
+  const zipRes = await fetch(base + path + '/download/zip');
+  assert.equal(zipRes.headers.get('content-type'), 'application/zip');
+  const joToken = Buffer.from(await zipRes.arrayBuffer()).toString('latin1').length > 0
+    && (await (async () => {
+      const z = Buffer.from(await (await fetch(base + path + '/download/zip')).arrayBuffer());
+      for (let at = 0; z.readUInt32LE(at) === 0x04034b50;) {
+        const size = z.readUInt32LE(at + 18);
+        const nameLen = z.readUInt16LE(at + 26);
+        const name = z.subarray(at + 30, at + 30 + nameLen).toString();
+        if (name.endsWith('/.env')) return zlib.inflateRawSync(z.subarray(at + 30 + nameLen, at + 30 + nameLen + size)).toString().match(/COLLECTOR_TOKEN=(\S+)/)[1];
+        at += 30 + nameLen + size;
+      }
+      return null;
+    })());
+  assert.equal((await as(joToken)('GET', '/api/collector/latest')).status, 200, 'the downloaded copy works');
+  assert.equal((await fetch(base + '/collector/not-a-real-invite-link-at-all')).status, 404);
+  // A new link replaces the old one; cancelling it stops it working.
+  const again = (await admin('POST', `/api/admin/helpers/${jo.id}/invite`, {})).body;
+  assert.equal(again.emailed, false);
+  assert.equal((await fetch(base + path)).status, 404, 'the older link stopped working');
+  await admin('DELETE', `/api/admin/helpers/${jo.id}/invite`);
+  assert.equal((await fetch(base + new URL(again.link).pathname)).status, 404);
+  assert.equal((await fetch(base + new URL(again.link).pathname + '/download/zip', { redirect: 'manual' })).status, 302, 'no download either');
+  await admin('PUT', '/api/admin/settings', { smtp: null });
+  await admin('DELETE', `/api/admin/helpers/${jo.id}`);
 
   // Turned off, then removed.
   await admin('PATCH', `/api/admin/helpers/${sam.id}`, { disabled: true });

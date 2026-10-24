@@ -582,3 +582,4 @@ a.plain-link:hover { text-decoration: underline; }
 .helper-row.off strong { color: var(--muted); }
 .helper-row .actions { flex-wrap: wrap; }
 .worker-list { margin: 4px 0 0; padding-left: 18px; }
+.helper-downloads summary { cursor: pointer; color: var(--link, inherit); margin: 4px 0 8px; }

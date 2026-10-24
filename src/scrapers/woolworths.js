@@ -18,14 +18,15 @@ const SKIP = new Set(
 
 export const store = 'woolworths';
 
-export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories } = {}) {
-  const delayMs = Number(process.env.WOOLWORTHS_DELAY_MS ?? 600);
-  const client = createClient({ origin: ORIGIN, delayMs });
+const delayMs = () => Number(process.env.WOOLWORTHS_DELAY_MS ?? 600);
+
+/** The departments to crawl: [{ id, name, slug }] (one request). */
+export async function departments() {
+  const client = createClient({ origin: ORIGIN, delayMs: delayMs() });
   await client.init();
-  let cats;
   try {
     const tree = await client.getJson(`${ORIGIN}/apis/ui/PiesCategoriesWithSpecials`);
-    cats = (tree.Categories || tree.categories || [])
+    return (tree.Categories || tree.categories || [])
       .map((c) => ({
         id: c.NodeId ?? c.nodeId,
         name: c.Description ?? c.description,
@@ -35,6 +36,11 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
   } finally {
     await client.close();
   }
+}
+
+/** `categories`: departments already fetched with departments() (when the crawl is shared out). */
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories } = {}) {
+  let cats = categories || await departments();
   if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.slug));
   // Two departments at a time, each in its own session. A session that has made
   // hundreds of requests gets slowed right down, so each department starts a fresh one.
@@ -45,7 +51,7 @@ export async function* scrape({ log = console.log, maxPagesPerCategory = Infinit
     workers,
     log,
     newClient: async () => {
-      const c = createClient({ origin: ORIGIN, delayMs });
+      const c = createClient({ origin: ORIGIN, delayMs: delayMs() });
       await c.init();
       return c;
     },

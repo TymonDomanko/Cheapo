@@ -23,7 +23,8 @@ import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
 import * as colesLive from './coles-live.js';
 import * as helpers from './helpers.js';
-import * as claims from './claims.js';
+import * as sharing from './sharing.js';
+import { invitePage, preparingPage, inviteEmail } from './helper-invite.js';
 import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
@@ -526,11 +527,16 @@ export function createApp() {
     getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(req.worker.id, run.runId);
     return run;
   }));
-  // Which shops to refresh now, out of the ones the collector can do: each comes with its run started.
-  app.post('/api/collector/claim', requireCollector, h((req) => {
+  // What this site shares out (an older site has no such page, and collectors fall back to fixed times).
+  app.get('/api/collector/sharing', requireCollector, h(() => ({ shops: sharing.SHARED, coles: colesLive.enabled() })));
+  // A part of a shop's daily refresh to fetch, out of the shops the collector can do (src/sharing.js).
+  app.post('/api/collector/parts/next', requireCollector, h((req) => {
     const canDo = Array.isArray(req.body?.stores) ? req.body.stores.filter((x) => STORES.includes(x)) : [];
-    return { runs: claims.claim(req.worker, canDo), colesSteady: colesLive.enabled() };
+    const job = sharing.take(req.worker.id, canDo);
+    return job ? { ...job, wait: 0 } : { wait: 300 };
   }));
+  app.post('/api/collector/parts/items', requireCollector, h((req) => sharing.items(req.worker.id, req.body?.store, String(req.body?.part || ''), req.body?.items)));
+  app.post('/api/collector/parts/done', requireCollector, h((req) => sharing.done(req.worker.id, req.body?.store, String(req.body?.part || ''), req.body || {})));
   // Coles page by page, shared with this server (src/coles-live.js).
   app.post('/api/collector/coles/next', requireCollector, h((req) => colesLive.helperNext(req.worker)));
   app.post('/api/collector/coles/result', requireCollector, h((req) => colesLive.helperResult(req.worker, req.body)));
@@ -551,6 +557,7 @@ export function createApp() {
     return {
       version: APP_VERSION,
       colesLive: colesLive.status(),
+      shared: sharing.status(),
       stores: STORES.map((s) => ({
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
@@ -583,9 +590,13 @@ export function createApp() {
     // Coles in steady mode: start its whole-shop pass again rather than crawl it all at once.
     const steady = colesLive.enabled() && wanted.includes('coles');
     if (steady) colesLive.restartPass();
-    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles'));
+    // Shops shared out with collectors: start today's refresh again, a part at a time.
+    const shared = wanted.filter((s) => sharing.SHARED.includes(s));
+    for (const s of shared) sharing.restart(s);
+    if (shared.length && process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') sharing.pump();
+    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles') && !shared.includes(s));
     scrapeAll(stores).catch(() => {});
-    return { started: stores, colesSteady: steady };
+    return { started: [...stores, ...shared], colesSteady: steady };
   }));
 
   // Site settings (email, site details, home collector). .env values win and can't be changed here.
@@ -627,7 +638,7 @@ export function createApp() {
   // What a downloaded collector is set up with: this site and a token. For a
   // helper (?helper=<id>) that's a new token for it, so an older download of
   // theirs stops working; otherwise the site's own token (made now if there
-  // isn't one). Which shops it does is up to this server (src/claims.js).
+  // isn't one). Which shops it does is up to this server (src/sharing.js).
   function collectorSetup(req) {
     const helper = req.query.helper ? helpers.list().find((x) => x.id === Number(req.query.helper)) : null;
     if (req.query.helper && !helper) throw bad('No such helper', 404);
@@ -647,6 +658,9 @@ export function createApp() {
     } catch (e) {
       return res.status(e.status || 500).json({ error: e.message });
     }
+    sendZip(res, setup);
+  });
+  function sendZip(res, setup) {
     const files = {
       ...collectorBundle.bundleFiles(setup.serverUrl, setup.helper),
       '.env': collectorBundle.envFile(setup),
@@ -657,7 +671,17 @@ export function createApp() {
       'Cache-Control': 'no-store',
     });
     res.send(collectorBundle.zip(files, 'grocery-home-collector'));
-  });
+  }
+  function sendProgram(res, target, setup) {
+    collectorExe.sendExe(res, target, {
+      COLLECTOR_SERVER: setup.serverUrl,
+      COLLECTOR_TOKEN: setup.token,
+      COLLECT_CRON: setup.cron,
+      TZ: 'Australia/Sydney',
+      COLLECT_ON_START: 'true',
+      AUTO_UPDATE: 'true',
+    });
+  }
 
   // The home collector as a single program per platform. Built in the
   // background the first time (it takes a minute), then served from a cache.
@@ -676,33 +700,79 @@ export function createApp() {
     } catch (e) {
       return res.status(e.status || 500).json({ error: e.message });
     }
-    collectorExe.sendExe(res, target, {
-      COLLECTOR_SERVER: setup.serverUrl,
-      COLLECTOR_TOKEN: setup.token,
-      COLLECT_CRON: setup.cron,
-      TZ: 'Australia/Sydney',
-      COLLECT_ON_START: 'true',
-      AUTO_UPDATE: 'true',
-    });
+    sendProgram(res, target, setup);
+  });
+
+  // A helper's invite link: a page explaining the collector, with downloads set up for them
+  // (each makes them a new token). No login; the link itself is the key, for a week.
+  const inviteLimit = rateLimit({ windowMs: 60000, max: 30 });
+  app.get('/collector/:invite', inviteLimit, (req, res) => {
+    const helper = helpers.byInvite(req.params.invite);
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }).status(helper ? 200 : 404).type('html')
+      .send(invitePage({ siteUrl: siteUrl(req), helper, inviteToken: req.params.invite, until: helper?.until }));
+  });
+  app.get('/collector/:invite/download/:target', inviteLimit, (req, res) => {
+    const helper = helpers.byInvite(req.params.invite);
+    const { target } = req.params;
+    if (!helper) return res.redirect(`/collector/${encodeURIComponent(req.params.invite)}`);
+    if (target !== 'zip' && !collectorExe.TARGETS[target]) return res.status(404).type('text').send('Unknown platform');
+    if (target !== 'zip' && !collectorExe.exeStatus(target).ready) {
+      if (collectorExe.exeStatus(target).error && !collectorExe.exeStatus(target).building) {
+        return res.status(503).type('text').send('That program couldn’t be prepared on this server. Go back and use the zip instead.');
+      }
+      collectorExe.buildExe(target); // the first time: about a minute
+      return res.set('Cache-Control', 'no-store').type('html').send(preparingPage());
+    }
+    const setup = { serverUrl: siteUrl(req), token: helpers.newToken(helper.id), helper: helper.name, cron: '0 4 * * *' };
+    if (target === 'zip') sendZip(res, setup);
+    else sendProgram(res, target, setup);
   });
 
   app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
 
   // Helpers: collectors on other connections that share the work (src/helpers.js).
-  const latestRun = getDb().prepare("SELECT store, status, started_at, finished_at, products, error FROM scrape_runs WHERE worker = ? ORDER BY id DESC LIMIT 1");
   app.get('/api/admin/helpers', requireAdmin, h(() => {
     const latest = collectorBundle.latestCollectorVersion();
     const coles = colesLive.status();
+    const shared = Object.entries(sharing.status());
     return {
       helpers: helpers.list().map((x) => ({
         ...x,
         upToDate: x.version === latest,
-        lastRun: latestRun.get(x.worker) || null,
+        shops: shared.flatMap(([store, s]) => s.doing.filter((d) => d.id === x.worker).map((d) => ({ store, part: d.part }))),
+        blockedBy: shared.filter(([, s]) => s.barred.includes(x.name)).map(([store]) => store),
         coles: coles.workers?.find((w) => w.id === x.worker) || null,
       })),
     };
   }));
-  app.post('/api/admin/helpers', requireAdmin, h((req) => helpers.add(req.body?.name)));
+  // A new invite link for a helper (an older one stops working), emailed to them if asked.
+  const mailNeeded = () => bad('Set up a mail server first (Email, above), or copy the link instead');
+  async function invite(req, helper, { email, send }) {
+    const to = email || helper.email;
+    if (send && to && !mailConfigured()) throw mailNeeded();
+    const { token, until } = helpers.newInvite(helper.id, email || undefined);
+    const link = `${siteUrl(req)}/collector/${token}`;
+    let emailed = false;
+    if (send && to) {
+      await sendMail({ to, kind: 'helper-invite', ...inviteEmail({ helper, link, until }) });
+      emailed = true;
+    }
+    return { link, until, emailed, to: emailed ? to : null };
+  }
+  app.post('/api/admin/helpers', requireAdmin, h(async (req) => {
+    if (req.body?.send && req.body?.email && !mailConfigured()) throw mailNeeded(); // before adding anyone
+    const made = helpers.add(req.body?.name, req.body?.email || null);
+    return { ...made, invite: await invite(req, made, { email: made.email, send: !!req.body?.send }) };
+  }));
+  app.post('/api/admin/helpers/:id/invite', requireAdmin, h(async (req) => {
+    const helper = helpers.list().find((x) => x.id === id(req.params.id));
+    if (!helper) throw bad('No such helper', 404);
+    return invite(req, helper, { email: req.body?.email || null, send: !!req.body?.send });
+  }));
+  app.delete('/api/admin/helpers/:id/invite', requireAdmin, h((req) => {
+    helpers.cancelInvite(id(req.params.id));
+    return { ok: true };
+  }));
   app.post('/api/admin/helpers/:id/token', requireAdmin, h((req) => ({ token: helpers.newToken(id(req.params.id)) })));
   app.patch('/api/admin/helpers/:id', requireAdmin, h((req) => {
     helpers.setDisabled(id(req.params.id), !!req.body?.disabled);

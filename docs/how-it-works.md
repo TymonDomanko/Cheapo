@@ -14,7 +14,7 @@ None of the supermarkets has a public API. Each scraper reads the same data the 
 
 Every night (`SCRAPE_CRON`) the server:
 1. checks which IGAs publish prices online;
-2. refreshes every shop it crawls, unless a collector already has. Collectors check in every 10 minutes, and `src/claims.js` hands each one any shop that's due and that nobody else has done or is doing. The server gets the first 90 minutes for its own shops, and a connection that failed a shop that day isn't given it again;
+2. refreshes IGA, and starts Woolworths, ALDI and Harris Farm as shared refreshes. `src/sharing.js` splits each into parts (departments, or blocks of pages for Harris Farm), and the server and collectors each take a part at a time. A shop has no more parts on the go than one connection would fetch at once, and the last part in finishes the refresh. A part a connection goes quiet on is handed on, and one that failed isn't given back to the same connection;
 3. fills in some Coles barcodes;
 4. sends price alerts.
 
@@ -34,7 +34,7 @@ Coles has about 30,000 products on about 640 pages. At the default 30 pages an h
 
 A bot check pauses it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
 
-**Sharing it.** Collectors (the home collector and helpers) can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together, so each connection waits *connections × 60 / limit* minutes between pages. A department is held for its connection while it keeps sending pages, and is handed on if it goes quiet for 20 minutes or more. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
+**Sharing it.** Collectors (the home collector and helpers) can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together, so each connection waits *connections × 60 / limit* minutes between pages. Every answer tells a collector when to come back. Only connections that are part-way through something and on time are counted, so one that misses its turn by 3 minutes stops slowing the rest, and its department is handed on. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
 
 ## Matching the same product across shops
 
@@ -70,8 +70,9 @@ src/
   compare.js       search and cross-shop grouping
   bestprice.js     "the cheapest of it, any brand"
   coles-live.js    Coles a page at a time, shared between this server and collectors
-  claims.js        which connection refreshes each shop today
-  helpers.js       approved helpers and their tokens
+  sharing.js       other shops' refreshes, split into parts and shared out
+  helpers.js       approved helpers, their tokens and invite links
+  helper-invite.js the invite page and email
   lists.js         lists, sharing, per-shop choices, the cheapest split, what each shop saves or costs
   deals.js         regulars on sale, unusual deals
   insights.js      "is this a good price?"

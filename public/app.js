@@ -2547,13 +2547,22 @@ function adminStoreTiles(o) {
       const status = s.status.running
         ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
-      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : '';
+      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : o.shared?.[s.store] ? sharedNote(o.shared[s.store]) : '';
       return `<div class="tile"><div class="label">${chip(s.store)}</div>
         <div class="value">${s.products.toLocaleString()}</div>
         <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
-        <p>${s.fedByCollector ? `<span class="hint">${steady ? 'Fetched page by page by collectors (not this server)' : 'Collected from home (not crawled by this server)'}</span>`
+        <p>${s.fedByCollector ? `<span class="hint">${s.store === 'coles' && o.colesLive?.enabled ? 'Fetched page by page by collectors (not this server)' : o.shared?.[s.store] ? 'Shared out to collectors (not crawled by this server)' : 'Collected from home (not crawled by this server)'}</span>`
           : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>`;
+}
+
+/** A shop shared out a part at a time: how today's refresh is going, and who's doing what. */
+function sharedNote(x) {
+  const what = x.of == null ? 'reading its departments' : x.finished ? `all ${x.of} parts done` : `${x.done} of ${x.of} parts done`;
+  const doing = x.doing.map((d) => `<li>${esc(d.worker)}: ${esc(d.part)}</li>`).join('');
+  return `<br><span class="hint">Shared refresh (started ${fmtDate(x.startedAt)}): ${what}</span>${doing ? `<ul class="worker-list hint">${doing}</ul>` : ''}`
+    + (x.barred.length ? `<br><span class="warn">Blocked today: ${x.barred.map(esc).join(', ')}</span>` : '')
+    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed and waiting for another connection: ${x.stuck.map(esc).join(', ')}</span>` : '');
 }
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
@@ -2679,19 +2688,35 @@ async function downloadProgram(btn) {
 function helperStatus(x, latest) {
   const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
   if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
-  if (x.lastRun) parts.push(`last refreshed ${chip(x.lastRun.store)} ${x.lastRun.status === 'error' ? `<span class="warn">failed: ${esc(x.lastRun.error || '')}</span>` : esc(x.lastRun.status)}`);
+  for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
+  for (const s of x.blockedBy || []) parts.push(`<span class="warn">blocked by ${esc(storeName(s))} today</span>`);
   if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
   else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);
   return parts.join(' · ');
 }
 
+const dayMonth = (iso) => new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+
+/** A link just made for a helper: sent, or to copy. */
+function inviteNotice(name, inv, token = null) {
+  return `<div class="notice">${inv.emailed ? `Emailed ${esc(name)} at ${esc(inv.to)} with what it is, how to set it up and this link.` : `Send ${esc(name)} this link: it explains what the collector is and lets them download it, set up for this site.`}
+    <span class="copy-row"><input readonly value="${esc(inv.link)}" data-copy-source><button type="button" class="small" data-copy-input>Copy</button></span>
+    It works until ${dayMonth(inv.until)} and won’t be shown again here (you can always make a new one).
+    ${token ? `<br><span class="hint">For Docker or running from the code instead, their token is <code>${esc(token)}</code>.</span>` : ''}</div>`;
+}
+
 /** Helpers: other people's collectors, sharing the work. */
-function helpersCard(list, programs, justMade) {
+function helpersCard(list, programs, justMade, canEmail) {
   const rows = list.map((x) => `<div class="helper-row${x.disabled ? ' off' : ''}">
-      <p><strong>${esc(x.name)}</strong>${x.disabled ? ' <span class="state">turned off</span>' : ''}<br><span class="hint">${helperStatus(x)}</span></p>
-      <div class="actions">
+      <p><strong>${esc(x.name)}</strong>${x.disabled ? ' <span class="state">turned off</span>' : ''}${x.email ? ` <span class="hint">${esc(x.email)}</span>` : ''}<br><span class="hint">${helperStatus(x)}</span>
+        <br><span class="hint">${x.inviteUntil ? `Invite link works until ${dayMonth(x.inviteUntil)}` : 'No invite link open'}</span></p>
+      ${justMade?.id === x.id && justMade.invite ? inviteNotice(x.name, justMade.invite, justMade.token) : ''}
+      <details class="helper-downloads"><summary>Download it for them</summary><div class="actions">
         ${programs.map((p) => `<button type="button" class="small" data-program="${p.id}" data-helper="${x.id}">⬇ ${esc(p.label)}</button>`).join('')}
         <a class="button small" href="/api/admin/collector/download?helper=${x.id}" data-helper-zip="${x.id}" download>⬇ Mac / zip</a>
+      </div></details>
+      <div class="actions">
+        <button type="button" class="small" data-helper-invite="${x.id}" data-email="${esc(x.email || '')}" data-can-email="${canEmail ? '1' : ''}">${x.email && canEmail ? '✉ Email a new link' : '🔗 New invite link'}</button>
         <button type="button" class="small ghost" data-helper-toggle="${x.id}" data-off="${x.disabled ? '' : '1'}">${x.disabled ? 'Turn on' : 'Turn off'}</button>
         <button type="button" class="small ghost" data-helper-remove="${x.id}" data-name="${esc(x.name)}">Remove</button>
       </div></div>`).join('');
@@ -2699,10 +2724,14 @@ function helpersCard(list, programs, justMade) {
       <h3>Helpers</h3>
       <p class="hint">People you trust can run the collector on their own internet connection to share the work. Each shop is refreshed by whichever connection isn’t blocked, and Coles pages are shared out. They split the one pace above between them, so helpers make refreshes more reliable without asking the shops for more. A helper’s prices go straight into everyone’s comparisons, so only add people you trust.</p>
       ${rows || '<p class="hint">No helpers yet.</p>'}
-      ${justMade ? `<div class="notice">Added ${esc(justMade.name)}. Download the collector for them with the buttons above and send it to them; it’s set up for this site. (For Docker or running from the code, their token is
-        <span class="copy-row"><input readonly value="${esc(justMade.token)}" id="new-helper-token"><button type="button" class="small" id="copy-helper-token">Copy</button></span>
-        It won’t be shown again, and downloading makes a new one.)</div>` : ''}
-      <form id="add-helper" class="copy-row"><input name="name" maxlength="60" placeholder="Name, e.g. Sam’s PC" required><button class="small" type="submit">Add helper</button></form>
+      <form id="add-helper" class="stack">
+        <h4>Add a helper</h4>
+        <label>Name<input name="name" maxlength="60" placeholder="e.g. Sam’s PC" required></label>
+        <label>Their email <span class="hint">(optional)</span><input name="email" type="email" maxlength="200" placeholder="sam@example.com"></label>
+        ${canEmail ? '<label class="check"><input type="checkbox" name="send" checked> Email them a link to download it, with what it is and how to set it up</label>'
+          : '<p class="hint">Set up email (above) to send them the link; otherwise you’ll get a link to pass on.</p>'}
+        <button class="small" type="submit">Add helper</button>
+      </form>
       <p class="warn" data-form-error hidden></p>
     </div>`;
 }
@@ -2711,6 +2740,7 @@ const HELPER_NEW_KEY = 'Downloading makes this helper a new key. A copy they alr
 
 async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
   const [{ settings: st, stores, currentAddress, litestream, collector }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
+  const canEmail = st.SMTP_URL.set;
   const locked = (key) => st[key].source === 'env';
   const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
@@ -2772,7 +2802,7 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
         ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
 
-      ${helpersCard(helpers, collector.programs, justMadeHelper)}
+      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail)}
 
       <div class="card stack">
         <h3>Off-site backup</h3>
@@ -2789,7 +2819,9 @@ $('#admin-root').addEventListener('submit', async (e) => {
   if (f.id === 'add-helper') {
     e.preventDefault();
     try {
-      const made = await api('/api/admin/helpers', { method: 'POST', body: { name: f.elements.name.value } });
+      const made = await api('/api/admin/helpers', {
+        method: 'POST', body: { name: f.elements.name.value, email: f.elements.email.value || null, send: !!f.elements.send?.checked && !!f.elements.email.value },
+      });
       await loadAdminSettings(null, made);
     } catch (err) {
       formError(f.closest('.card'), err);
@@ -2850,8 +2882,20 @@ $('#admin-root').addEventListener('click', async (e) => {
       loadAdmin();
     } else if (t.id === 'copy-token') {
       copyText($('#new-token').value);
-    } else if (t.id === 'copy-helper-token') {
-      copyText($('#new-helper-token').value);
+    } else if (t.dataset.copyInput !== undefined) {
+      copyText(t.parentElement.querySelector('[data-copy-source]').value);
+    } else if (t.dataset.helperInvite) {
+      let email = t.dataset.email;
+      let send = false;
+      if (t.dataset.canEmail) {
+        const answer = prompt('Email the new link to (leave empty to just get the link):', email);
+        if (answer === null) return;
+        email = answer.trim();
+        send = !!email;
+      }
+      if (!confirm('Make a new invite link? Any older link for this helper stops working.')) return;
+      const inv = await api(`/api/admin/helpers/${t.dataset.helperInvite}/invite`, { method: 'POST', body: { email: email || null, send } });
+      await loadAdminSettings(null, { id: Number(t.dataset.helperInvite), invite: inv });
     } else if (t.dataset.program) {
       if (t.dataset.helper && !confirm(HELPER_NEW_KEY)) return;
       await downloadProgram(t);

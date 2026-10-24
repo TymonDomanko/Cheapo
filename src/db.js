@@ -210,6 +210,10 @@ function migrate(d) {
       version TEXT,
       mode TEXT
     );`);
+  // A link a helper can open to download the collector themselves (only its hash is kept), and where it was sent.
+  for (const [col, def] of [['invite_hash', 'TEXT'], ['invite_expires', 'TEXT'], ['email', 'TEXT']]) {
+    if (!d.prepare('PRAGMA table_info(collectors)').all().some((c) => c.name === col)) d.exec(`ALTER TABLE collectors ADD COLUMN ${col} ${def}`);
+  }
   // Which connection did a refresh: 'server', 'home' (the site's collector token) or 'h<id>' (a helper).
   if (!d.prepare('PRAGMA table_info(scrape_runs)').all().some((c) => c.name === 'worker')) {
     d.exec('ALTER TABLE scrape_runs ADD COLUMN worker TEXT');
