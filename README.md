@@ -92,12 +92,13 @@ See `.env.example`. Settings marked *Also on the Admin page* can be changed by a
 | `COLLECTOR_TOKEN`, `SERVER_SCRAPE_STORES` | — | Accept prices from a home collector, and leave those stores out of the server's own crawl. *Also on the Admin page* |
 | `LITESTREAM_*` | — | Continuous off-site backup (see DEPLOY.md) |
 | `BACKUP_KEEP_DAYS` | `7` | Daily on-disk snapshots to keep |
-| `COLES_BARCODE_BUDGET` | `1500` | Coles product pages fetched per day for barcodes |
+| `COLES_BARCODE_BUDGET` | `300` | Coles product pages fetched per day for barcodes |
 | `IGA_MAX_STORES` | no limit | Optional cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the daily refresh and about 2 MB of storage |
 | `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |
 | `ENABLE_TROLLEY_FILL` | `false` | Self-hosted trolley automation (see above) |
 | `DATA_DIR` / `DB_PATH` | `data/` | Where the SQLite database lives |
 | `*_DELAY_MS`, `*_SKIP_CATEGORIES` | per store | Request pacing and categories to skip, per store |
+| `BLOCKED_RETRY_HOURS` | `4` | When a shop blocks a crawl part-way (Coles), try again this much later, carrying on where it stopped; `0` waits for the next scheduled refresh |
 
 ## Supermarkets
 

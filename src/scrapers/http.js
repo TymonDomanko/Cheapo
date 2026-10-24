@@ -25,6 +25,17 @@ const UA = process.env.SCRAPE_USER_AGENT ||
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** A bot-protection page (Imperva / Incapsula, used by Coles) instead of the real thing. */
+export const isBotCheck = (text) => /Pardon Our Interruption|_Incapsula_Resource|Request unsuccessful\. Incapsula/i.test(String(text).slice(0, 5000));
+
+/** The shop is blocking this connection: stop and try again later rather than keep asking. */
+export class BlockedError extends Error {
+  constructor(message) {
+    super(message);
+    this.blocked = true;
+  }
+}
+
 export class HttpError extends Error {
   constructor(status, url, body) {
     super(`HTTP ${status} for ${url}${/access denied/i.test(body || '') ? ' (blocked by bot protection — try SCRAPE_MODE=browser or run from a home connection)' : ''}`);
@@ -53,20 +64,24 @@ export async function requestJson(client, url, opts) {
         await client.renew();
         continue;
       }
-      if (attempt >= SOFT_BLOCK_WAITS.length) {
+      const waits = client.softBlockWaits || SOFT_BLOCK_WAITS;
+      if (attempt >= waits.length) {
         throw new Error(`Expected JSON from ${url} but got ${text.trim().startsWith('<') ? 'an HTML page (likely a bot check)' : 'invalid data'}`);
       }
-      console.warn(`Got non-JSON response from ${host}; backing off ${SOFT_BLOCK_WAITS[attempt] / 1000}s`);
-      await sleep(SOFT_BLOCK_WAITS[attempt++]);
+      console.warn(`Got non-JSON response from ${host}; backing off ${waits[attempt] / 1000}s`);
+      await sleep(waits[attempt++]);
       renewed = false; // after waiting, a fresh session is worth another try
     }
   }
 }
 
-export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {} }) {
-  return mode === 'browser'
+/** @param {{softBlockWaits?: number[]}} opts softBlockWaits: how long to wait between tries after a bot check */
+export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits }) {
+  const client = mode === 'browser'
     ? new BrowserClient(origin, delayMs, extraHeaders)
     : new FetchClient(origin, delayMs, extraHeaders);
+  client.softBlockWaits = softBlockWaits;
+  return client;
 }
 
 class FetchClient {
