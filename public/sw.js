@@ -2,7 +2,7 @@
 // shop with no signal. Always tries the network first, so updates show up as
 // soon as you're online. API data is handled by the app (it keeps the last
 // copy of your list and queues ticks made offline).
-const CACHE = 'grocery-shell-v1';
+const CACHE = 'grocery-shell-v2';
 const SHELL = ['/', '/styles.css', '/app.js', '/vendor/chart.js/chart.umd.js', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
@@ -19,7 +19,8 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
   e.respondWith((async () => {
     try {
-      const res = await fetch(e.request);
+      // Never the browser's HTTP cache: a new version shows up on the next load.
+      const res = await fetch(e.request, { cache: 'no-cache' });
       if (res.ok && (SHELL.includes(url.pathname) || e.request.mode === 'navigate')) {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request.mode === 'navigate' ? '/' : e.request, copy));

@@ -736,7 +736,7 @@ test('older databases are migrated to allow notes', async () => {
 
 test('admins are emailed when a refresh fails or shrinks, and when it recovers', async () => {
   const { capturedMail } = await import('../src/mailer.js');
-  const { checkCollector } = await import('../src/admin-alerts.js');
+  const { checkCollector, sendSummary } = await import('../src/admin-alerts.js');
   const saved = process.env.COLLECTOR_TOKEN;
   process.env.COLLECTOR_TOKEN = 'collector-secret-alerts';
   const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer collector-secret-alerts' }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -745,10 +745,13 @@ test('admins are emailed when a refresh fails or shrinks, and when it recovers',
     const { runId } = await post('/api/ingest/runs', { store: 'harrisfarm' });
     if (n) await post(`/api/ingest/runs/${runId}/items`, { items: items(n) });
     await post(`/api/ingest/runs/${runId}/finish`, error ? { error } : { complete: true });
-    await new Promise((r) => setTimeout(r, 50)); // alerts are sent in the background
+    await new Promise((r) => setTimeout(r, 20)); // runs are checked in the background
+    await sendSummary(); // (normally a couple of minutes after the refresh ends)
   };
   const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
   const before = alerts().length;
+  const { getDb } = await import('../src/db.js');
+  getDb().prepare("UPDATE scrape_runs SET status = 'error' WHERE status = 'running'").run(); // left over from other tests
 
   await run({ n: 20 });
   assert.equal(alerts().length, before, 'a normal refresh sends nothing');
@@ -767,15 +770,45 @@ test('admins are emailed when a refresh fails or shrinks, and when it recovers',
   await run({ n: 20 });
 
   // The collector check: Harris Farm is collected from home here, and it's been sending.
-  const { getDb } = await import('../src/db.js');
   const stores = () => ['woolworths', 'coles', 'aldi', 'iga'];
   assert.equal(await checkCollector({ serverStores: stores }), false, 'nothing to report');
   getDb().prepare("UPDATE scrape_runs SET finished_at = '2020-01-01T00:00:00Z' WHERE source = 'collector'").run();
   assert.equal(await checkCollector({ serverStores: stores }), true);
+  await sendSummary();
   assert.match(alerts().at(-1).subject, /home collector has gone quiet/);
   getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
   if (saved) process.env.COLLECTOR_TOKEN = saved;
   else delete process.env.COLLECTOR_TOKEN;
+});
+
+test('during a refresh, admin emails wait for the end and come as one summary', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const { sendSummary } = await import('../src/admin-alerts.js');
+  const { startRun, getRun, finishRun } = await import('../src/scrapers/index.js');
+  const { getDb } = await import('../src/db.js');
+  const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
+  const before = alerts().length;
+  const tick = () => new Promise((r) => setTimeout(r, 20));
+  getDb().prepare("UPDATE scrape_runs SET status = 'error' WHERE status = 'running'").run(); // left over from other tests
+
+  const still = startRun('woolworths'); // still going
+  finishRun(getRun(startRun('coles').runId), { error: 'HTTP 403' });
+  finishRun(getRun(startRun('aldi').runId), { error: 'timed out' });
+  await tick();
+  assert.equal(await sendSummary(), 0, 'Woolworths is still refreshing: wait');
+  assert.equal(alerts().length, before);
+
+  getDb().prepare("UPDATE scrape_runs SET status = 'ok', finished_at = ? WHERE id = ?").run(new Date().toISOString(), still.runId);
+  await sendSummary();
+  assert.equal(alerts().length, before + 1, 'one email for the whole refresh');
+  const m = alerts().at(-1);
+  assert.match(m.subject, /Price refresh: 2 problems/);
+  assert.match(m.text, /Coles prices didn’t refresh/);
+  assert.match(m.text, /ALDI prices didn’t refresh/);
+  assert.match(m.text, /HTTP 403/);
+  assert.match(m.text, /This refresh: .*Coles: failed/);
+  assert.equal(await sendSummary(), 0, 'nothing new to send');
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
 });
 
 test('product details and list items say whether it’s a good price', async () => {

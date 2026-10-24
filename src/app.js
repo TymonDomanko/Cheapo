@@ -34,6 +34,9 @@ import { scrapeAll, scrapeStatus, serverStores, startRun, getRun, recordBatch, f
 import crypto from 'node:crypto';
 import { startOrder, orderStatus } from './order/index.js';
 
+// Which build this is (set when the Docker image is built), so you can tell an update arrived.
+const APP_VERSION = process.env.APP_VERSION || 'dev';
+
 const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
 // Filling trolleys drives a browser on the *server* machine, so it only makes
 // sense when you run the app on your own computer.
@@ -100,7 +103,7 @@ export function createApp() {
   // For load balancers / platform health checks.
   app.get('/healthz', (req, res) => {
     getDb().prepare('SELECT 1').get();
-    res.json({ ok: true });
+    res.json({ ok: true, version: APP_VERSION });
   });
 
   app.use('/api', loadUser, sameOriginOnly, rateLimit({ windowMs: 60000, max: 300 }));
@@ -485,6 +488,7 @@ export function createApp() {
   app.get('/api/admin/overview', requireAdmin, h(() => {
     const d = getDb();
     return {
+      version: APP_VERSION,
       stores: STORES.map((s) => ({
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,

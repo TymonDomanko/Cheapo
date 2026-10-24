@@ -6,7 +6,7 @@ import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
-import { checkCollector } from './admin-alerts.js';
+import { checkCollector, resumeSummary } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
 import { unusualDeals } from './deals.js';
 import { ensureDefaultTracked, ensureDirectory, checkOnlineStores, checkIsDue } from './iga.js';
@@ -64,4 +64,5 @@ cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
 app.listen(PORT, () => {
   console.log(`Supermarket tools running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
+  resumeSummary(); // a refresh's admin summary that was waiting when the server stopped
 });
