@@ -1089,3 +1089,16 @@ test('alcohol is left out unless you turn it on in Settings', async () => {
   assert.equal((await api('PATCH', '/api/me', { showAlcohol: true })).body.user.showAlcohol, true);
   assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L', 'Settingtest Lager Cans 375mL x 6 pack']);
 });
+
+test('the page asks for its script by content, so updates are never hidden by a cache', async () => {
+  for (const p of ['/', '/settings']) {
+    const res = await fetch(base + p);
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+    const html = await res.text();
+    assert.match(html, /src="\/app\.js\?v=[0-9a-f]{10}"/);
+    assert.match(html, /href="\/styles\.css\?v=[0-9a-f]{10}"/);
+    const js = await fetch(base + html.match(/src="([^"]+)"/)[1]);
+    assert.equal(js.status, 200);
+    assert.equal(js.headers.get('cache-control'), 'no-cache');
+  }
+});
