@@ -63,16 +63,22 @@ function renderAccount() {
   const u = user();
   $('#admin-tab').hidden = !u?.isAdmin;
   $('#verify-banner').hidden = !u || u.emailVerified;
+  // Wide screens: name, Settings and Log out. Phones: one account button with a menu.
   $('#account').innerHTML = u
-    ? `<a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
+    ? `<span class="account-wide"><a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
        <a href="/settings" data-link class="button small ghost">Settings</a>
-       <button class="small ghost" id="logout">Log out</button>`
+       <button class="small ghost" data-logout>Log out</button></span>
+       <details class="account-menu"><summary aria-label="Account">${esc(u.name.charAt(0).toUpperCase())}</summary>
+         <div class="menu"><div class="hint">${esc(u.name)}</div>
+           <a href="/settings" data-link class="button small ghost">Settings</a>
+           <button class="small ghost" data-logout>Log out</button></div></details>`
     : '<a href="/login" data-link class="button small">Log in</a>'
       + (state.config.allowSignups ? ' <a href="/signup" data-link class="button small primary">Sign up</a>' : '');
-  $('#logout')?.addEventListener('click', async () => {
+  $$('#account [data-logout]').forEach((b) => b.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.href = '/';
-  });
+  }));
+  $$('#account .menu a').forEach((a) => a.addEventListener('click', () => a.closest('details').removeAttribute('open')));
 }
 
 // ================================================================== pages & routing
@@ -878,7 +884,8 @@ function insightNote(ins, { always = false } = {}) {
 function valueHint(bv, itemId = null) {
   if (!bv) return '';
   const p = bv.product;
-  return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !p.name.includes(p.size_text) ? ` ${esc(p.size_text)}` : ''}</a>
+  const squash = (x) => String(x || '').toLowerCase().replace(/\s+/g, '');
+  return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !squash(p.name).includes(squash(p.size_text)) ? ` ${esc(p.size_text)}` : ''}</a>
     at ${esc(storeName(p.store))} is <strong>${bv.savingPct}% cheaper per ${esc(bv.unit)}</strong> (${money(bv.perUnit)} vs ${money(bv.basePerUnit)}).
     ${itemId ? `<button type="button" class="small" data-swap-item="${itemId}" data-swap-to="${p.id}">Swap to this</button>` : ''}</div>`;
 }
@@ -1216,16 +1223,17 @@ function renderList() {
         <select id="list-select" aria-label="Shopping list">
           ${state.lists.map((l) => `<option value="${l.id}" ${l.id === L.id ? 'selected' : ''}>${esc(l.name)}${l.member_count > 1 ? ' (shared)' : ''}</option>`).join('')}
         </select>
-        <button class="small ghost" id="new-list">+ New list</button>
-        <button class="small ghost" id="rename-list">Rename</button>
-        ${isOwner ? '<button class="small ghost" id="delete-list">Delete</button>' : '<button class="small ghost" id="leave-list">Leave</button>'}
-      </div>
-      <div class="actions">
-        <button class="small" id="share-list">Share${others.length ? ` · ${others.length + 1} people` : ''}</button>
-        <button class="small" id="snapshots-btn">Saved shops</button>
-        <button class="small" id="spending-btn">Spending</button>
-        <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear</button>
         <button class="small" id="shop-mode" ${L.items.length ? '' : 'disabled'}>🛒 In the shop</button>
+        <details class="list-menu"><summary class="button small" aria-label="More list options">⋯</summary>
+          <div class="menu">
+            <button class="small ghost" id="share-list">Share${others.length ? ` · ${others.length + 1} people` : ''}</button>
+            <button class="small ghost" id="snapshots-btn">Saved shops</button>
+            <button class="small ghost" id="spending-btn">Spending</button>
+            <button class="small ghost" id="new-list">+ New list</button>
+            <button class="small ghost" id="rename-list">Rename</button>
+            ${isOwner ? '<button class="small ghost" id="delete-list">Delete list</button>' : '<button class="small ghost" id="leave-list">Leave list</button>'}
+            <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear all items</button>
+          </div></details>
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
@@ -2063,6 +2071,7 @@ $('#list-root').addEventListener('change', async (e) => {
 
 $('#list-root').addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.closest('.list-menu .menu')) t.closest('details').removeAttribute('open');
   if (t.dataset.resetLayout) {
     if (!confirm('Go back to the usual section order for this shop? It will start learning again from your next trips.')) return;
     await api(`/api/me/shop-layouts/${t.dataset.resetLayout}`, { method: 'DELETE' });

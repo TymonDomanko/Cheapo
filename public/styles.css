@@ -84,7 +84,7 @@ input[type="search"], select, input[type="number"] {
 .brand { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; }
 .brand h1 { font-size: 18px; grid-column: 1; }
 .brand .sub { grid-column: 1; }
-.theme-toggle { grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 36px; padding: 0; border-radius: 50%; font-size: 17px; line-height: 1; border-color: var(--border); }
+.theme-toggle { grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); border-color: var(--border); }
 .brand .sub { color: var(--muted); font-size: 13px; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs button { border: none; background: transparent; padding: 8px 12px; color: var(--text-2); }
@@ -272,6 +272,7 @@ a.button {
   background: var(--surface); padding: 6px 12px; font-size: 15px;
 }
 a.button.small { padding: 3px 9px; font-size: 13px; }
+summary.button { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
 a.button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
 a.button.ghost { background: transparent; }
 a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
@@ -465,3 +466,47 @@ a.plain-link:hover { text-decoration: underline; }
 /* Room for the table before it arrives, so the sections below don't jump down. */
 #admin-health { min-height: 300px; }
 .bp-price .price { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; }
+
+/* Tab icons (shown in the phone tab bar) */
+.tab-icon { display: none; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Pop-up menus: the account menu (phones) and the list's ⋯ menu */
+.account-menu, .list-menu { position: relative; }
+.account-menu summary, .list-menu summary { list-style: none; margin: 0; }
+.account-menu summary::-webkit-details-marker, .list-menu summary::-webkit-details-marker { display: none; }
+.account-menu .menu, .list-menu .menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 190px;
+  display: grid; gap: 2px; padding: 6px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 10px 30px rgb(0 0 0 / .15);
+}
+.account-menu .menu > *, .list-menu .menu > * { text-align: left; justify-content: flex-start; width: 100%; border-color: transparent; padding: 7px 10px; font-size: 14px; }
+.account-menu .menu .hint { padding: 4px 9px; }
+.account-menu { display: none; }
+.account-menu summary {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); font-weight: 700;
+}
+.list-picker { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.list-menu summary.button { padding: 3px 12px; font-size: 16px; line-height: 1.2; }
+
+@media (max-width: 640px) {
+  :root { --tabbar-h: calc(60px + env(safe-area-inset-bottom, 0px)); }
+  body { padding-bottom: var(--tabbar-h); }
+  .top { flex-wrap: nowrap; gap: 10px; padding: 8px 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; flex: 1; }
+  .brand .sub { display: none; }
+  .theme-toggle { margin-left: auto; width: 34px; height: 34px; }
+  .account-wide { display: none; }
+  .account-menu { display: block; }
+  /* The tabs become an app-style bar along the bottom. */
+  .tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; height: var(--tabbar-h);
+    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 0;
+    padding: 4px 4px env(safe-area-inset-bottom, 0px); background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .tabs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px 2px; border-radius: 10px; font-size: 11px; position: relative; }
+  .tabs button[aria-selected="true"] { background: transparent; color: var(--accent); }
+  .tab-icon { display: block; }
+  .tabs .pill { position: absolute; top: 2px; left: calc(50% + 6px); font-size: 10px; min-width: 16px; padding: 0 4px; }
+  .toast { bottom: calc(var(--tabbar-h) + 12px); }
+}
