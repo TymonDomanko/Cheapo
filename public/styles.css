@@ -149,15 +149,50 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .item-top .name { flex: 1 1 220px; cursor: pointer; }
 .item-top .name .meta { color: var(--muted); font-size: 13px; }
 .qty { width: 64px; }
-.store-picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }
-.pick { border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 13px; min-width: 0; }
-.pick.win { border-color: var(--good); box-shadow: inset 0 0 0 1px var(--good); }
-.pick .ph { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
-.pick .ph .store { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
-.pick .price { font-weight: 600; font-variant-numeric: tabular-nums; }
-.pick select { width: 100%; margin-top: 6px; padding: 4px 6px; font-size: 12px; }
-.pick .pname { color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-top: 4px; }
-.pick.excluded { opacity: .55; }
+
+/* A list item: name + stepper, the shop to buy at, other shops' prices, and Options. */
+.item.open { border-color: var(--accent); }
+.item-top { align-items: flex-start; flex-wrap: nowrap; }
+.item-top .name { flex: 1 1 auto; min-width: 0; }
+.item-top .name strong { display: block; line-height: 1.3; }
+.stepper { display: flex; align-items: center; flex: none; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.stepper button { border: 0; border-radius: 0; width: 34px; height: 32px; padding: 0; background: transparent; font-size: 17px; }
+.stepper button:disabled { opacity: .35; cursor: default; }
+.stepper span { min-width: 20px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.best-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.best-line .shop { font-weight: 600; }
+.best-amount { margin-left: auto; font-size: 18px; font-weight: 700; color: var(--good); font-variant-numeric: tabular-nums; }
+.tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.tag.good { color: var(--good); background: color-mix(in srgb, var(--good) 13%, transparent); }
+.tag.pin { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.tag.warn { color: var(--special); background: color-mix(in srgb, var(--special) 13%, transparent); }
+.other-prices { color: var(--muted); font-size: 13px; margin-top: 3px; line-height: 1.5; }
+.other-prices b { color: var(--text-2); font-weight: 500; }
+.item .value-hint, .item .insight, .item .pin-note { margin-top: 8px; }
+.item-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.item-foot .hint { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-foot .linkish { white-space: nowrap; font-size: 13px; }
+.item-options { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 10px; }
+.item-options > label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.item-options select { width: 100%; }
+.pick-rows { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.pick-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 13px; border-top: 1px solid var(--border); }
+.pick-row:first-child { border-top: 0; }
+.pick-row.win { background: color-mix(in srgb, var(--good) 8%, transparent); }
+.pick-row.off { color: var(--muted); }
+.pick-name { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pick-name b { color: var(--text); font-weight: 600; }
+.pick-price { font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
+select.pick-change { flex: none; width: auto; max-width: 84px; padding: 2px 4px; font-size: 12px; color: var(--accent); border-color: transparent; background-color: transparent; }
+
+/* The list's total, always in view. */
+.total-bar {
+  position: sticky; bottom: calc(8px + var(--tabbar-h, 0px)); z-index: 4; margin-top: 16px;
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 -4px 18px rgb(0 0 0 / .08);
+}
+.total-bar-total { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.total-bar .primary { margin-left: auto; }
 
 .summary { margin-top: 16px; }
 .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }

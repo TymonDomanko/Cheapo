@@ -1207,7 +1207,6 @@ function renderList() {
         <button class="small" id="spending-btn">Spending</button>
         <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear</button>
         <button class="small" id="shop-mode" ${L.items.length ? '' : 'disabled'}>🛒 In the shop</button>
-        <button class="primary" id="order-btn" ${L.items.length ? '' : 'disabled'}>Order cheapest</button>
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
@@ -1217,8 +1216,9 @@ function renderList() {
       <button class="small ghost" type="button" id="quick-note" title="Add exactly what you typed, without looking for a product">Add as note</button>
       <button class="small ghost" type="button" id="paste-list">Paste a list</button>
     </form>
-    ${renderStorePanel(L)}
     <div id="items">${L.items.length ? L.items.map(renderItem).join('') : '<div class="empty">This list is empty. Search on the <a href="#" data-goto="compare">Compare</a> tab and press “+ List”, or add a <button type="button" class="linkish" id="snapshots-empty">saved shop</button>.</div>'}</div>
+    ${L.items.length ? totalBar(L) : ''}
+    ${renderStorePanel(L)}
     ${L.items.length ? renderSummary(L) : ''}`;
 }
 
@@ -1799,16 +1799,45 @@ function storeToggle(s, on, note) {
   </label>`;
 }
 
+// ------------------------------------------------------------------ list items
+// Each item is one card: what it is, the shop to buy it at and that price,
+// the other shops' prices on one line, and an Options panel (opened one at a
+// time) with the matching, "buy at" and per-shop choices.
+
+state.openItem = null; // the item whose Options are open
+
+/** "milk 2l" → "Milk 2L": a search, written as a title. */
+const niceQuery = (q) => String(q).replace(/^./, (c) => c.toUpperCase())
+  .replace(/(\d)\s*(ml|l|kg|g)\b/gi, (m, n, u) => n + ({ ml: 'mL', l: 'L', kg: 'kg', g: 'g' }[u.toLowerCase()]));
+
+const MODE_NOTE = { similar: 'any brand', exact: 'same brand only', this: 'this exact product' };
+
+function stepper(qty) {
+  return `<div class="stepper" role="group" aria-label="Quantity">
+    <button type="button" data-step="-1" aria-label="One less" ${qty <= 1 ? 'disabled' : ''}>−</button>
+    <span>${qty}</span>
+    <button type="button" data-step="1" aria-label="One more" ${qty >= 99 ? 'disabled' : ''}>+</button></div>`;
+}
+
+function itemFoot(it, left = '') {
+  const open = state.openItem === it.id;
+  return `<div class="item-foot"><span class="hint">${left}</span>
+    <button type="button" class="linkish" data-toggle-item aria-expanded="${open}">${open ? 'Close ▴' : 'Options ▾'}</button></div>`;
+}
+
 function renderNoteItem(it) {
   const L = state.list;
-  return `<div class="item note-item" data-item="${it.id}">
+  const open = state.openItem === it.id;
+  return `<div class="item note-item ${open ? 'open' : ''}" data-item="${it.id}">
     <div class="item-top">
       <div class="name"><strong>${esc(it.note)}</strong>
-        <div class="meta">Note — not priced${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
-      <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
-      <button class="small" data-find-note>Find a product</button>
-      <button class="small ghost" data-remove>Remove</button>
+        <div class="meta">Note${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
+      ${stepper(it.quantity)}
     </div>
+    ${open ? `<div class="item-options"><div class="actions">
+      <button class="small" data-find-note>Find a product</button>
+      <button class="small ghost" data-remove>Remove</button></div></div>` : ''}
+    ${itemFoot(it)}
   </div>`;
 }
 
@@ -1816,48 +1845,105 @@ function renderItem(it) {
   if (it.note != null) return renderNoteItem(it);
   const a = it.anchor;
   const L = state.list;
-  return `<div class="item" data-item="${it.id}">
+  const open = state.openItem === it.id;
+  const cheapestMode = it.matchMode === 'cheapest';
+  const title = cheapestMode ? `${niceQuery(it.query)}, any brand` : a.name;
+  const meta = [
+    cheapestMode ? '🔄 Cheapest pick updates as prices change' : [a.size_text, MODE_NOTE[it.matchMode]].filter(Boolean).map(esc).join(' · '),
+    !a.available ? '<span class="warn">no longer available</span>' : '',
+    it.addedBy && L.members.length > 1 ? `added by ${esc(it.addedBy)}` : '',
+    it.checkedAt ? '<span class="saving">✓ ticked</span>' : '',
+  ].filter(Boolean).join(' · ');
+
+  // Where to buy it, and what the other shops charge.
+  const priced = L.included.map((s) => ({ s, ps: it.perStore[s] })).filter(({ ps }) => ps?.product && !ps.excluded);
+  const win = it.cheapest && it.perStore[it.cheapest]?.product ? it.cheapest : null;
+  const winP = win ? it.perStore[win].product : null;
+  let tag = '';
+  if (win) {
+    if (it.pin?.honoured && it.pinnedStore === win) tag = '<span class="tag pin">📌 Always here</span>';
+    else if (priced.length === 1) tag = '<span class="tag warn">Only here</span>';
+    else tag = '<span class="tag good">Cheapest</span>';
+  }
+  const others = priced.filter(({ s }) => s !== win)
+    .map(({ s, ps }) => ({ s, cost: lineCost(ps.product, it.quantity) }))
+    .sort((x, y) => x.cost - y.cost)
+    .map(({ s, cost }) => `${esc(storeName(s))} <b>${money(cost)}</b>`);
+  const missing = L.included.filter((s) => !priced.some((x) => x.s === s)).map(storeName);
+  const otherLine = [
+    it.pin?.honoured && it.pin.extra > 0.004 ? `${money(it.pin.extra)} more than ${esc(storeName(it.pin.cheapest))}` : '',
+    it.quantity > 1 && winP ? `${it.quantity} × ${money(shownPrice(winP))}` : '',
+    ...others,
+    missing.length ? `not at ${missing.map(esc).join(', ')}` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `<div class="item ${open ? 'open' : ''}" data-item="${it.id}">
     <div class="item-top">
-      <div class="name" data-product="${a.id}"><strong>${esc(a.name)}</strong>
-        ${it.matchMode === 'cheapest' ? `<div class="meta cheapest-item">🔄 Cheapest ${esc(it.query)}, any brand — picks itself as prices change</div>` : ''}
-        <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
-      <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
-      <select data-mode aria-label="Matching">
-        ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
-        <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
-        <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
-        <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
-      </select>
-      <select data-pin aria-label="Which shop to buy it at">
-        <option value="" ${!it.pinnedStore ? 'selected' : ''}>Buy at: cheapest shop</option>
-        ${state.allStores.map((s) => `<option value="${s}" ${it.pinnedStore === s ? 'selected' : ''}>Always buy at ${esc(storeName(s))}</option>`).join('')}
-      </select>
-      <button class="small ghost" data-remove>Remove</button>
+      <div class="name" data-product="${a.id}"><strong>${esc(title)}</strong><div class="meta">${meta}</div></div>
+      ${stepper(it.quantity)}
     </div>
-    <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
-    ${pinNote(it)}
+    ${win ? `<div class="best-line">${dot(win)}<span class="shop">${esc(storeName(win))}</span>${tag}${dealBadges(winP)}
+      <span class="best-amount">${money(lineCost(winP, it.quantity))}</span></div>`
+    : '<div class="best-line"><span class="warn">Not found at the shops on this list</span></div>'}
+    ${otherLine ? `<div class="other-prices">${otherLine}</div>` : ''}
+    ${it.pin && !it.pin.honoured ? pinNote(it) : ''}
     ${insightNote(it.priceInsight)}
     ${valueHint(it.betterValue, it.id)}
+    ${open ? renderOptions(it) : ''}
+    ${itemFoot(it, cheapestMode && !open && winP ? esc(winP.name) : '')}
   </div>`;
 }
 
-function renderPick(it, store, enabled) {
-  const ps = it.perStore[store] || { candidates: [] };
-  const win = it.cheapest === store;
-  const p = ps.product;
-  const opts = [
-    `<option value="auto" ${!ps.manual && !ps.excluded ? 'selected' : ''}>Auto: cheapest match</option>`,
-    ...ps.candidates.map((c) => `<option value="${c.id}" ${ps.manual && p?.id === c.id ? 'selected' : ''}>${esc(c.name)} — ${money(shownPrice(c))}</option>`),
-    ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}" selected>${esc(p.name)} — ${money(shownPrice(p))}</option>`] : []),
-    `<option value="exclude" ${ps.excluded ? 'selected' : ''}>Don't buy here</option>`,
-  ];
-  return `<div class="pick ${win ? 'win' : ''} ${ps.excluded || !enabled ? 'excluded' : ''}">
-    <div class="ph"><span class="store">${dot(store)}${esc(storeName(store))}</span>
-      <span class="price">${p && !ps.excluded ? money(lineCost(p, it.quantity)) : '—'}</span></div>
-    <span class="pname" title="${esc(p?.name || '')}">${!enabled ? 'Shop excluded' : ps.excluded ? 'Excluded' : p ? `${esc(p.name)}${win ? (it.pin?.honoured && it.pinnedStore === store ? ' · <strong>📌 buying here</strong>' : ' · <strong class="saving">cheapest</strong>') : ''}` : 'No match found'}</span>
-    ${p && !ps.excluded ? dealBadges(p) : ''}
-    ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">Wrong match?</button>` : ''}
-    <select data-pick="${store}" aria-label="${esc(storeName(store))} product">${opts.join('')}</select>
+/** The opened item: matching, "buy at", and each shop's pick. */
+function renderOptions(it) {
+  const L = state.list;
+  const rows = state.allStores.map((s) => {
+    const ps = it.perStore[s] || { candidates: [] };
+    const p = ps.product;
+    const enabled = L.included.includes(s);
+    const win = it.cheapest === s;
+    const what = !enabled ? 'Not used on this list' : ps.excluded ? 'Not buying here' : p ? esc(p.name) : 'No match found';
+    const opts = [
+      '<option value="" selected disabled>Change</option>',
+      `<option value="auto">Auto: cheapest match${!ps.manual && !ps.excluded ? ' ✓' : ''}</option>`,
+      ...ps.candidates.map((c) => `<option value="${c.id}">${esc(c.name)} — ${money(shownPrice(c))}${ps.manual && p?.id === c.id ? ' ✓' : ''}</option>`),
+      ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}">${esc(p.name)} — ${money(shownPrice(p))} ✓</option>`] : []),
+      `<option value="exclude">Don't buy here${ps.excluded ? ' ✓' : ''}</option>`,
+    ];
+    return `<div class="pick-row ${win ? 'win' : ''} ${!enabled || ps.excluded || !p ? 'off' : ''}">
+      ${dot(s)}<span class="pick-name"><b>${esc(storeName(s))}</b> · ${what}${ps.manual ? ' <span class="hint">(your pick)</span>' : ''}
+        ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">wrong?</button>` : ''}</span>
+      <span class="pick-price">${p && !ps.excluded && enabled ? money(lineCost(p, it.quantity)) : '—'}</span>
+      ${enabled ? `<select class="pick-change" data-pick="${s}" aria-label="Change the ${esc(storeName(s))} product">${opts.join('')}</select>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="item-options">
+    <label>Match<select data-mode aria-label="Matching">
+      ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
+      <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
+      <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
+      <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
+    </select></label>
+    <label>Buy at<select data-pin aria-label="Which shop to buy it at">
+      <option value="" ${!it.pinnedStore ? 'selected' : ''}>Whichever shop is cheapest</option>
+      ${state.allStores.map((s) => `<option value="${s}" ${it.pinnedStore === s ? 'selected' : ''}>Always ${esc(storeName(s))}</option>`).join('')}
+    </select></label>
+    <div class="pick-rows">${rows}</div>
+    <div class="actions"><button class="small ghost" data-product="${it.anchor.id}">Price history</button>
+      <button class="small ghost" data-remove style="margin-left:auto">Remove</button></div>
+  </div>`;
+}
+
+/** Always in view at the bottom of a list: the total and the order button. */
+function totalBar(L) {
+  const complete = state.allStores.map((s) => L.singleStore[s]).filter((x) => x && !x.missing);
+  const best = complete.length ? Math.min(...complete.map((x) => x.total)) : null;
+  const saves = best != null ? best - L.plan.total : 0;
+  const shops = state.allStores.filter((s) => L.plan.byStore[s]?.items.length).length;
+  return `<div class="total-bar">
+    <div><div class="total-bar-total">${money(L.plan.total)}</div>
+      <div class="hint">${saves > 0.004 ? `<span class="saving">Saves ${money(saves)} vs all at one shop</span>` : `${plural(L.items.length, 'item')} · ${plural(shops, 'shop')}`}</div></div>
+    <button class="primary" id="order-btn">Order cheapest</button>
   </div>`;
 }
 
@@ -1984,9 +2070,34 @@ $('#list-root').addEventListener('click', async (e) => {
     }
     return;
   }
+  // Options: one item open at a time.
+  const toggle = t.closest('[data-toggle-item]');
+  if (toggle) {
+    const id = Number(toggle.closest('[data-item]').dataset.item);
+    state.openItem = state.openItem === id ? null : id;
+    renderList();
+    return;
+  }
+  const step = t.closest('[data-step]');
+  if (step) {
+    const id = Number(step.closest('[data-item]').dataset.item);
+    const it = state.list.items.find((x) => x.id === id);
+    const quantity = Math.min(99, Math.max(1, it.quantity + Number(step.dataset.step)));
+    if (quantity === it.quantity) return;
+    it.quantity = quantity;
+    step.parentElement.querySelector('span').textContent = quantity; // straight away; prices follow
+    try {
+      await api(`/api/items/${id}`, { method: 'PATCH', body: { quantity } });
+      return loadList();
+    } catch (err) {
+      return toast(err.message);
+    }
+  }
   try {
     if (t.matches('[data-remove]')) {
-      await api(`/api/items/${t.closest('[data-item]').dataset.item}`, { method: 'DELETE' });
+      const id = Number(t.closest('[data-item]').dataset.item);
+      if (state.openItem === id) state.openItem = null;
+      await api(`/api/items/${id}`, { method: 'DELETE' });
       return loadList();
     }
     if (t.matches('[data-swap-item]')) {
