@@ -38,7 +38,7 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | `IGA_MAX_STORES` | no limit | Cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the refresh and about 2 MB |
 | `BLOCKED_RETRY_HOURS` | `4` | When a shop blocks a crawl part-way (Coles), try again this much later, carrying on where it stopped (up to 4 times). `0` waits for the next scheduled refresh |
 | `COLES_PAGES_PER_HOUR` | `30` | Coles is refreshed steadily, one page at a time, at most this many an hour (see [how it works](how-it-works.md#coles-a-little-at-a-time)). `0` goes back to crawling all of Coles each night |
-| `COLES_FULL_EVERY_DAYS` | `2` | Steady mode: how often to go through the whole Coles shop (specials are done daily) |
+| `COLES_FULL_EVERY_DAYS` | `2` | Steady mode: how often to go through the whole Coles shop, counted from when the last pass started (specials are done daily). For every Coles price within a day, set this to `1` and `COLES_PAGES_PER_HOUR` to `40` |
 | `COLES_BARCODE_BUDGET` | `300` | Nightly mode only: Coles product pages fetched per day to fill in barcodes (steady mode fits them into spare time) |
 | `WOOLWORTHS_CONCURRENCY` | `2` | Woolworths departments fetched at once, each in its own session |
 | `IGA_CONCURRENCY` | `3` | IGA stores fetched at once |
