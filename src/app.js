@@ -6,7 +6,7 @@ import compression from 'compression';
 import path from 'node:path';
 import { getDb } from './db.js';
 import { STORES, STORE_INFO } from './stores.js';
-import { compareSearch, productDetail, lookupBarcode } from './compare.js';
+import { compareSearch, productDetail, lookupBarcode, alcoholCategories, NO_ALCOHOL_SQL } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
   sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
@@ -36,6 +36,9 @@ import { startOrder, orderStatus } from './order/index.js';
 
 // Which build this is (set when the Docker image is built), so you can tell an update arrived.
 const APP_VERSION = process.env.APP_VERSION || 'dev';
+
+// Alcohol is left out of search, deals and price changes unless you've turned it on in Settings.
+const wantsAlcohol = (req) => !!req.user?.showAlcohol;
 
 const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
 // Filling trolleys drives a browser on the *server* machine, so it only makes
@@ -106,7 +109,7 @@ export function createApp() {
     res.json({ ok: true, version: APP_VERSION });
   });
 
-  app.use('/api', loadUser, sameOriginOnly, rateLimit({ windowMs: 60000, max: 300 }));
+  app.use('/api', loadUser, sameOriginOnly, rateLimit({ windowMs: 60000, max: Number(process.env.API_RATE_LIMIT) || 300 }));
 
   // ------------------------------------------------------------ public
 
@@ -142,7 +145,7 @@ export function createApp() {
     };
   }));
 
-  const searchLimit = rateLimit({ windowMs: 60000, max: 90 });
+  const searchLimit = rateLimit({ windowMs: 60000, max: Number(process.env.SEARCH_RATE_LIMIT) || 90 });
   app.get('/api/search', searchLimit, h((req) => {
     const { q = '', store, specials, mode } = req.query;
     const groups = compareSearch(String(q).slice(0, 100), {
@@ -150,6 +153,7 @@ export function createApp() {
       stores: req.user?.preferredStores,
       igaStore: igaFor(req),
       memberships: req.user?.memberships || [],
+      alcohol: wantsAlcohol(req),
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
       limit: Math.min(Number(req.query.limit) || 30, 60),
@@ -164,14 +168,15 @@ export function createApp() {
     stores: req.user?.preferredStores,
     igaStore: igaFor(req),
     memberships: req.user?.memberships || [],
+    alcohol: wantsAlcohol(req),
   })));
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {
     const stores = req.user?.preferredStores;
     return {
-      unusual: unusualDeals({ stores }),
-      regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [] }) : null,
+      unusual: unusualDeals({ stores, alcohol: wantsAlcohol(req) }),
+      regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [], alcohol: wantsAlcohol(req) }) : null,
     };
   }));
 
@@ -197,14 +202,15 @@ export function createApp() {
   app.get('/api/changes', h((req) => {
     const days = Math.min(Number(req.query.days) || 7, 90);
     const dir = req.query.direction === 'up' ? 'AND h.price > old_price' : req.query.direction === 'down' ? 'AND h.price < old_price' : '';
+    const drinks = wantsAlcohol(req) ? '' : `AND ${NO_ALCOHOL_SQL}`;
     return getDb().prepare(`
       SELECT p.id, p.store, p.name, p.size_text, p.image_url, h.price AS new_price, h.recorded_at,
         (SELECT price FROM price_history e WHERE e.product_id = h.product_id AND e.location IS h.location AND e.id < h.id
           ORDER BY e.id DESC LIMIT 1) AS old_price
       FROM price_history h JOIN products p ON p.id = h.product_id
       WHERE h.recorded_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AND old_price IS NOT NULL
-        AND (h.location IS NULL OR h.location = ?) AND (p.location_priced = 1 OR p.available = 1) ${dir}
-      ORDER BY ABS(h.price - old_price) / old_price DESC LIMIT 100`).all(`-${days} days`, igaFor(req));
+        AND (h.location IS NULL OR h.location = ?) AND (p.location_priced = 1 OR p.available = 1) ${dir} ${drinks}
+      ORDER BY ABS(h.price - old_price) / old_price DESC LIMIT 100`).all(`-${days} days`, igaFor(req), ...(drinks ? [alcoholCategories()] : []));
   }));
 
   // ------------------------------------------------------------ IGA store picker
@@ -281,8 +287,8 @@ export function createApp() {
   // ------------------------------------------------------------ your account
 
   app.patch('/api/me', requireUser, h((req) => {
-    const { name, preferredStores, applyToLists, alertsWeekly, alertsPrice, memberships } = req.body || {};
-    const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships });
+    const { name, preferredStores, applyToLists, alertsWeekly, alertsPrice, memberships, showAlcohol } = req.body || {};
+    const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships, showAlcohol });
     if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
     return { user };
   }));
@@ -295,7 +301,7 @@ export function createApp() {
   app.get('/api/me/export', requireUser, h((req, res) => {
     const d = getDb();
     const u = d.prepare(`SELECT id, email, name, created_at, email_verified_at, preferred_stores, iga_store, alerts_weekly,
-      alerts_price, memberships FROM users WHERE id = ?`).get(req.user.id);
+      alerts_price, memberships, show_alcohol FROM users WHERE id = ?`).get(req.user.id);
     const myLists = lists.listsForUser(req.user.id).map((l) => ({
       ...l,
       items: d.prepare(`SELECT p.store, p.name, p.size_text, i.note, i.quantity, i.match_mode, i.added_at FROM list_items i
@@ -357,6 +363,7 @@ export function createApp() {
       stores: STORES.filter((s) => !list.excludedStores.includes(s)),
       igaStore: list.igaStoreId,
       memberships: req.user.memberships || [],
+      alcohol: wantsAlcohol(req),
     });
   }));
   app.post('/api/lists/:id/paste', requireUser, h((req) => {

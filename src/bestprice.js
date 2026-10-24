@@ -65,7 +65,7 @@ const cache = new Map();
  * @param {{stores?: string[], igaStore?: string, memberships?: string[]}} opts
  */
 export function bestPrices(q, opts = {}) {
-  const key = JSON.stringify([String(q).trim().toLowerCase(), opts.stores || null, opts.igaStore || null, [...(opts.memberships || [])].sort(), catalogueVersion()]);
+  const key = JSON.stringify([String(q).trim().toLowerCase(), opts.stores || null, opts.igaStore || null, [...(opts.memberships || [])].sort(), opts.alcohol ?? true, catalogueVersion()]);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   const value = compute(q, opts);
@@ -74,7 +74,7 @@ export function bestPrices(q, opts = {}) {
   return value;
 }
 
-function compute(q, { stores, igaStore, memberships = [] } = {}) {
+function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {}) {
   const asTyped = String(q).trim();
   q = expandQuery(q);
   const size = parseSizeFrom(q);
@@ -82,7 +82,7 @@ function compute(q, { stores, igaStore, memberships = [] } = {}) {
   const wanted = nameTokens(text);
   if (!wanted.size) return null;
 
-  let found = runSearch(text, { stores, igaStore, limit: CANDIDATES, size })
+  let found = runSearch(text, { stores, igaStore, limit: CANDIDATES, size, alcohol })
     .filter((p) => p.price != null && p.size_unit && (p.size_qty || p.per_weight));
   if (!found.length) return { query: asTyped, size: size ? formatSize(size.qty, size.unit) : null, groups: [], variants: [] };
 

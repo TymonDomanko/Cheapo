@@ -28,7 +28,7 @@ const LABEL = Object.fromEntries(AISLES.map((a) => [a.key, a.label]));
 // frozen, not veg; dog food is pet, not meat; tomato sauce is pantry, not veg).
 const RULES = [
   ['frozen', /\bfrozen|\bfreezer\b(?! bags?)|ice ?creams?\b|gelato|ice blocks?|\bsorbet|pastry sheets?|^pizzas$|^streets$/],
-  ['liquor', /\bliquor|\bbeers?\b|\bwines?\b|\bcider\b|spirits|vodka|whisk(e)?y|\bgin\b|\brum\b|bourbon|prosecco|champagne|sauvignon|shiraz|chardonnay|merlot|pinot|\blager\b|\bale\b|seltzer|^ros[eé]$/],
+  ['liquor', /\bliquor|\bbeers?\b|\bwines?\b|\bcider\b|spirits|vodka|whisk(e)?y|\bgin\b|\brum\b|bourbon|prosecco|champagne|sauvignon|shiraz|chardonnay|merlot|pinot|\blager\b|\bale\b|seltzer|^ros[eé]$|premix(ed)? drinks|^liqueurs?$|sparkling ros/],
   ['pet', /\bpets?\b|petneeds|\bdogs?\b|\bcats?\b|kitten|puppy|\bbird ?seed|cat litter|pedigree|whiskas|dine\b|schmackos/],
   ['baby', /\bbaby|\binfant|nappies|nappy|toddler|formula\b|wipes.*baby|huggies/],
   ['health', /health|beauty|personal care|toiletr|vitamin|supplement|medicin|pharmacy|first aid|shampoo|conditioner|deodorant|toothpaste|toothbrush|\bsoap\b|body wash|razor|sunscreen|sun ?care|after sun|skin ?care|cosmetic|panadol|nurofen|tampons?|\bpads\b|feminine|hygiene|cold,? flu|allerg|hair styling|hair care|hair accessories|fragrance|perfume|makeup|make-up|^nails$|^eyes$|^lips$|^complexion$|styling products|shaving|hair removal|shower|\bbath\b|dental|continence|period care|band-?aids?|bandages|pain relief|cotton|lip balm|moisturis/],
@@ -55,6 +55,12 @@ export function aisleFor(p) {
   }
   return 'other';
 }
+
+/**
+ * Is it alcohol? Going by the shop's own category (each shop files its liquor
+ * separately), not the name: "ginger beer" and "wine vinegar" are groceries.
+ */
+export const isAlcohol = (p) => !!p?.category && aisleFor({ category: p.category }) === 'liquor';
 
 export const aisleLabel = (key) => LABEL[key] || LABEL.other;
 export const aisleOrder = (key) => ORDER[key] ?? ORDER.other;

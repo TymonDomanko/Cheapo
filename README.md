@@ -92,6 +92,7 @@ See `.env.example`. Settings marked *Also on the Admin page* can be changed by a
 | `COLLECTOR_TOKEN`, `SERVER_SCRAPE_STORES` | — | Accept prices from a home collector, and leave those stores out of the server's own crawl. *Also on the Admin page* |
 | `LITESTREAM_*` | — | Continuous off-site backup (see DEPLOY.md) |
 | `BACKUP_KEEP_DAYS` | `7` | Daily on-disk snapshots to keep |
+| `API_RATE_LIMIT`, `SEARCH_RATE_LIMIT` | `300`, `90` | Requests per minute per address, for the whole API and for searches |
 | `COLES_BARCODE_BUDGET` | `300` | Coles product pages fetched per day for barcodes |
 | `IGA_MAX_STORES` | no limit | Optional cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the daily refresh and about 2 MB of storage |
 | `SCRAPE_MODE` | `fetch` | `browser` scrapes through a real Chromium (needs Playwright) |

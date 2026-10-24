@@ -259,6 +259,7 @@ function fillSettings() {
   const af = $('#alerts-form');
   af.alertsWeekly.checked = u.alertsWeekly;
   af.alertsPrice.checked = u.alertsPrice;
+  af.showAlcohol.checked = !!u.showAlcohol;
   $('#email-status').innerHTML = u.emailVerified
     ? `Emails go to <strong>${esc(u.email)}</strong>.`
     : `<span class="warn">Confirm your email first</span> — we only email confirmed addresses. <button type="button" class="linkish" data-resend-verify>Send the link again</button>`;
@@ -329,7 +330,10 @@ $('#alerts-form').addEventListener('submit', async (e) => {
   try {
     await api('/api/me', {
       method: 'PATCH',
-      body: { alertsWeekly: f.alertsWeekly.checked, alertsPrice: f.alertsPrice.checked, memberships: new FormData(f).getAll('memberships') },
+      body: {
+        alertsWeekly: f.alertsWeekly.checked, alertsPrice: f.alertsPrice.checked, memberships: new FormData(f).getAll('memberships'),
+        showAlcohol: f.showAlcohol.checked,
+      },
     });
     await loadConfig();
     formError(f, null);

@@ -43,6 +43,7 @@ function publicUser(u) {
     alertsWeekly: !!u.alerts_weekly,
     alertsPrice: !!u.alerts_price,
     memberships: parseMemberships(u.memberships),
+    showAlcohol: !!u.show_alcohol,
   };
 }
 
@@ -69,8 +70,9 @@ function parsePreferred(json) {
 }
 
 /** @param igaStore  an IGA store id the caller has already validated */
-export function updateProfile(userId, { name, preferredStores, igaStore, alertsWeekly, alertsPrice, memberships }) {
+export function updateProfile(userId, { name, preferredStores, igaStore, alertsWeekly, alertsPrice, memberships, showAlcohol }) {
   const d = getDb();
+  if (showAlcohol != null) d.prepare('UPDATE users SET show_alcohol = ? WHERE id = ?').run(showAlcohol ? 1 : 0, userId);
   if (alertsWeekly != null) d.prepare('UPDATE users SET alerts_weekly = ? WHERE id = ?').run(alertsWeekly ? 1 : 0, userId);
   if (alertsPrice != null) d.prepare('UPDATE users SET alerts_price = ? WHERE id = ?').run(alertsPrice ? 1 : 0, userId);
   if (memberships != null) {

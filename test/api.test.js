@@ -11,6 +11,8 @@ process.env.ADMIN_EMAILS = 'admin@example.com';
 process.env.DISABLE_BACKGROUND_SCRAPES = 'true';
 process.env.MAIL_CAPTURE = 'true';
 process.env.AUTH_RATE_LIMIT = '1000';
+process.env.API_RATE_LIMIT = '5000';
+process.env.SEARCH_RATE_LIMIT = '5000';
 
 const { upsertProducts } = await import('../src/db.js');
 const { createApp } = await import('../src/app.js');
@@ -1067,4 +1069,23 @@ test('"add cheapest" items follow the prices', async () => {
   assert.ok(!v.items[0].query);
   assert.equal(v.items[0].anchor.name, 'Bestprice Full Cream Milk');
   upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 1.6 }]);
+});
+
+test('alcohol is left out unless you turn it on in Settings', async () => {
+  upsertProducts('woolworths', [
+    { store_product_id: 'alc1', name: 'Settingtest Lager Cans 375mL x 6 pack', brand: 'Settingtest', size_text: '6 x 375mL', category: 'Full Strength Beer', price: 20, was_price: 25, on_special: 1 },
+    { store_product_id: 'alc2', name: 'Settingtest Ginger Beer 1.25L', brand: 'Settingtest', size_text: '1.25L', category: 'Soft Drinks', price: 2 },
+  ]);
+  const names = async (api) => (await api('GET', '/api/search?q=settingtest')).body.map((g) => g.anchor.name).sort();
+  const visitor = client();
+  assert.deepEqual(await names(visitor), ['Settingtest Ginger Beer 1.25L'], 'the soft drink stays; the lager is left out');
+  const specials = (await visitor('GET', '/api/search?specials=1&limit=60')).body;
+  assert.ok(!specials.some((g) => /Settingtest Lager/.test(g.anchor.name)), 'not in specials either');
+
+  const api = client();
+  const signup = (await api('POST', '/api/auth/signup', { email: 'drinker@example.com', password: 'password123' })).body;
+  assert.equal(signup.user.showAlcohol, false, 'off to start with');
+  assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L']);
+  assert.equal((await api('PATCH', '/api/me', { showAlcohol: true })).body.user.showAlcohol, true);
+  assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L', 'Settingtest Lager Cans 375mL x 6 pack']);
 });
