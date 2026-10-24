@@ -398,6 +398,22 @@ document.addEventListener('click', async (e) => {
 });
 
 async function confirmEmail() {
+  const change = new URLSearchParams(location.search).get('change');
+  if (change) {
+    // A link from "Change email".
+    $('#verify-title').textContent = 'Changing your email…';
+    $('#verify-msg').textContent = '';
+    try {
+      const { user: u } = await api('/api/auth/confirm-email-change', { method: 'POST', body: { token: change } });
+      $('#verify-title').textContent = 'Email changed';
+      $('#verify-msg').textContent = `Your account now uses ${u.email}. Log in with it from now on.`;
+      await loadConfig();
+    } catch (err) {
+      $('#verify-title').textContent = 'That link didn’t work';
+      $('#verify-msg').textContent = `${err.message} You can ask for a new one in Settings.`;
+    }
+    return;
+  }
   const token = new URLSearchParams(location.search).get('token');
   $('#verify-title').textContent = 'Confirming your email…';
   $('#verify-msg').textContent = '';
@@ -411,6 +427,23 @@ async function confirmEmail() {
     $('#verify-msg').textContent = `${err.message} You can send a new one from Settings.`;
   }
 }
+
+$('#email-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const done = f.querySelector('[data-form-done]');
+  done.hidden = true;
+  try {
+    const email = f.email.value.trim();
+    await api('/api/me/email', { method: 'POST', body: { email, password: f.password.value } });
+    formError(f, null);
+    f.reset();
+    done.textContent = `Check ${email} for a link to confirm it. (We’ve also told your current address.)`;
+    done.hidden = false;
+  } catch (err) {
+    formError(f, err);
+  }
+});
 
 $('#forgot-form').addEventListener('submit', async (e) => {
   e.preventDefault();

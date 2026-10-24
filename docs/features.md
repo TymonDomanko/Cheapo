@@ -50,7 +50,7 @@
 ## Accounts
 
 - Anyone can search. Signing up gives you a list, settings and alerts.
-- Email confirmation, password reset, a privacy page, and data export and account deletion in Settings.
+- Email confirmation, password reset, **changing your email** (confirmed by a link to the new address, with a heads-up to the old one), a privacy page, and data export and account deletion in Settings.
 
 ## Running it
 

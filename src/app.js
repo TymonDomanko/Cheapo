@@ -11,7 +11,7 @@ import { compareSearch, productDetail, lookupBarcode, alcoholCategories, NO_ALCO
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
   sameOriginOnly, rateLimit, updateProfile, changePassword, deleteAccount, sessionToken,
-  requestPasswordReset, resetPassword, sendVerification, verifyEmail, MEMBERSHIPS,
+  requestPasswordReset, resetPassword, sendVerification, verifyEmail, requestEmailChange, confirmEmailChange, MEMBERSHIPS,
 } from './auth.js';
 import * as lists from './lists.js';
 import * as iga from './iga.js';
@@ -314,6 +314,7 @@ export function createApp() {
   app.post('/api/auth/verify', authLimit, h((req) => {
     verifyEmail(req.body?.token);
   }));
+  app.post('/api/auth/confirm-email-change', authLimit, h((req) => ({ user: confirmEmailChange(req.body?.token) })));
 
   // ------------------------------------------------------------ your account
 
@@ -322,6 +323,11 @@ export function createApp() {
     const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships, showAlcohol });
     if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
     return { user };
+  }));
+
+  // Change your email: a link goes to the new address; nothing changes until it's opened.
+  app.post('/api/me/email', requireUser, authLimit, h(async (req) => {
+    await requestEmailChange(req.user.id, { email: req.body?.email, password: req.body?.password }, siteUrl(req));
   }));
 
   app.post('/api/me/verify-email', requireUser, authLimit, h(async (req) => {

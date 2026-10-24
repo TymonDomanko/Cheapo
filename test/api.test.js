@@ -1141,3 +1141,28 @@ test('the Add box suggests the best value per litre / kilo first', async () => {
   assert.equal(cheapest[0].perUnit, 1.5);
   assert.equal(cheapest[0].query, 'valuetest milk 2L', 'adding it keeps the cheapest 2L');
 });
+
+test('changing your email: needs your password, and only happens once the new address confirms it', async () => {
+  const { capturedMail } = await import('../src/mailer.js');
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'mover@example.com', password: 'password123', name: 'Mover' });
+  await client()('POST', '/api/auth/signup', { email: 'taken@example.com', password: 'password123' });
+
+  assert.equal((await api('POST', '/api/me/email', { email: 'moved@example.com', password: 'wrong-password' })).status, 400);
+  assert.equal((await api('POST', '/api/me/email', { email: 'taken@example.com', password: 'password123' })).status, 409);
+  assert.equal((await api('POST', '/api/me/email', { email: 'moved@example.com', password: 'password123' })).status, 200);
+
+  const link = capturedMail.findLast((m) => m.to === 'moved@example.com');
+  assert.match(link.subject, /Confirm your new email/);
+  assert.ok(capturedMail.some((m) => m.to === 'mover@example.com' && /being changed/.test(m.subject)), 'the old address is told');
+  assert.equal((await api('GET', '/api/config')).body.user.email, 'mover@example.com', 'nothing changes yet');
+
+  const token = link.text.match(/change=([\w-]+)/)[1];
+  const done = await client()('POST', '/api/auth/confirm-email-change', { token });
+  assert.equal(done.body.user.email, 'moved@example.com');
+  assert.equal(done.body.user.emailVerified, true);
+  assert.equal((await client()('POST', '/api/auth/confirm-email-change', { token })).status, 400, 'the link works once');
+  assert.equal((await client()('POST', '/api/auth/login', { email: 'moved@example.com', password: 'password123' })).status, 200);
+  assert.equal((await client()('POST', '/api/auth/login', { email: 'mover@example.com', password: 'password123' })).status, 401);
+  assert.equal((await api('GET', '/api/config')).body.user.email, 'moved@example.com', 'still signed in, with the new email');
+});

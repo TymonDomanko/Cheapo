@@ -133,6 +133,16 @@
           <button class="primary" type="submit">Save profile</button>
         </form>
 
+        <form id="email-form" class="card stack">
+          <h3>Change email</h3>
+          <p class="hint">We’ll send a link to the new address. Your email changes when you open it; until then nothing changes.</p>
+          <label>New email<input name="email" type="email" autocomplete="email" required></label>
+          <label>Your password<input name="password" type="password" autocomplete="current-password" required></label>
+          <p class="warn" data-form-error hidden></p>
+          <p class="saving" data-form-done hidden></p>
+          <button type="submit">Send the link</button>
+        </form>
+
         <form id="shops-form" class="card stack">
           <h3>Your shops</h3>
           <p class="hint">Search results only compare these shops, and new lists start with them.</p>
