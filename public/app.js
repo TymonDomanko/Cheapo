@@ -59,10 +59,30 @@ async function loadConfig() {
   renderAccount();
 }
 
+/** Banners someone has closed stay closed on this device. */
+function hiddenBanner(key) {
+  try {
+    return localStorage.getItem(`banner:${key}`) === 'hidden';
+  } catch {
+    return false;
+  }
+}
+document.addEventListener('click', (e) => {
+  const close = e.target.closest('[data-close-banner]');
+  if (!close) return;
+  const key = close.dataset.closeBanner.replace('{user}', user()?.id ?? '');
+  try {
+    localStorage.setItem(`banner:${key}`, 'hidden');
+  } catch {
+    /* storage blocked: hide it for now */
+  }
+  close.closest('.banner').hidden = true;
+});
+
 function renderAccount() {
   const u = user();
   $('#admin-tab').hidden = !u?.isAdmin;
-  $('#verify-banner').hidden = !u || u.emailVerified;
+  $('#verify-banner').hidden = !u || u.emailVerified || hiddenBanner(`verify:${u.id}`);
   // Wide screens: name, Settings and Log out. Phones: one account button with a menu.
   $('#account').innerHTML = u
     ? `<span class="account-wide"><a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
@@ -657,6 +677,10 @@ async function runSearch() {
   const box = $('#results');
   // Nothing searched or filtered: the home page.
   if (!params.get('q') && !params.get('store') && !params.get('specials')) return renderHome(seq);
+  // Grey outlines while the first results load (later searches keep the old results until the new ones arrive).
+  setTimeout(() => {
+    if (seq === searchSeq && !box.querySelector('.row, .best-price')) box.innerHTML = skeleton(4);
+  }, 200);
   try {
     // The cheapest of it, any brand (only for a plain search across all shops).
     const wantBest = params.get('q') && !params.get('store') && !params.get('specials');
@@ -746,6 +770,20 @@ $('#results').addEventListener('click', (e) => {
 
 const perUnitText = (p) => (p.perUnit != null ? `${money(p.perUnit)}/${esc(p.unitWord)}` : '');
 
+/**
+ * Price per kg, L or item, worked out the same way for every shop (their own
+ * texts differ: "$0.81 / 1EA", "$4.90/ 1kg"…). Falls back to the shop's text.
+ */
+function unitText(p) {
+  const price = shownPrice(p);
+  if (price == null) return '';
+  if (p.per_weight) return p.size_unit === 'ea' ? '' : `${money(price)}/kg`;
+  if (p.size_qty > 0 && p.size_unit === 'g') return `${money((price / p.size_qty) * 1000)}/kg`;
+  if (p.size_qty > 0 && p.size_unit === 'ml') return `${money((price / p.size_qty) * 1000)}/L`;
+  if (p.size_qty > 1 && p.size_unit === 'ea') return `${money(price / p.size_qty)}/item`;
+  return p.size_qty ? '' : esc(p.unit_price_text || '');
+}
+
 // Short enough for five across a phone screen.
 const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.' };
 
@@ -826,11 +864,18 @@ $('#results').addEventListener('click', (e) => {
   runSearch();
 });
 
+const NO_IMAGE = '<div class="thumb none" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8h14l-1.4 11.2a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>';
+
 function thumb(p) {
   return p.image_url
     ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-    : '<div class="thumb none">no image</div>';
+    : NO_IMAGE;
 }
+
+// A product photo that won't load gets the same placeholder (inline onerror isn't allowed by the page's security policy).
+document.addEventListener('error', (e) => {
+  if (e.target.matches?.('img.thumb')) e.target.outerHTML = NO_IMAGE;
+}, true);
 
 /** Is this shopper a member of the store's loyalty scheme (so member prices apply)? */
 const isMember = (store) => !!user()?.memberships?.includes(store);
@@ -854,7 +899,7 @@ function priceCell(store, match, cheapest, anchor) {
   const price = shownPrice(p);
   return `<div class="cell ${store === cheapest ? 'cheapest' : ''}">${label}
     <span><span class="price">${money(price)}</span>${p.was_price ? `<span class="was">${money(p.was_price)}</span>` : price < p.price ? `<span class="was">${money(p.price)}</span>` : ''}
-    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${esc(p.unit_price_text || '')}</span>
+    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${unitText(p)}</span>
     ${dealBadges(p)}${alt}</span>
   </div>`;
 }
@@ -900,6 +945,10 @@ function renderGroup(g) {
       <span class="meta">${esc(a.size_text || '')} · ${n > 1 ? `${n} equivalent products` : 'no equivalents found'}</span>
     </div>
     ${state.stores.map((s) => priceCell(s, g.best[s], g.cheapest, a)).join('')}
+    ${(() => {
+      const missing = state.stores.filter((s) => !g.best[s]);
+      return missing.length && missing.length < state.stores.length ? `<div class="missing-shops hint">Not at ${missing.map((s) => esc(storeName(s))).join(', ')}</div>` : '';
+    })()}
     <button class="add small" data-add="${a.id}">+ List</button>
     ${valueHint(g.betterValue)}
   </div>`;
@@ -988,7 +1037,7 @@ async function openProduct(id) {
         <td>${dot(x.store)} ${esc(storeName(x.store))}</td>
         <td><a href="#" data-product="${x.id}">${esc(x.name)}</a> ${x.on_special ? '<span class="tag-special">SPECIAL</span>' : ''} ${dealBadges(x)}</td>
         <td class="num">${money(shownPrice(x))}</td>
-        <td class="num">${esc(x.unit_price_text || '')}</td>
+        <td class="num">${unitText(x)}</td>
         <td class="num">${x.via === 'barcode' ? '<span title="Same barcode">barcode</span>' : x.via === 'confirmed' ? 'confirmed' : `${Math.round(x.score * 100)}%`}</td>
         <td class="row-actions"><button class="small" data-add="${x.id}">+ List</button>
           ${x.id !== p.id ? `<button class="small ghost" data-report="${x.id}" data-anchor="${p.id}" title="These aren’t the same product">Wrong match?</button>` : ''}</td></tr>`).join('')}</tbody>
@@ -1167,8 +1216,14 @@ async function refreshListCount() {
   if (l) $('#list-count').textContent = l.item_count;
 }
 
+/** Grey outlines of `n` cards, shown while something loads. */
+function skeleton(n = 3) {
+  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${'<div class="skel-card"><div class="skel w60"></div><div class="skel w40"></div><div class="skel w80"></div></div>'.repeat(n)}</div>`;
+}
+
 async function loadList() {
   const root = $('#list-root');
+  if (user() && !root.children.length) root.innerHTML = skeleton(3);
   if (!user()) {
     root.innerHTML = `<div class="empty">
       <p>Log in to build shopping lists. You can share a list with your household so everyone can add to it.</p>

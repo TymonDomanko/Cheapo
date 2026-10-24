@@ -510,3 +510,29 @@ a.plain-link:hover { text-decoration: underline; }
   .tabs .pill { position: absolute; top: 2px; left: calc(50% + 6px); font-size: 10px; min-width: 16px; padding: 0 4px; }
   .toast { bottom: calc(var(--tabbar-h) + 12px); }
 }
+
+/* Loading placeholders */
+.skel-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; display: grid; gap: 10px; }
+.skel { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--border) 50%, var(--surface-2) 100%); background-size: 200% 100%; animation: skel 1.2s ease-in-out infinite; }
+.skel.w60 { width: 60%; height: 15px; } .skel.w40 { width: 40%; } .skel.w80 { width: 80%; }
+@keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+
+/* Product image placeholder */
+.thumb.none { display: grid; place-items: center; background: var(--surface-2) !important; border-radius: 8px; }
+.thumb.none svg { width: 45%; height: 45%; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Closable banners */
+.banner.closable { display: flex; align-items: center; gap: 8px; }
+.banner.closable[hidden] { display: none; }
+.banner-close { margin-left: auto; flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%; border-color: transparent; color: var(--muted); }
+
+/* Search rows: which shops don't have it (phones; wide screens show "—" columns) */
+.missing-shops { display: none; }
+@media (max-width: 900px) {
+  .row .cell.none { display: none; }
+  .missing-shops { display: block; grid-column: 1 / -1; font-size: 13px; }
+  .row .cell { min-width: 0; flex-wrap: wrap; }
+  .row .cell > span:last-child { min-width: 0; flex: 1; }
+  .row .cell .alt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+}

@@ -33,9 +33,9 @@
     Showing <strong>demo data</strong> with made-up prices.
   </div>
 
-  <div id="verify-banner" class="banner" hidden>
-    Confirm your email address to get price alerts and password resets — check your inbox for the link.
-    <button type="button" class="linkish" id="resend-verify">Send it again</button>
+  <div id="verify-banner" class="banner closable" hidden>
+    <span>Confirm your email to get price alerts and password resets — check your inbox. <button type="button" class="linkish" id="resend-verify">Send it again</button></span>
+    <button type="button" class="ghost banner-close" data-close-banner="verify:{user}" aria-label="Hide this">✕</button>
   </div>
   <div id="offline-banner" class="banner" hidden>You’re offline. Ticks are saved on this phone and sync when you’re back online.</div>
 
