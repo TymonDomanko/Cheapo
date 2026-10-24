@@ -9,7 +9,7 @@ A self-hosted price comparison site for Australian supermarkets. It collects eve
 <p align="center">
   <img src="docs/screenshots/compare-cheapest.png" width="220" alt="Searching 'milk 2l': the cheapest 2L milk of any brand, then the next cheapest and the cheapest at each shop">
   <img src="docs/screenshots/compare-sizes.png" width="220" alt="Searching 'milk': each common size with its cheapest, and the best value per litre highlighted">
-  <img src="docs/screenshots/list-item.png" width="220" alt="A list item that picks the cheapest 2L milk at each shop as prices change">
+  <img src="docs/screenshots/list.png" width="220" alt="A list: each item with the shop to buy it at, other shops' prices, and the total">
   <img src="docs/screenshots/in-the-shop.png" width="220" alt="In the shop: a checklist per shop, sorted by section">
 </p>
 
