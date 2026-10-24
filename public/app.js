@@ -3,6 +3,8 @@ const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const money = (n) => (n == null ? '—' : `$${Number(n).toFixed(2)}`);
 const dot = (s) => `<i class="dot" style="background:var(--store-${esc(s)})"></i>`;
+/** A shop's name on a badge in its brand colour. */
+const chip = (s, name = storeName(s)) => `<span class="store-chip" style="--chip:var(--brand-${esc(s)}, var(--store-${esc(s)}))">${esc(name)}</span>`;
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' });
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -52,7 +54,6 @@ async function loadConfig() {
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
-  $('#store-names').textContent = state.config.stores.map((s) => s.name).join(' · ');
   $('#store-filter').innerHTML = `<option value="">${state.stores.length < state.allStores.length ? 'All my shops' : 'All shops'}</option>`
     + state.stores.map((s) => `<option value="${s}">${esc(storeName(s))}</option>`).join('');
   $$('[data-shop-boxes]').forEach(renderShopBoxes);
@@ -206,7 +207,7 @@ function renderShopBoxes(el) {
   const igaStore = signup ? state.signupIga : state.config.igaStore;
   el.innerHTML = state.config.stores.map((s) => `<label class="check shop-box">
     <input type="checkbox" name="shops" value="${s.id}" ${chosen.includes(s.id) ? 'checked' : ''}>
-    ${dot(s.id)} <span><strong>${esc(s.name)}</strong> <span class="hint">${esc(s.note || '')}</span></span></label>
+    <span>${chip(s.id, s.name)} <span class="hint">${esc(s.note || '')}</span></span></label>
     ${s.id === 'iga' ? `<div class="iga-choice">${igaStore
       ? `Your IGA: <strong>${esc(igaStore.name)}</strong>${igaStore.suburb ? ` <span class="hint">${esc(igaStore.suburb)}</span>` : ''} ${signup ? '' : igaStatus(igaStore)}
          <button type="button" class="linkish" data-change-iga>Change</button>`
@@ -290,7 +291,7 @@ function fillSettings() {
     ? `Emails go to <strong>${esc(u.email)}</strong>.`
     : `<span class="warn">Confirm your email first</span> — we only email confirmed addresses. <button type="button" class="linkish" data-resend-verify>Send the link again</button>`;
   $('#membership-boxes').innerHTML = Object.entries(state.config.memberships || {}).map(([store, scheme]) => `<label class="check">
-    <input type="checkbox" name="memberships" value="${esc(store)}" ${u.memberships.includes(store) ? 'checked' : ''}> ${dot(store)} ${esc(scheme)} (${esc(storeName(store))})</label>`).join('');
+    <input type="checkbox" name="memberships" value="${esc(store)}" ${u.memberships.includes(store) ? 'checked' : ''}> ${esc(scheme)} ${chip(store)}</label>`).join('');
   loadWatches();
   $('#shops-form [data-shop-boxes]').innerHTML = ''; // start from the saved choice
   $('#profile-form [name=name]').value = u.name;
@@ -737,7 +738,7 @@ async function runSearch({ again = false } = {}) {
       return;
     }
     box.style.setProperty('--store-cols', state.stores.length);
-    box.innerHTML = `${bestHtml}${bestHtml ? '<h2 class="section">All products</h2>' : ''}<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${dot(s)} ${esc(storeName(s))}${s === 'iga' ? `<button type="button" class="linkish col-sub" data-change-iga>${esc(igaShortName(state.config.igaStore))} ▾</button>` : ''}</span>`).join('')}<span></span></div>`
+    box.innerHTML = `${bestHtml}${bestHtml ? '<h2 class="section">All products</h2>' : ''}<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${chip(s)}${s === 'iga' ? `<button type="button" class="linkish col-sub" data-change-iga>${esc(igaShortName(state.config.igaStore))} ▾</button>` : ''}</span>`).join('')}<span></span></div>`
       + groups.map(renderGroup).join('');
   } catch (e) {
     box.innerHTML = `<div class="empty">Search failed: ${esc(e.message)}</div>`;
@@ -786,7 +787,7 @@ function unusualCard({ product: p, deal }) {
   return dealCardShell(p, `
     <div class="deal-tag-row"><span class="badge special">−${deal.pctOff}%</span> <span class="deal-why">${esc(deal.headline)}</span></div>
     <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
-    <div class="hint">${dot(p.store)}${esc(storeName(p.store))}${p.size_text ? ` · ${esc(p.size_text)}` : ''}</div>
+    <div class="hint">${chip(p.store)}${p.size_text ? ` · ${esc(p.size_text)}` : ''}</div>
     <div><span class="price">${money(p.price)}</span> <span class="was">usually ${money(deal.usual)}</span></div>`);
 }
 
@@ -795,7 +796,7 @@ function regularCard({ anchor, times, product: p, deal }) {
   return dealCardShell(p, `
     <div class="deal-tag-row"><span class="badge special">−${deal.pctOff}%</span> <span class="deal-why">${esc(deal.text)}</span></div>
     <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
-    <div class="hint">${dot(p.store)}${esc(storeName(p.store))}${p.size_text ? ` · ${esc(p.size_text)}` : ''}${same ? '' : ` · instead of your ${esc(anchor.name)}`}</div>
+    <div class="hint">${chip(p.store)}${p.size_text ? ` · ${esc(p.size_text)}` : ''}${same ? '' : ` · instead of your ${esc(anchor.name)}`}</div>
     <div><span class="price">${money(deal.unit)}</span>${deal.kind === 'multi' ? ' each' : ''} <span class="was">usually ${money(deal.regular)}</span></div>
     <div class="hint">${times >= 3 ? 'You buy this often' : 'On your lists'}</div>`);
 }
@@ -853,7 +854,7 @@ function renderBestPrice(b) {
       <div class="bp-top">
         ${thumb(top)}
         <div class="bp-name"><a href="#" class="plain-link" data-product="${top.id}">${esc(top.name)}</a>
-          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}</div></div>
+          <div class="hint">${chip(top.store)}</div></div>
         <div class="bp-price"><span class="price big">${money(top.price)}</span><span class="hint">${perUnitText(top)}</span>${dealBadges(top)}</div>
       </div>
       <div class="bp-add"><button class="add primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
@@ -862,7 +863,7 @@ function renderBestPrice(b) {
         <span>${esc(SHORT_STORE[s] || storeName(s))}</span><b>${money(g.cheapestPerStore[s].price)}</b></div>`).join('')}</div>` : ''}
       ${rest.length ? `<ol class="bp-rank">${rest.map((p, i) => `<li ${i >= SHOWN ? 'hidden data-more' : ''}>
         <span class="bp-n">${i + 2}</span>
-        <div class="bp-row-name" data-product="${p.id}"><div>${esc(p.name)}</div><small>${dot(p.store)}${esc(storeName(p.store))}</small></div>
+        <div class="bp-row-name" data-product="${p.id}"><div>${esc(p.name)}</div><small>${chip(p.store)}</small></div>
         <div class="bp-row-price">${money(p.price)}<small>${perUnitText(p)}</small></div>
         <button class="add round" data-add="${p.id}" aria-label="Add ${esc(p.name)} to the list">+</button></li>`).join('')}</ol>
         ${rest.length > SHOWN ? `<button type="button" class="linkish bp-more" data-show-more>Show ${rest.length - SHOWN} more ▾</button>` : ''}` : ''}
@@ -877,10 +878,10 @@ function renderBestPrice(b) {
       return `<div class="size-card ${g.bestValue ? 'best' : ''}">
         <div class="size-label">${esc(g.label)}${g.bestValue ? ` <span class="badge cheap">★ Best value per ${esc(p.unitWord)}</span>` : ''}</div>
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
-        <div class="hint">${dot(p.store)}${esc(storeName(p.store))}</div>
+        <div class="hint">${chip(p.store)}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
         ${b.produce && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
-          .map((s) => `${dot(s)}${esc(storeName(s))} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
+          .map((s) => `${chip(s)} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
         <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
           <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
           ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
@@ -935,7 +936,7 @@ function dealBadges(p) {
 }
 
 function priceCell(store, match, cheapest, anchor) {
-  const label = `<span class="store-label">${dot(store)}${esc(storeName(store))}</span>`;
+  const label = `<span class="store-label">${chip(store)}</span>`;
   if (!match) return `<div class="cell none">${label}—</div>`;
   const p = match.product;
   const alt = p.id !== anchor.id && p.name !== anchor.name ? `<span class="alt" title="${esc(p.name)}">${esc(p.name)}</span>` : '';
@@ -1058,7 +1059,7 @@ async function openProduct(id) {
       ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" referrerpolicy="no-referrer">` : ''}
       <div>
         <h2>${esc(p.name)}</h2>
-        <div class="hint">${dot(p.store)} ${esc(storeName(p.store))} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
+        <div class="hint">${chip(p.store)} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
         <div><strong>${money(shownPrice(p))}</strong> ${p.was_price ? `<span class="hint"><s>${money(p.was_price)}</s></span>` : ''} ${dealBadges(p)}
           ${s ? `<span class="hint">· lowest ${money(s.min)}, highest ${money(s.max)}, ${plural(s.changes, 'change')} since ${fmtDate(s.since)}</span>` : ''}</div>
         ${insightNote(d.insight, { always: true })}
@@ -1077,7 +1078,7 @@ async function openProduct(id) {
     <div class="table-scroll"><table class="data">
       <thead><tr><th>Store</th><th>Product</th><th class="num">Price</th><th class="num">Unit price</th><th class="num">Match</th><th></th></tr></thead>
       <tbody>${d.equivalents.sort((a, b) => a.price - b.price).map((x) => `<tr>
-        <td>${dot(x.store)} ${esc(storeName(x.store))}</td>
+        <td>${chip(x.store)}</td>
         <td><a href="#" data-product="${x.id}">${esc(x.name)}</a> ${x.on_special ? '<span class="tag-special">SPECIAL</span>' : ''} ${dealBadges(x)}</td>
         <td class="num">${money(shownPrice(x))}</td>
         <td class="num">${unitText(x)}</td>
@@ -1095,7 +1096,7 @@ function historyTable(d) {
   return `<table class="data"><thead><tr><th>Date</th><th>Store</th><th>Product</th><th class="num">Price</th></tr></thead><tbody>
     ${[...d.history].reverse().map((h) => {
       const c = byId[h.product_id];
-      return `<tr><td>${fmtDate(h.recorded_at)}</td><td>${dot(c.store)} ${esc(storeName(c.store))}</td>
+      return `<tr><td>${fmtDate(h.recorded_at)}</td><td>${chip(c.store)}</td>
       <td>${esc(c.name)}</td><td class="num">${money(h.price)}${h.on_special ? ' <span class="tag-special">SPECIAL</span>' : ''}</td></tr>`;
     }).join('')}
   </tbody></table>`;
@@ -1478,7 +1479,7 @@ async function handleBarcode(code) {
     }
     const stores = state.allStores.filter((s) => found.best[s]);
     box.innerHTML = `<div class="scan-product"><strong>${esc(found.anchor.name)}</strong> <span class="hint">${esc(found.anchor.size_text || '')}</span>
-      <ul class="scan-prices">${stores.map((s) => `<li class="${s === found.cheapest ? 'win' : ''}">${dot(s)} ${esc(storeName(s))}
+      <ul class="scan-prices">${stores.map((s) => `<li class="${s === found.cheapest ? 'win' : ''}">${chip(s)}
         <span>${money(shownPrice(found.best[s].product))}${s === found.cheapest ? ' · <strong class="saving">cheapest</strong>' : ''}</span></li>`).join('')}</ul>
       ${state.shopping ? '<p class="hint">Not on your list.</p>' : ''}
       <div class="actions"><button class="small primary" data-scan-add="${found.anchor.id}">+ Add to list</button>
@@ -1537,7 +1538,7 @@ async function openSpending() {
     <div class="table-scroll"><table class="data">
       <thead><tr><th>Date</th><th>Where</th><th class="num">Items</th><th class="num">Cost</th><th class="num">Saved</th></tr></thead>
       <tbody>${sp.shops.map((x) => `<tr><td class="nowrap">${fmtDate(x.at)}</td>
-        <td>${Object.keys(x.byStore).map((st) => `${dot(st)}${esc(storeName(st))}`).join(' ')}</td>
+        <td>${Object.keys(x.byStore).map((st) => `${chip(st)}`).join(' ')}</td>
         <td class="num">${x.items}</td><td class="num">${money(x.spent)}</td>
         <td class="num">${x.oneShop ? `<span class="saving" title="${esc(`All at ${storeName(x.oneShop.store)}: ${money(x.oneShop.total)}`)}">${money(x.saved)}</span>` : '—'}</td></tr>`).join('')}</tbody>
     </table></div>
@@ -1702,7 +1703,7 @@ function renderShopping() {
   // One list per shop, plus the things none of your shops have.
   const lists = state.allStores.filter((s) => L.plan.byStore[s]?.items.length).map((store) => ({
     id: store,
-    title: `${dot(store)} ${esc(storeName(store))}`,
+    title: `${chip(store)}`,
     name: storeName(store),
     total: L.plan.byStore[store].total,
     rows: L.plan.byStore[store].items.map((x) => ({
@@ -1917,7 +1918,7 @@ function renderStorePanel(L) {
 function storeToggle(s, on, note) {
   const ig = s === 'iga' ? state.list?.igaStore : null;
   return `<label class="store-card ${on ? 'on' : 'off'}">
-    <span class="store-card-head"><input type="checkbox" data-store-toggle="${s}" ${on ? 'checked' : ''}> ${dot(s)} <strong>${esc(storeName(s))}</strong></span>
+    <span class="store-card-head"><input type="checkbox" data-store-toggle="${s}" ${on ? 'checked' : ''}> ${chip(s)}</span>
     ${s === 'iga' ? `<span class="store-note">${ig ? `${esc(ig.name)}${ig.pricesReady ? '' : ' · <span class="state pending">fetching prices…</span>'}` : 'No store chosen'}
       · <button type="button" class="linkish" data-list-iga>change</button></span>` : ''}
     ${note ? `<span class="store-note">${note}</span>` : ''}
@@ -2007,7 +2008,7 @@ function renderItem(it) {
       <div class="name" data-product="${a.id}"><strong>${esc(title)}</strong><div class="meta">${meta}</div></div>
       ${stepper(it.quantity)}
     </div>
-    ${win ? `<div class="best-line">${dot(win)}<span class="shop">${esc(storeName(win))}</span>${tag}${dealBadges(winP)}
+    ${win ? `<div class="best-line">${chip(win)}${tag}${dealBadges(winP)}
       <span class="best-amount">${money(lineCost(winP, it.quantity))}</span></div>`
     : '<div class="best-line"><span class="warn">Not found at the shops on this list</span></div>'}
     ${otherLine ? `<div class="other-prices">${otherLine}</div>` : ''}
@@ -2036,7 +2037,7 @@ function renderOptions(it) {
       `<option value="exclude">Don't buy here${ps.excluded ? ' ✓' : ''}</option>`,
     ];
     return `<div class="pick-row ${win ? 'win' : ''} ${!enabled || ps.excluded || !p ? 'off' : ''}">
-      ${dot(s)}<span class="pick-name"><b>${esc(storeName(s))}</b> · ${what}${ps.manual ? ' <span class="hint">(your pick)</span>' : ''}
+      <span class="pick-name">${chip(s)} ${what}${ps.manual ? ' <span class="hint">(your pick)</span>' : ''}
         ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">wrong?</button>` : ''}</span>
       <span class="pick-price">${p && !ps.excluded && enabled ? money(lineCost(p, it.quantity)) : '—'}</span>
       ${enabled ? `<select class="pick-change" data-pick="${s}" aria-label="Change the ${esc(storeName(s))} product">${opts.join('')}</select>` : ''}
@@ -2077,7 +2078,7 @@ function renderSummary(L) {
   const singles = state.allStores.map((s) => {
     const x = L.singleStore[s];
     const diff = x.total - L.plan.total;
-    return `<div class="tile"><div class="label">${dot(s)} Everything at ${esc(storeName(s))}</div>
+    return `<div class="tile"><div class="label">Everything at ${chip(s)}</div>
       <div class="value">${money(x.total)}</div>
       <div class="note">${x.missing ? `<span class="warn">${plural(x.missing, 'item')} not available</span>` : diff > 0.004 ? `Your split saves <span class="saving">${money(diff)}</span>` : 'Same as your split'}</div></div>`;
   });
@@ -2089,7 +2090,7 @@ function renderSummary(L) {
             const deals = Object.values(L.plan.byStore).flatMap((b) => b.items).reduce((n, i) => n + (i.dealSaving || 0), 0);
             return deals > 0.004 ? `<br>includes <span class="saving">${money(deals)}</span> from multi-buys${L.memberships.length ? ' and member prices' : ''}` : '';
           })()}</div></div>
-      ${stores.map((s) => `<div class="tile"><div class="label">${dot(s)} ${esc(storeName(s))}</div>
+      ${stores.map((s) => `<div class="tile"><div class="label">${chip(s)}</div>
         <div class="value">${money(L.plan.byStore[s].total)}</div><div class="note">${plural(L.plan.byStore[s].items.length, 'item')}</div></div>`).join('')}
     </div>
     <h2 class="section">Compared with one shop</h2>
@@ -2379,7 +2380,7 @@ function openOrder() {
     ${L.plan.unavailable.length ? `<p class="warn">Not available at your shops: ${L.plan.unavailable.map((u) => esc(u.name)).join(', ')}</p>` : ''}
     ${stores.map((s) => `
       <div class="order-store">
-        <h3>${dot(s)} ${esc(storeName(s))} — ${money(L.plan.byStore[s].total)}
+        <h3>${chip(s)} — ${money(L.plan.byStore[s].total)}
           <span class="hint">${storeOnline(s) ? '' : '(in-store only)'}</span></h3>
         <table class="data"><thead><tr><th>Qty</th><th>Product</th><th class="num">Each</th><th class="num">Total</th></tr></thead><tbody>
         ${L.plan.byStore[s].items.map((i) => `<tr><td>${i.quantity}</td><td>${i.product.product_url ? `<a href="${esc(i.product.product_url)}" target="_blank" rel="noopener">${esc(i.product.name)}</a>` : esc(i.product.name)}</td>
@@ -2427,7 +2428,7 @@ async function loadChanges() {
       const pct = ((r.new_price - r.old_price) / r.old_price) * 100;
       const up = pct > 0;
       return `<div class="change" data-product="${r.id}">
-        <div><strong>${esc(r.name)}</strong><div class="meta">${dot(r.store)} ${esc(storeName(r.store))} · ${esc(r.size_text || '')} · ${fmtDate(r.recorded_at)}</div></div>
+        <div><strong>${esc(r.name)}</strong><div class="meta">${chip(r.store)} · ${esc(r.size_text || '')} · ${fmtDate(r.recorded_at)}</div></div>
         <div class="hint">${money(r.old_price)} → <strong>${money(r.new_price)}</strong></div>
         <div class="delta ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}%</div>
       </div>`;
@@ -2546,7 +2547,7 @@ function adminStoreTiles(o) {
         ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
       const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : '';
-      return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
+      return `<div class="tile"><div class="label">${chip(s.store)}</div>
         <div class="value">${s.products.toLocaleString()}</div>
         <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
         <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
@@ -2720,7 +2721,7 @@ async function loadAdminSettings(justMadeToken = null) {
           ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
         <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
           <p class="hint">Untick the stores the home collector sends instead.</p>
-          ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${dot(x)} ${esc(storeName(x))}</label>`).join('')}
+          ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
         <p class="warn" data-form-error hidden></p>
         ${locked('SERVER_SCRAPE_STORES') ? '' : '<button class="primary" type="submit">Save</button>'}
@@ -2836,7 +2837,7 @@ async function loadHealth(refresh = false) {
   };
   const rows = hh.stores.map((x) => {
     const age = x.lastOk ? (Date.now() - Date.parse(x.lastOk.finished_at)) / 3600000 : null;
-    return `<tr><td>${dot(x.store)} ${esc(storeName(x.store))}</td>
+    return `<tr><td>${chip(x.store)}</td>
       <td class="num">${x.available.toLocaleString()}</td>
       <td class="${age == null || age > 36 ? 'bad' : 'ok'}">${x.lastOk ? ago(x.lastOk.finished_at) : 'never'}${x.stuckRuns ? ' <span class="warn">· a refresh looks stuck</span>' : ''}</td>
       <td class="num ${x.stale ? 'bad' : ''}">${x.stale.toLocaleString()}</td>
@@ -2860,7 +2861,7 @@ async function loadHealth(refresh = false) {
 
 async function loadAdminExtras() {
   const [m, b, em] = await Promise.all([api('/api/admin/match-reports'), api('/api/admin/backups'), api('/api/admin/emails')]);
-  const prod = (p) => (p ? `${dot(p.store)} <a href="#" data-product="${p.id}">${esc(p.name)}</a> <span class="hint">${esc(p.size_text || '')} · ${money(p.price)}</span>` : '<span class="hint">(gone)</span>');
+  const prod = (p) => (p ? `${chip(p.store)} <a href="#" data-product="${p.id}">${esc(p.name)}</a> <span class="hint">${esc(p.size_text || '')} · ${money(p.price)}</span>` : '<span class="hint">(gone)</span>');
   $('#admin-matches').innerHTML = (m.open.length
     ? `<ul class="report-list">${m.open.map((r) => `<li>
         <div>${prod(r.a)}<br><span class="hint">${r.kind === 'same' ? 'is the same as' : 'is NOT the same as'}</span><br>${prod(r.b)}</div>
@@ -2869,7 +2870,7 @@ async function loadAdminExtras() {
           <button class="small ghost" data-resolve="${r.id}" data-decision="dismiss">Dismiss</button></div></li>`).join('')}</ul>`
     : '<p class="hint">No reports waiting. Shoppers can press “Wrong match?” on any comparison.</p>')
     + (m.rules.length ? `<details><summary>${plural(m.rules.length, 'confirmed fix')}</summary><ul class="report-list">${m.rules.map((r) => `<li>
-        <div>${dot(r.a_store)} ${esc(r.a_name)} <span class="hint">${r.kind === 'never' ? '≠' : '='}</span> ${dot(r.b_store)} ${esc(r.b_name)}</div>
+        <div>${chip(r.a_store)} ${esc(r.a_name)} <span class="hint">${r.kind === 'never' ? '≠' : '='}</span> ${chip(r.b_store)} ${esc(r.b_name)}</div>
         <div><button class="small ghost" data-unrule="${r.a_id}/${r.b_id}">Undo</button></div></li>`).join('')}</ul></details>` : '');
   $('#admin-backups').innerHTML = `<p>${b.litestream
     ? '✓ Continuous off-site backup with Litestream is on.'

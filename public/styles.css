@@ -24,6 +24,13 @@
   --store-harrisfarm: #e87ba4;
   --cost: #c0392b;
   --brand: #e3262f;
+  /* Shop badges: each chain's own colour, dark enough for white text. Coles/IGA (both red) and
+     Woolworths/Harris Farm (both green) use different shades so they're easy to tell apart. */
+  --brand-woolworths: #178841;
+  --brand-coles: #e01a22;
+  --brand-aldi: #1b2a7a;
+  --brand-iga: #9b1b30;
+  --brand-harrisfarm: #24502f;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -554,3 +561,10 @@ a.plain-link:hover { text-decoration: underline; }
   .row .cell .alt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 }
 .size-label .badge.cheap { background: var(--highlight); color: var(--highlight-ink); padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; transform: rotate(-2deg); }
+
+/* A shop's name on a badge in its brand colour */
+.store-chip {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 6px;
+  background: var(--chip); color: #fff; font-weight: 600; font-size: .86em; line-height: 1.45;
+  white-space: nowrap; vertical-align: baseline; letter-spacing: .01em;
+}
