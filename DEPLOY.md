@@ -289,7 +289,7 @@ The server and every collector share the refreshing, and the site decides who do
   - Parts still missing when the next refresh is due are reported as a failed refresh.
   - IGA stays on the server.
 - **Coles** is shared page by page. Each connection takes a department, or the specials, and fetches its pages. **The page limit (Admin → Site settings → "Coles pages an hour, all connections together", or `COLES_PAGES_PER_HOUR`) is for everyone together.** With two connections, each fetches at half the rate. More connections make it more reliable, never heavier on Coles.
-  - **No one connection fetches more than "Most Coles pages an hour for any one connection"** (30 by default, `COLES_MAX_PER_CONNECTION`), this server included. Each helper can be set lower on its row. What a capped connection can't use goes to the others, within the combined limit.
+  - **No one connection fetches more than "Most Coles pages an hour for any one connection"** (40 by default, `COLES_MAX_PER_CONNECTION`), this server included. Each helper can be set lower on its row. What a capped connection can't use goes to the others, within the combined limit.
   - Each answer tells a collector when to come back. One that's 3 minutes late stops counting straight away, so the others speed back up, and its department goes to another connection.
   - A bot check pauses just the connection that got it.
   - Searches, list items and barcodes stay on the server.

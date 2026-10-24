@@ -120,7 +120,7 @@ function activeWorkers(st) {
 }
 /** The most Coles pages an hour one connection may fetch (this server included). */
 export function capFor(w) {
-  const site = Number(getSetting('COLES_MAX_PER_CONNECTION') ?? 30) || 30;
+  const site = Number(getSetting('COLES_MAX_PER_CONNECTION') ?? 40) || 40;
   const own = w === SERVER ? null : helpers.colesMax(w);
   return Math.max(1, Math.min(own ?? site, site));
 }

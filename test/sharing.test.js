@@ -184,12 +184,12 @@ test('Coles: no connection goes over its cap, the server included; spare goes to
   await live.pump();
   const lastHour = () => live.status().workers.reduce((o, w) => ({ ...o, [w.id]: w.lastHour }), {});
 
-  // On its own, the server is capped at 30 an hour, though the limit is 60.
-  for (let i = 0; i < 90; i++) { minutes(1); await live.pump(); }
-  assert.equal(live.capFor('server'), 30);
-  assert.ok(lastHour().server <= 30 && lastHour().server >= 28, `server: ${lastHour().server}`);
+  // On its own, the server is capped at 40 an hour, though the limit is 60.
+  for (let i = 0; i < 180; i++) { minutes(0.5); await live.pump(); } // every 30s, like the server
+  assert.equal(live.capFor('server'), 40);
+  assert.ok(lastHour().server <= 40 && lastHour().server >= 38, `server: ${lastHour().server}`);
 
-  // Sam is capped lower, at 10: Sam gets 10 an hour, the server keeps its 30.
+  // Sam is capped lower, at 10: Sam gets 10 an hour, the server keeps its 40.
   helpers.setColesMax(sam.id, 10);
   for (let i = 0; i < 120; i++) {
     minutes(1);
@@ -198,13 +198,13 @@ test('Coles: no connection goes over its cap, the server included; spare goes to
   }
   const h = lastHour();
   assert.ok(h[samWorker.id] <= 10 && h[samWorker.id] >= 9, `Sam: ${h[samWorker.id]}`);
-  assert.ok(h.server <= 30, `server: ${h.server}`);
+  assert.ok(h.server <= 40, `server: ${h.server}`);
   assert.ok(live.status().lastHour <= 60);
   assert.equal(live.status().workers.find((w) => w.id === samWorker.id).cap, 10);
 
   // A helper's own figure can only be lower than the site's.
   helpers.setColesMax(sam.id, 500);
-  assert.equal(live.capFor(samWorker.id), 30);
+  assert.equal(live.capFor(samWorker.id), 40);
   helpers.setColesMax(sam.id, null);
   process.env.COLES_PAGES_PER_HOUR = '30';
   deptProducts = 96;

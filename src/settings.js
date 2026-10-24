@@ -69,7 +69,7 @@ const SETTINGS = {
       return String(n);
     },
   },
-  // The most Coles pages an hour any one connection fetches (this server or a helper).
+  // The most Coles pages an hour any one connection fetches (this server or a helper); 40 when unset.
   COLES_MAX_PER_CONNECTION: {
     check(v) {
       const n = Number(v);

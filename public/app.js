@@ -2795,7 +2795,7 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
         <label>Coles pages an hour, all connections together${envTag('COLES_PAGES_PER_HOUR')}
           <input name="COLES_PAGES_PER_HOUR" type="number" min="0" max="600" value="${esc(st.COLES_PAGES_PER_HOUR.value ?? 30)}" ${dis('COLES_PAGES_PER_HOUR')}></label>
         <label>Most Coles pages an hour for any one connection${envTag('COLES_MAX_PER_CONNECTION')}
-          <input name="COLES_MAX_PER_CONNECTION" type="number" min="1" max="600" value="${esc(st.COLES_MAX_PER_CONNECTION.value ?? 30)}" ${dis('COLES_MAX_PER_CONNECTION')}></label>
+          <input name="COLES_MAX_PER_CONNECTION" type="number" min="1" max="600" value="${esc(st.COLES_MAX_PER_CONNECTION.value ?? 40)}" ${dis('COLES_MAX_PER_CONNECTION')}></label>
         <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day. This server, the home collector and helpers share the pages above rather than adding to them, and no one connection (this server included) fetches more than the second figure; a helper can be set lower below. More an hour means a greater chance of a bot check. 0 pages an hour goes back to one big crawl each night.</p>
         <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
           <p class="hint">Untick the stores the home collector sends instead. If this server is blocked by a shop it does crawl, a collector covers it.</p>
@@ -2805,7 +2805,7 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
         ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
 
-      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 30)}
+      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 40)}
 
       <div class="card stack">
         <h3>Off-site backup</h3>
