@@ -62,6 +62,7 @@
   - Download backups.
   - See which version is running.
 - **Problems come to you.** If a refresh has problems, admins get **one summary email** after it finishes: what failed, what found far fewer products, and what has recovered. Admins are also emailed if the home collector goes quiet.
+- **Fresh Coles prices without getting blocked.** Coles is refreshed a page every couple of minutes instead of all at once. Searching something whose Coles prices are over a day old fetches them there and then.
 - **Blocked shops back off.** When a shop blocks the crawler (Coles' bot check), the crawl stops, remembers where it got to, and carries on a few hours later. It doesn't push through the block.
 - **Home collector, one click.** For shops that block your server, the Admin page has a ready-configured download:
   - a single program for Windows or Linux (including a Raspberry Pi);

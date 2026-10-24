@@ -285,7 +285,7 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
 2. **Refreshes prices** for every supermarket (except the ones a home collector sends) and every followed IGA store.
-3. **Fills in Coles barcodes:** up to `COLES_BARCODE_BUDGET` product pages a day (default 300; it stops for the day if Coles shows a bot check), products on lists first. This lets Coles products match Woolworths ones exactly.
+3. **Fills in Coles barcodes** (nightly mode only; steady mode fits them into its spare time), products on lists first. This lets Coles products match Woolworths ones exactly.
 4. **Sends price alerts** to people whose watched products got cheaper.
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
@@ -294,7 +294,7 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** about 40 minutes when it isn't blocked (one page every 2.5 seconds, `COLES_DELAY_MS`). Coles protects its site with a bot check ("Pardon Our Interruption") and blocks connections that ask for too much — home connections too. Pushing on through a block only makes it last longer, so when Coles blocks, the crawl stops, remembers where it got to, and tries again 4 hours later (`BLOCKED_RETRY_HOURS`, up to 4 times), carrying on from the same page. Products are only marked unavailable once a crawl has got through the whole shop. If Coles blocks even the first request ("bot check instead of its website"), the connection itself is blocked for now; leaving it alone for a day usually clears it.
+- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days. A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);

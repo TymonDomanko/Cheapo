@@ -666,7 +666,11 @@ $('#search-form').addEventListener('submit', (e) => {
   runSearch();
 });
 
-async function runSearch() {
+// Coles prices that were over a day old are being fetched: ask again once, a few seconds later.
+let refreshTimer = null;
+
+async function runSearch({ again = false } = {}) {
+  clearTimeout(refreshTimer);
   const seq = ++searchSeq;
   const params = new URLSearchParams({
     q: $('#q').value.trim(),
@@ -689,6 +693,11 @@ async function runSearch() {
       wantBest ? api(withIga(`/api/best-price?${new URLSearchParams({ q: params.get('q') })}`)).catch(() => null) : null,
     ]);
     if (seq !== searchSeq) return;
+    if (best?.refreshing && !again) {
+      refreshTimer = setTimeout(() => {
+        if (seq === searchSeq) runSearch({ again: true });
+      }, 6000);
+    }
     const bestHtml = renderBestPrice(best);
     if (!groups.length) {
       box.innerHTML = bestHtml || '<div class="empty">No matching products.</div>';
@@ -806,7 +815,7 @@ function renderBestPrice(b) {
     const noun = esc(b.query.replace(/\b\d\S*\s*(ml|l|g|kg|pack)?\b/gi, '').trim());
     return `<section class="best-price">
       <h2>Cheapest ${esc(niceQuery(b.query.replace(/\s+/g, ' ')))}</h2>
-      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed ? '' : ` · regular ${noun}`}</div>
+      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
       ${chips}
       <div class="bp-top">
         ${thumb(top)}
@@ -828,6 +837,7 @@ function renderBestPrice(b) {
   }
   return `<section class="best-price">
     <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : 'by size <span class="hint">any brand</span>'}</h2>
+    ${b.refreshing ? '<div class="hint"><span class="state pending">Checking Coles for today’s prices…</span></div>' : ''}
     ${chips}
     <div class="size-cards">${b.groups.map((g) => {
       const p = g.products[0];
@@ -2502,12 +2512,23 @@ function adminStoreTiles(o) {
       const status = s.status.running
         ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
+      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : '';
       return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
         <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
         <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
           : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>`;
+}
+
+/** Coles in steady mode: what it's up to. */
+function colesSteadyNote(c) {
+  const parts = [`${c.lastHour} of ${c.perHour} requests in the last hour`];
+  if (c.specials) parts.push(`specials ${c.specials.done}/${c.specials.of} pages today`);
+  if (c.pass) parts.push(`whole shop ${c.pass.of ? Math.round((c.pass.done / c.pass.of) * 100) : 0}% (started ${fmtDate(c.pass.startedAt)})`);
+  else if (c.lastPassAt) parts.push(`whole shop last done ${fmtDate(c.lastPassAt)}`);
+  if (c.waiting) parts.push(`${c.waiting} searches waiting`);
+  return `<br><span class="hint">Steady refresh: ${parts.join(' · ')}</span>${c.blockedUntil ? `<br><span class="warn">Paused by a Coles bot check until ${new Date(c.blockedUntil).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })}</span>` : ''}`;
 }
 
 function adminIgaCheck(o) {
@@ -2876,8 +2897,8 @@ $('#admin-root').addEventListener('click', async (e) => {
   }
   const stores = t.id === 'scrape-all' ? state.allStores : t.dataset.scrape ? [t.dataset.scrape] : null;
   if (!stores) return;
-  await api('/api/admin/scrape', { method: 'POST', body: { stores } });
-  toast('Refresh started');
+  const res = await api('/api/admin/scrape', { method: 'POST', body: { stores } });
+  toast(res.colesSteady ? (res.started.length ? 'Refresh started — Coles starts a new steady pass' : 'Coles starts a new steady pass (a page every couple of minutes)') : 'Refresh started');
   watchAdminProgress(500);
 });
 $('#admin-root').addEventListener('change', async (e) => {

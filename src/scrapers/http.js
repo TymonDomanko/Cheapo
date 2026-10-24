@@ -26,7 +26,11 @@ const UA = process.env.SCRAPE_USER_AGENT ||
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** A bot-protection page (Imperva / Incapsula, used by Coles) instead of the real thing. */
-export const isBotCheck = (text) => /Pardon Our Interruption|_Incapsula_Resource|Request unsuccessful\. Incapsula/i.test(String(text).slice(0, 5000));
+// (Ordinary Coles pages load an Imperva script too, so a page with the shop's data in it isn't one.)
+export const isBotCheck = (text) => {
+  const head = String(text).slice(0, 20000);
+  return /Pardon Our Interruption|Request unsuccessful\. Incapsula/i.test(head) || (/_Incapsula_Resource/.test(head) && !/"buildId"|__NEXT_DATA__/.test(head));
+};
 
 /** The shop is blocking this connection: stop and try again later rather than keep asking. */
 export class BlockedError extends Error {

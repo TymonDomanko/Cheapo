@@ -21,6 +21,7 @@ import * as settings from './settings.js';
 import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
+import * as colesLive from './coles-live.js';
 import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
@@ -180,17 +181,26 @@ export function createApp() {
       limit: Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
+    // Coles prices over a day old: fetch Coles' own results for this search now.
+    colesLive.refreshForSearch(q, groups.flatMap((g) => (g.members || []).map((m) => m.product?.id ?? m.id)).filter(Boolean));
     // The page shows how many equivalents there are, not each one; leave them out to keep this small.
     return groups.map(({ members, ...g }) => ({ ...g, memberCount: members.length }));
   }));
 
   // The cheapest of what was searched for, any brand: by size, or for the size asked for.
-  app.get('/api/best-price', searchLimit, h((req) => bestPrices(String(req.query.q || '').slice(0, 100), {
-    stores: req.user?.preferredStores,
-    igaStore: igaFor(req),
-    memberships: req.user?.memberships || [],
-    alcohol: wantsAlcohol(req),
-  })));
+  app.get('/api/best-price', searchLimit, h((req) => {
+    const q = String(req.query.q || '').slice(0, 100);
+    const best = bestPrices(q, {
+      stores: req.user?.preferredStores,
+      igaStore: igaFor(req),
+      memberships: req.user?.memberships || [],
+      alcohol: wantsAlcohol(req),
+    });
+    if (!best) return best;
+    // Over a day old at Coles? Fresher prices are being fetched: the page asks again in a moment.
+    const ids = best.groups.flatMap((g) => g.products.map((p) => p.id));
+    return { ...best, refreshing: colesLive.refreshForSearch(q, ids) };
+  }));
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {
@@ -517,6 +527,7 @@ export function createApp() {
     const d = getDb();
     return {
       version: APP_VERSION,
+      colesLive: colesLive.status(),
       stores: STORES.map((s) => ({
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
@@ -546,9 +557,12 @@ export function createApp() {
 
   app.post('/api/admin/scrape', requireAdmin, h((req) => {
     const wanted = Array.isArray(req.body?.stores) ? req.body.stores.filter((s) => serverStores().includes(s)) : serverStores();
-    const stores = wanted.filter((s) => !scrapeStatus[s].running);
+    // Coles in steady mode: start its whole-shop pass again rather than crawl it all at once.
+    const steady = colesLive.enabled() && wanted.includes('coles');
+    if (steady) colesLive.restartPass();
+    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles'));
     scrapeAll(stores).catch(() => {});
-    return { started: stores };
+    return { started: stores, colesSteady: steady };
   }));
 
   // Site settings (email, site details, home collector). .env values win and can't be changed here.

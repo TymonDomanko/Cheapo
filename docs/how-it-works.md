@@ -7,7 +7,7 @@ None of the supermarkets has a public API. Each scraper reads the same data the 
 | Chain | Source | Notes |
 |---|---|---|
 | Woolworths | Website JSON API | Can block cloud servers; a home connection or the home collector works |
-| Coles | Next.js data routes | Blocks connections that ask for too much (a "Pardon Our Interruption" bot check). The crawl stops, remembers where it was, and carries on a few hours later |
+| Coles | Next.js data routes | Blocks connections that ask for too much (a "Pardon Our Interruption" bot check), so it's refreshed steadily rather than all at once (below) |
 | ALDI | api.aldi.com.au | In-store only, so there's no online ordering |
 | IGA | igashop.com.au storefront API | Each IGA has its own prices; only stores someone has picked are collected |
 | Harris Farm | Shopify `/products.json` | NSW, QLD and ACT |
@@ -19,6 +19,18 @@ Every night (`SCRAPE_CRON`) the server:
 4. sends price alerts.
 
 Products a complete crawl didn't see are marked unavailable. Each price change is kept in `price_history`, which drives the charts, the "is this a good price?" hints and the unusual-deal finder.
+
+## Coles, a little at a time
+
+Coles' bot protection blocks bursts, home connections included, so instead of crawling all ~520 pages each night the server asks for **one page every couple of minutes** (`COLES_PAGES_PER_HOUR`, default 30), all day, most important first:
+
+1. **Searches.** When someone searches and the Coles results are more than a day old, Coles' own search for those words is fetched straight away (one page refreshes up to 48 products). The page asks again a few seconds later and shows today's prices.
+2. **What people buy.** Once a day, Coles products on lists and watches that are over ~20 hours old.
+3. **Specials.** Every product on special (about 150 pages), daily, since that's where prices move.
+4. **The whole shop**, every `COLES_FULL_EVERY_DAYS` (2), carrying on where it left off. Products only become unavailable once a whole pass has missed them, and a finished pass counts as a refresh on the admin page (and in the "far fewer products" check).
+5. **Barcodes** with whatever time is left.
+
+A bot check pauses all of it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
 
 ## Matching the same product across shops
 

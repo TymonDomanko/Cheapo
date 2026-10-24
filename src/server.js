@@ -5,6 +5,7 @@ import { scrapeAll, scrapeStatus, serverStores } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
+import * as colesLive from './coles-live.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
 import { checkCollector, resumeSummary } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
@@ -38,9 +39,11 @@ if (SCRAPE_CRON) {
     console.log('Scheduled refresh starting');
     // First update which IGA stores have prices online, so today's fetch covers the right ones.
     await checkOnlineStores().catch(() => {});
-    await scrapeAll(serverStores().filter((s) => !scrapeStatus[s].running)).catch(() => {});
+    // Coles refreshes steadily through the day instead (src/coles-live.js), unless that's turned off.
+    const tonight = serverStores().filter((s) => !scrapeStatus[s].running && !(s === 'coles' && colesLive.enabled()));
+    await scrapeAll(tonight).catch(() => {});
     // Then fill in more Coles barcodes for matching (a daily budget of product pages).
-    if (serverStores().includes('coles')) await backfillColesBarcodes().catch((e) => console.error(`barcodes: ${e.message}`));
+    if (serverStores().includes('coles') && !colesLive.enabled()) await backfillColesBarcodes().catch((e) => console.error(`barcodes: ${e.message}`));
     await sendPriceAlerts().catch((e) => console.error(`price alerts: ${e.message}`));
   }, { timezone: process.env.TZ || undefined });
 }
@@ -65,4 +68,5 @@ app.listen(PORT, () => {
   console.log(`Cheapo (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
   resumeSummary(); // a refresh's admin summary that was waiting when the server stopped
+  if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') colesLive.start();
 });
