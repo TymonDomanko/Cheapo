@@ -43,6 +43,10 @@
 - **Finish shop** saves what you bought, so you can repeat it. You can also save regular shops to add in one go.
 - **Spending:** each finished shop records what it cost and how much splitting it across shops saved, with a monthly chart.
 
+## Look
+
+- **Light or dark.** The round button in the header switches between Auto (follows your device), Light and Dark, remembered on each device.
+
 ## Accounts
 
 - Anyone can search. Signing up gives you a list, settings and alerts.
