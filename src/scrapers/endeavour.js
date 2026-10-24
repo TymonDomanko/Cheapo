@@ -1,5 +1,7 @@
 // Dan Murphy's and BWS (Endeavour Group) share one website API, much like
 // Woolworths': POST/GET /apis/ui/Browse for a department, 1–100 products a page.
+// Some ranges are only listed as a product group instead (Dan Murphy's
+// premixes: POST /apis/ui/ProductGroup/Products/premix).
 // Liquor comes in packs, so each way a product is sold (a bottle, a 6-pack, a
 // case of 24) becomes its own product, sized "24 x 375mL", so equal packs are
 // compared and unit prices work.
@@ -22,10 +24,14 @@ const volumeOf = (...texts) => {
 const sized = (count, volume) => (volume ? (count > 1 ? `${count} x ${volume}` : volume) : count > 1 ? `${count} pack` : null);
 const details = (p) => Object.fromEntries((p.AdditionalDetails || []).map((a) => [a.Name, a.Value]));
 const plain = (s) => String(s || '').replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ').trim();
+/** The shop's own category if it says what drink it is ("Red Wine"), else the department's ("Spirits" for "Standard"). */
+export const liquorCategory = (own, department) => (own && LIQUOR_WORDS.test(own) ? own : department);
+// Words that make a category count as alcohol (src/aisles.js); "RTD" or "Sparkling" alone wouldn't.
+const LIQUOR_WORDS = /beer|wine|cider|spirits|vodka|whisk|\bgin\b|\brum\b|bourbon|champagne|lager|\bale\b|liqueur|premix/i;
 
 /**
  * A liquor chain on the Endeavour platform.
- * @param {{store: string, origin: string, api: string, departments: {key: string, name: string, department: string, subDepartment?: string}[], method: 'GET'|'POST', productUrl: (p) => string}} cfg
+ * @param {{store: string, origin: string, api: string, departments: {key: string, name: string, department?: string, subDepartment?: string, group?: string}[], method: 'GET'|'POST', productUrl: (p) => string}} cfg
  */
 export function endeavour(cfg) {
   const delayMs = () => Number(process.env[`${cfg.store.toUpperCase()}_DELAY_MS`] ?? 800);
@@ -36,6 +42,12 @@ export function endeavour(cfg) {
   }
 
   async function page(client, dept, n) {
+    if (dept.group) {
+      const json = await client.postJson(`${cfg.api}/ProductGroup/Products/${encodeURIComponent(dept.group)}`, {
+        pageSize: PAGE_SIZE, pageNumber: n, sortType: 'Name', Location: 'ProductGroup', Filters: [], ShowOnlyAvailable: false,
+      });
+      return { TotalRecordCount: json.TotalRecordCount, Bundles: json.Items };
+    }
     if (cfg.method === 'GET') {
       const qs = new URLSearchParams({
         Department: dept.department, ...(dept.subDepartment ? { SubDepartment: dept.subDepartment } : {}),
@@ -99,7 +111,7 @@ export function endeavour(cfg) {
         name: count > 1 ? `${name} ${key === 'case' ? 'Case' : 'Pack'}` : name,
         brand,
         size_text: sized(count, vol),
-        category: ad.webproducttype || category,
+        category: liquorCategory(ad.webproducttype, category),
         image_url: p.MediumImageFile || p.SmallImageFile || null,
         product_url: cfg.productUrl(p),
         price: onPromo && !member ? promo.Value : price.Value,

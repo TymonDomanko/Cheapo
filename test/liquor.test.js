@@ -85,3 +85,13 @@ test('Coles leaves out its Liquorland department, now that Liquorland is its own
   const { SKIP } = await import('../src/scrapers/coles.js');
   assert.ok(SKIP.has('liquorland'));
 });
+
+test('every liquor product counts as alcohol, even when the shop calls it "RTD", "Standard" or "Sparkling"', async () => {
+  const { isAlcohol } = await import('../src/aisles.js');
+  const premix = dm.mapBundle({ Products: [{ Stockcode: '1', PackageSize: '375ML', AdditionalDetails: d({ webbrandname: 'Jim Beam', webtitle: 'White Label Bourbon & Cola Cans 375mL', webproducttype: 'RTD' }), Prices: { singleprice: { Message: 'Each', Value: 5 } } }] }, 'Premix Drinks');
+  const spirit = dm.mapBundle({ Products: [{ Stockcode: '2', PackageSize: '700ML', AdditionalDetails: d({ webtitle: 'Smirnoff Vodka 700mL', webproducttype: 'Standard' }), Prices: { singleprice: { Message: 'Each', Value: 45 } } }] }, 'Spirits');
+  const bubbles = ll.mapProduct({ id: '9', name: 'Chandon Brut 750mL', volumeMl: 750, unitOfMeasure: 'ea', category: 'Sparkling', price: { current: 27 } }, 'Wine');
+  const red = ll.mapProduct({ id: '8', name: 'Shiraz 750mL', volumeMl: 750, unitOfMeasure: 'ea', category: 'Red Wine', price: { current: 12 } }, 'Wine');
+  assert.deepEqual([premix[0].category, spirit[0].category, bubbles.category, red.category], ['Premix Drinks', 'Spirits', 'Wine', 'Red Wine']);
+  for (const p of [premix[0], spirit[0], bubbles, red]) assert.ok(isAlcohol(p), p.name);
+});

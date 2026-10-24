@@ -7,12 +7,14 @@
 // buying six: a multi-buy.
 
 import { createClient } from './http.js';
+import { liquorCategory } from './endeavour.js';
 
 const CATEGORIES = [
   { key: 'beer', name: 'Beer & Cider' },
   { key: 'wine', name: 'Wine' },
   { key: 'spirits', name: 'Spirits' },
   { key: 'premix', name: 'Premix Drinks' },
+  // ("Beer & Cider" and the rest name the department; a product's own category, like "Sparkling", is kept when it says what it is.)
 ];
 
 /** @param {{store: string, site: string, origin: string}} cfg */
@@ -63,7 +65,7 @@ export function colesLiquor(cfg) {
       name: pack ? `${p.name} ${/^ctn/i.test(p.unitOfMeasure) ? 'Case' : 'Pack'}` : p.name,
       brand: p.brand || null,
       size_text: vol ? (count > 1 ? `${count} x ${vol}` : vol) : count > 1 ? `${count} pack` : null,
-      category: p.category || category,
+      category: liquorCategory(p.category, category),
       image_url: image ? new URL(image, cfg.origin).href : null,
       product_url: p.productUrl ? new URL(p.productUrl, cfg.origin).href : null,
       price,

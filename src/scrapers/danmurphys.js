@@ -14,7 +14,9 @@ const shop = endeavour({
     ['spirits', 'Spirits', 'spirits'],
     ['cider', 'Cider', 'cider'],
     ['fortified-wine', 'Fortified Wine', 'fortified wine'],
-  ].map(([key, name, department]) => ({ key, name, department })),
+  ].map(([key, name, department]) => ({ key, name, department }))
+    // Premixes aren't a department, only a product group.
+    .concat([{ key: 'premix', name: 'Premix Drinks', group: 'premix' }]),
   productUrl: (p) => `https://www.danmurphys.com.au/product/DM_${p.Stockcode}/${p.UrlFriendlyName || ''}`,
 });
 
