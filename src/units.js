@@ -57,12 +57,20 @@ export function parseSize(text) {
     if (u) return { qty: round(Number(m[1]) * u[1]), unit: u[0], perWeight: false };
   }
   if (/^\s*(each|ea|1\s*each)\s*$/i.test(s)) return { qty: 1, unit: 'ea', perWeight: false };
+  // A name that ends "… Each" ("Banana Each" at Harris Farm) is sold by the item.
+  if (/\beach\s*$/i.test(s)) return { qty: 1, unit: 'ea', perWeight: false };
   return null;
 }
 
 /** Try the explicit size field first, then fall back to the product name. */
 export function parseSizeFrom(sizeText, name) {
-  return parseSize(sizeText) || parseSize(name);
+  const size = parseSize(sizeText);
+  // "each" with a weight in the name ("Brushed Potato Prepack 5kg") is a bag of that weight.
+  if (size?.unit === 'ea' && size.qty === 1 && name) {
+    const named = parseSize(name);
+    if (named && named.unit !== 'ea') return named;
+  }
+  return size || parseSize(name);
 }
 
 /**

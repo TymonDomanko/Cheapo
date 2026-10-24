@@ -16,6 +16,25 @@ export function colesBarcodeProgress() {
     FROM products WHERE store = 'coles' AND available = 1`).get();
 }
 
+/** Coles products still needing a barcode, products on lists and watched ones first. */
+export function barcodeTodo(limit) {
+  const due = new Date(Date.now() - RECHECK_DAYS * 86400000).toISOString();
+  return getDb().prepare(`
+    SELECT p.id, p.product_url FROM products p
+    WHERE p.store = 'coles' AND p.available = 1 AND p.barcode IS NULL
+      AND (p.barcode_checked_at IS NULL OR p.barcode_checked_at < ?)
+    ORDER BY EXISTS (SELECT 1 FROM list_items i WHERE i.product_id = p.id) DESC,
+             EXISTS (SELECT 1 FROM watches w WHERE w.product_id = p.id) DESC,
+             p.last_seen DESC
+    LIMIT ?`).all(due, limit);
+}
+
+/** Record what a product page said (gtin may be null: checked, none found). */
+export function saveBarcode(id, gtin, canonicalUrl = null) {
+  getDb().prepare('UPDATE products SET barcode = COALESCE(?, barcode), product_url = COALESCE(?, product_url), barcode_checked_at = ? WHERE id = ?')
+    .run(gtin, canonicalUrl, nowIso(), id);
+}
+
 // Kept small: every page is another request to Coles, which blocks connections that ask for too much.
 export async function backfillColesBarcodes({ budget = Number(process.env.COLES_BARCODE_BUDGET) || 300, log = console.log } = {}) {
   if (barcodeStatus.running) return { skipped: true };

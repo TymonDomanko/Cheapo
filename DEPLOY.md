@@ -4,7 +4,7 @@ There are three ways to run the site. They all use the same Docker image and kee
 
 | Option | Best for | HTTPS | Rough cost |
 |---|---|---|---|
-| [1. Docker on your own machine](#1-docker-on-your-own-machine) | Just you, or your household on your home network | No (local network) | Free |
+| [1. Docker on your own machine](#1-docker-on-your-own-machine) (including [Unraid](#on-unraid)) | Just you, or your household on your home network | No (local network) | Free |
 | [2. Docker on a server with a domain](#2-docker-on-a-server-with-your-own-domain) | A public site on a VPS or home server | Automatic (Caddy + Let's Encrypt) | VPS from ~A$6/month |
 | [3. Cloud platform](#3-cloud-platform-flyio-or-render) | A public site without managing a server | Automatic | ~US$5–7/month |
 
@@ -15,25 +15,29 @@ In every option you become admin the same way: put your email in `ADMIN_EMAILS`,
 Each push to `main` runs the tests, then builds and publishes the image to GitHub Container Registry:
 
 ```
-ghcr.io/tymondomanko/supermarket-tools:latest
+ghcr.io/tymondomanko/cheapo:latest
 ```
 
-The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (most servers) and `arm64` (Raspberry Pi, ARM VPSs). Tagging a release `v1.2.3` also publishes `:1.2.3`.
+The workflow is `.github/workflows/docker-publish.yml`. It builds for `amd64` (most servers) and `arm64` (Raspberry Pi, ARM VPSs). Each image is also tagged with its commit (`:sha-1361da1`), and tagging a release `v1.2.3` also publishes `:1.2.3`.
+
+**Which version is running?** The Admin page shows *Running version* (the commit it was built from), and so do the container's first log line and `/healthz`. After an update it should match the latest commit on `main`. The page loads its code by a fingerprint of its contents, so browsers pick up a new version on the next load.
 
 Before using the published image the first time:
 
 1. **Merge to `main`** (or run the workflow from the Actions tab) so the image gets built.
-2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **supermarket-tools**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
+2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **cheapo**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
 
-You can also skip the registry and build from a checkout. Both Docker options below work with `docker compose up -d --build`.
+The project used to be called *supermarket-tools*. The image is still published as `ghcr.io/tymondomanko/supermarket-tools` too, so older installs keep updating. To move one over, change its image to `ghcr.io/tymondomanko/cheapo:latest`; the data stays where it is.
+
+You can also skip the registry and build from a checkout: uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`. Pulling won't update it after that, because it runs whatever is checked out.
 
 ---
 
 ## 1. Docker on your own machine
 
 ```bash
-git clone https://github.com/tymondomanko/supermarket-tools.git
-cd supermarket-tools
+git clone https://github.com/tymondomanko/cheapo.git
+cd cheapo
 cp .env.example .env
 ```
 
@@ -64,12 +68,36 @@ A home connection is the most reliable place to scrape from, because Woolworths 
 
 ### On Unraid
 
-Use the **Compose Manager** plugin (or Portainer) with this, swapping in your share's name. This example uses a share called `supermarket`:
+These examples keep the data in a share called `supermarket`. Use your own share's name.
+
+**From the Docker tab (no plugins):**
+
+1. **Docker → Add Container**, and switch on **Advanced View** (top right).
+2. Fill in:
+   - **Name:** `supermarket`
+   - **Repository:** `ghcr.io/tymondomanko/cheapo:latest`
+   - **Network Type:** `Bridge`
+   - **WebUI:** `http://[IP]:[PORT:3000]/`
+3. Add each of these with **Add another Path, Port, Variable…**:
+
+   | Type | Container side | Value |
+   |---|---|---|
+   | Path | `/data` | `/mnt/user/supermarket` |
+   | Port | `3000` | `3000` (or any free port) |
+   | Variable | `PUID` | `99` |
+   | Variable | `PGID` | `100` |
+   | Variable | `ADMIN_EMAILS` | your email |
+   | Variable | `TZ` | `Australia/Sydney` (or yours) |
+   | Variable | `SECURE_COOKIES` | `false` (while you use plain `http://`) |
+
+4. **Apply.** Then open the WebUI and sign up with your admin email.
+
+**Or with the Compose Manager plugin** (or Portainer):
 
 ```yaml
 services:
   app:
-    image: ghcr.io/tymondomanko/supermarket-tools:latest
+    image: ghcr.io/tymondomanko/cheapo:latest
     container_name: supermarket
     restart: unless-stopped
     ports:
@@ -104,9 +132,9 @@ The files you need are in [`deploy/docker/`](deploy/docker):
 
 ```bash
 mkdir grocery && cd grocery
-curl -fsSLO https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/Caddyfile
-curl -fsSL  https://raw.githubusercontent.com/tymondomanko/supermarket-tools/main/deploy/docker/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/Caddyfile
+curl -fsSL  https://raw.githubusercontent.com/tymondomanko/cheapo/main/deploy/docker/.env.example -o .env
 nano .env          # set DOMAIN and ADMIN_EMAILS
 docker compose up -d
 ```
@@ -168,7 +196,7 @@ Then press **Send test email**. If it fails, the page says why, e.g. a wrong pas
 
 ```
 SMTP_URL=smtps://USERNAME:PASSWORD@smtp.example.com:465
-MAIL_FROM=Grocery Price Compare <alerts@groceries.example.com>
+MAIL_FROM=Cheapo <alerts@groceries.example.com>
 SITE_URL=https://groceries.example.com
 ```
 
@@ -196,17 +224,17 @@ LITESTREAM_ACCESS_KEY_ID=...
 LITESTREAM_SECRET_ACCESS_KEY=...
 ```
 
-Litestream starts before the app, so it can restore the database onto a new server, which means these settings can only go in `.env`. The Admin page shows whether it's on and where it copies to. Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers. The Admin page shows whether off-site backup is on.
+Litestream starts before the app, so it can restore the database onto a new server, which means these settings can only go in `.env`. The Admin page shows whether it's on and where it copies to. Cloudflare R2 and Backblaze B2 are cheapest; a site this size fits in their free tiers.
 
 **To restore onto a new server:** start the container with the same `LITESTREAM_*` settings and an empty `/data`.
 
-## Home collector (Woolworths and ALDI)
+## Home collector (for shops that block your server)
 
-Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site.
+Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site. If the site already runs at home (say on Unraid), you don't need this.
 
 **Easiest: download it from the Admin page.**
 
-1. Go to **Admin → Site settings → Home collector** and untick Woolworths and ALDI under "This server crawls". Save.
+1. Go to **Admin → Site settings → Home collector** and untick the blocked shops (usually Woolworths and ALDI) under "This server crawls". Save.
 2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
    - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
@@ -257,7 +285,7 @@ At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
 2. **Refreshes prices** for every supermarket (except the ones a home collector sends) and every followed IGA store.
-3. **Fills in Coles barcodes:** up to `COLES_BARCODE_BUDGET` product pages a day (default 300; it stops for the day if Coles shows a bot check), products on lists first. This lets Coles products match Woolworths ones exactly.
+3. **Fills in Coles barcodes** (nightly mode only; steady mode fits them into its spare time), products on lists first. This lets Coles products match Woolworths ones exactly.
 4. **Sends price alerts** to people whose watched products got cheaper.
 
 If the server was off at that time, the IGA check runs when it next starts. Admins can also run it from the Admin page with **Check now**.
@@ -266,7 +294,7 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** about 40 minutes when it isn't blocked (one page every 2.5 seconds, `COLES_DELAY_MS`). Coles protects its site with a bot check ("Pardon Our Interruption") and blocks connections that ask for too much — home connections too. Pushing on through a block only makes it last longer, so when Coles blocks, the crawl stops, remembers where it got to, and tries again 4 hours later (`BLOCKED_RETRY_HOURS`, up to 4 times), carrying on from the same page. Products are only marked unavailable once a crawl has got through the whole shop. If Coles blocks even the first request ("bot check instead of its website"), the connection itself is blocked for now; leaving it alone for a day usually clears it.
+- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days. A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
@@ -283,12 +311,14 @@ The configs above create a **3 GB** disk. Most of the space goes on IGA, because
 
 With no cap (the default), every one of the ~540 IGAs with online prices would come to about 1.1 GB, plus price history that grows slowly as prices change. Set `IGA_MAX_STORES` if you want to limit it. The Admin page shows how many IGA stores are being followed.
 
-## Scraping from the cloud
+## When a shop blocks the server
 
-Coles, IGA and Harris Farm work from cloud servers. **Woolworths and ALDI sometimes block datacentre IP addresses.** If their refreshes fail on the Admin page:
+IGA and Harris Farm work from anywhere. **Woolworths and ALDI sometimes block datacentre IP addresses**, and **Coles blocks any connection that asks for too much**, home ones included.
 
-- **Run the home collector** (above). This is the simplest dependable fix.
-- **Or use a residential proxy.** Set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
+The Admin page and the summary email say which shop failed and why. Things to try:
+- **Coles:** usually nothing. The crawl backs off and carries on later by itself. If even the first request is blocked, leave it alone for a day.
+- **Woolworths or ALDI from a cloud server:** run the home collector (above). This is the simplest dependable fix.
+- **Or use a residential proxy:** set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
 
 ## Checklist before going public
 

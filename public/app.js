@@ -59,20 +59,46 @@ async function loadConfig() {
   renderAccount();
 }
 
+/** Banners someone has closed stay closed on this device. */
+function hiddenBanner(key) {
+  try {
+    return localStorage.getItem(`banner:${key}`) === 'hidden';
+  } catch {
+    return false;
+  }
+}
+document.addEventListener('click', (e) => {
+  const close = e.target.closest('[data-close-banner]');
+  if (!close) return;
+  const key = close.dataset.closeBanner.replace('{user}', user()?.id ?? '');
+  try {
+    localStorage.setItem(`banner:${key}`, 'hidden');
+  } catch {
+    /* storage blocked: hide it for now */
+  }
+  close.closest('.banner').hidden = true;
+});
+
 function renderAccount() {
   const u = user();
   $('#admin-tab').hidden = !u?.isAdmin;
-  $('#verify-banner').hidden = !u || u.emailVerified;
+  $('#verify-banner').hidden = !u || u.emailVerified || hiddenBanner(`verify:${u.id}`);
+  // Wide screens: name, Settings and Log out. Phones: one account button with a menu.
   $('#account').innerHTML = u
-    ? `<a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
+    ? `<span class="account-wide"><a href="/settings" data-link class="who" title="Settings">${esc(u.name)}</a>
        <a href="/settings" data-link class="button small ghost">Settings</a>
-       <button class="small ghost" id="logout">Log out</button>`
+       <button class="small ghost" data-logout>Log out</button></span>
+       <details class="account-menu"><summary aria-label="Account">${esc(u.name.charAt(0).toUpperCase())}</summary>
+         <div class="menu"><div class="hint">${esc(u.name)}</div>
+           <a href="/settings" data-link class="button small ghost">Settings</a>
+           <button class="small ghost" data-logout>Log out</button></div></details>`
     : '<a href="/login" data-link class="button small">Log in</a>'
       + (state.config.allowSignups ? ' <a href="/signup" data-link class="button small primary">Sign up</a>' : '');
-  $('#logout')?.addEventListener('click', async () => {
+  $$('#account [data-logout]').forEach((b) => b.addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' });
     location.href = '/';
-  });
+  }));
+  $$('#account .menu a').forEach((a) => a.addEventListener('click', () => a.closest('details').removeAttribute('open')));
 }
 
 // ================================================================== pages & routing
@@ -640,7 +666,11 @@ $('#search-form').addEventListener('submit', (e) => {
   runSearch();
 });
 
-async function runSearch() {
+// Coles prices that were over a day old are being fetched: ask again once, a few seconds later.
+let refreshTimer = null;
+
+async function runSearch({ again = false } = {}) {
+  clearTimeout(refreshTimer);
   const seq = ++searchSeq;
   const params = new URLSearchParams({
     q: $('#q').value.trim(),
@@ -651,6 +681,10 @@ async function runSearch() {
   const box = $('#results');
   // Nothing searched or filtered: the home page.
   if (!params.get('q') && !params.get('store') && !params.get('specials')) return renderHome(seq);
+  // Grey outlines while the first results load (later searches keep the old results until the new ones arrive).
+  setTimeout(() => {
+    if (seq === searchSeq && !box.querySelector('.row, .best-price')) box.innerHTML = skeleton(4);
+  }, 200);
   try {
     // The cheapest of it, any brand (only for a plain search across all shops).
     const wantBest = params.get('q') && !params.get('store') && !params.get('specials');
@@ -659,6 +693,11 @@ async function runSearch() {
       wantBest ? api(withIga(`/api/best-price?${new URLSearchParams({ q: params.get('q') })}`)).catch(() => null) : null,
     ]);
     if (seq !== searchSeq) return;
+    if (best?.refreshing && !again) {
+      refreshTimer = setTimeout(() => {
+        if (seq === searchSeq) runSearch({ again: true });
+      }, 6000);
+    }
     const bestHtml = renderBestPrice(best);
     if (!groups.length) {
       box.innerHTML = bestHtml || '<div class="empty">No matching products.</div>';
@@ -740,38 +779,65 @@ $('#results').addEventListener('click', (e) => {
 
 const perUnitText = (p) => (p.perUnit != null ? `${money(p.perUnit)}/${esc(p.unitWord)}` : '');
 
+/**
+ * Price per kg, L or item, worked out the same way for every shop (their own
+ * texts differ: "$0.81 / 1EA", "$4.90/ 1kg"…). Falls back to the shop's text.
+ */
+function unitText(p) {
+  const price = shownPrice(p);
+  if (price == null) return '';
+  if (p.per_weight) return p.size_unit === 'ea' ? '' : `${money(price)}/kg`;
+  if (p.size_qty > 0 && p.size_unit === 'g') return `${money((price / p.size_qty) * 1000)}/kg`;
+  if (p.size_qty > 0 && p.size_unit === 'ml') return `${money((price / p.size_qty) * 1000)}/L`;
+  if (p.size_qty > 1 && p.size_unit === 'ea') return `${money(price / p.size_qty)}/item`;
+  return p.size_qty ? '' : esc(p.unit_price_text || '');
+}
+
+// Short enough for five across a phone screen.
+const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.' };
+
 function renderBestPrice(b) {
   if (!b || !b.groups?.length) return '';
   const what = esc(b.query.replace(/\s+/g, ' '));
+  // The first few type chips, then "+N" for the rest.
+  const CHIPS = 4;
   const chips = b.variants?.length
-    ? `<div class="variant-chips"><span class="hint">${b.mixed ? 'All types shown. Just:' : `Regular ${esc(b.query.replace(/\b\d.*?\b(ml|l|g|kg|pack)\b/gi, '').trim())} shown. Or:`}</span>
-        ${b.variants.map((v) => `<button type="button" class="chip" data-narrow="${esc(v.word)}">${esc(v.label)}</button>`).join('')}</div>`
+    ? `<div class="variant-chips">${b.mixed ? '<span class="hint">All types shown. Just:</span>' : ''}
+        ${b.variants.map((v, i) => `<button type="button" class="chip" data-narrow="${esc(v.word)}" ${i >= CHIPS ? 'hidden data-more' : ''}>${esc(v.label)}</button>`).join('')}
+        ${b.variants.length > CHIPS ? `<button type="button" class="chip ghost" data-show-more>+${b.variants.length - CHIPS}</button>` : ''}</div>`
     : '';
   if (b.size) {
     const g = b.groups[0];
     const [top, ...rest] = g.products;
     const stores = state.allStores.filter((s) => g.cheapestPerStore?.[s]);
+    const low = Math.min(...stores.map((s) => g.cheapestPerStore[s].price));
+    const SHOWN = 4;
+    const noun = esc(b.query.replace(/\b\d\S*\s*(ml|l|g|kg|pack)?\b/gi, '').trim());
     return `<section class="best-price">
-      <h2>Cheapest ${what} <span class="hint">${plural(g.count, 'product')} compared, any brand</span></h2>
+      <h2>Cheapest ${esc(niceQuery(b.query.replace(/\s+/g, ' ')))}</h2>
+      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
       ${chips}
-      <div class="best-top">
+      <div class="bp-top">
         ${thumb(top)}
-        <div class="best-main">
-          <a href="#" class="deal-name" data-product="${top.id}">${esc(top.name)}</a>
-          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}${top.size_text ? ` · ${esc(top.size_text)}` : ''}</div>
-          <div><span class="price big">${money(top.price)}</span> <span class="hint">${perUnitText(top)}</span> ${dealBadges(top)}</div>
-        </div>
-        <div class="actions"><button class="add small primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
-          <button class="add small" data-add="${top.id}">+ This one</button></div>
+        <div class="bp-name"><a href="#" class="plain-link" data-product="${top.id}">${esc(top.name)}</a>
+          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}</div></div>
+        <div class="bp-price"><span class="price big">${money(top.price)}</span><span class="hint">${perUnitText(top)}</span>${dealBadges(top)}</div>
       </div>
-      ${rest.length ? `<ol class="best-rest" start="2">${rest.map((p) => `<li>
-        <span>${dot(p.store)}<a href="#" data-product="${p.id}">${esc(p.name)}</a></span>
-        <span class="best-rest-price">${money(p.price)} <button class="add small" data-add="${p.id}">+ List</button></span></li>`).join('')}</ol>` : ''}
-      ${stores.length > 1 ? `<div class="per-store hint">Cheapest at each shop: ${stores.map((s) => `${dot(s)}${esc(storeName(s))} ${money(g.cheapestPerStore[s].price)}`).join(' · ')}</div>` : ''}
+      <div class="bp-add"><button class="add primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
+        <button class="add" data-add="${top.id}">+ This one</button></div>
+      ${stores.length > 1 ? `<div class="bp-shops">${stores.map((s) => `<div class="${g.cheapestPerStore[s].price <= low + 0.004 ? 'win' : ''}">
+        <span>${esc(SHORT_STORE[s] || storeName(s))}</span><b>${money(g.cheapestPerStore[s].price)}</b></div>`).join('')}</div>` : ''}
+      ${rest.length ? `<ol class="bp-rank">${rest.map((p, i) => `<li ${i >= SHOWN ? 'hidden data-more' : ''}>
+        <span class="bp-n">${i + 2}</span>
+        <div class="bp-row-name" data-product="${p.id}"><div>${esc(p.name)}</div><small>${dot(p.store)}${esc(storeName(p.store))}</small></div>
+        <div class="bp-row-price">${money(p.price)}<small>${perUnitText(p)}</small></div>
+        <button class="add round" data-add="${p.id}" aria-label="Add ${esc(p.name)} to the list">+</button></li>`).join('')}</ol>
+        ${rest.length > SHOWN ? `<button type="button" class="linkish bp-more" data-show-more>Show ${rest.length - SHOWN} more ▾</button>` : ''}` : ''}
     </section>`;
   }
   return `<section class="best-price">
-    <h2>Cheapest ${what} by size <span class="hint">any brand</span></h2>
+    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : 'by size <span class="hint">any brand</span>'}</h2>
+    ${b.refreshing ? '<div class="hint"><span class="state pending">Checking Coles for today’s prices…</span></div>' : ''}
     ${chips}
     <div class="size-cards">${b.groups.map((g) => {
       const p = g.products[0];
@@ -780,6 +846,8 @@ function renderBestPrice(b) {
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
         <div class="hint">${dot(p.store)}${esc(storeName(p.store))}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
+        ${b.produce && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
+          .map((s) => `${dot(s)}${esc(storeName(s))} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
         <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
           <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
           ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
@@ -790,6 +858,13 @@ function renderBestPrice(b) {
 
 // Narrow a search: a type ("lactose free") or a size ("2L").
 $('#results').addEventListener('click', (e) => {
+  const more = e.target.closest('[data-show-more]');
+  if (more) {
+    more.parentElement.closest('section, .variant-chips').querySelectorAll(more.closest('.variant-chips') ? '.chip[data-more]' : 'li[data-more]')
+      .forEach((el) => { el.hidden = false; });
+    more.remove();
+    return;
+  }
   const narrow = e.target.closest('[data-narrow]');
   const size = e.target.closest('[data-size-search]');
   if (!narrow && !size) return;
@@ -799,11 +874,18 @@ $('#results').addEventListener('click', (e) => {
   runSearch();
 });
 
+const NO_IMAGE = '<div class="thumb none" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8h14l-1.4 11.2a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>';
+
 function thumb(p) {
   return p.image_url
     ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-    : '<div class="thumb none">no image</div>';
+    : NO_IMAGE;
 }
+
+// A product photo that won't load gets the same placeholder (inline onerror isn't allowed by the page's security policy).
+document.addEventListener('error', (e) => {
+  if (e.target.matches?.('img.thumb')) e.target.outerHTML = NO_IMAGE;
+}, true);
 
 /** Is this shopper a member of the store's loyalty scheme (so member prices apply)? */
 const isMember = (store) => !!user()?.memberships?.includes(store);
@@ -827,7 +909,7 @@ function priceCell(store, match, cheapest, anchor) {
   const price = shownPrice(p);
   return `<div class="cell ${store === cheapest ? 'cheapest' : ''}">${label}
     <span><span class="price">${money(price)}</span>${p.was_price ? `<span class="was">${money(p.was_price)}</span>` : price < p.price ? `<span class="was">${money(p.price)}</span>` : ''}
-    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${esc(p.unit_price_text || '')}</span>
+    <span class="unit">${store === cheapest ? '<span class="badge cheap">✓ Cheapest</span>' : ''}${p.on_special ? '<span class="badge special">Special</span>' : ''}${unitText(p)}</span>
     ${dealBadges(p)}${alt}</span>
   </div>`;
 }
@@ -857,7 +939,8 @@ function insightNote(ins, { always = false } = {}) {
 function valueHint(bv, itemId = null) {
   if (!bv) return '';
   const p = bv.product;
-  return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !p.name.includes(p.size_text) ? ` ${esc(p.size_text)}` : ''}</a>
+  const squash = (x) => String(x || '').toLowerCase().replace(/\s+/g, '');
+  return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !squash(p.name).includes(squash(p.size_text)) ? ` ${esc(p.size_text)}` : ''}</a>
     at ${esc(storeName(p.store))} is <strong>${bv.savingPct}% cheaper per ${esc(bv.unit)}</strong> (${money(bv.perUnit)} vs ${money(bv.basePerUnit)}).
     ${itemId ? `<button type="button" class="small" data-swap-item="${itemId}" data-swap-to="${p.id}">Swap to this</button>` : ''}</div>`;
 }
@@ -872,6 +955,10 @@ function renderGroup(g) {
       <span class="meta">${esc(a.size_text || '')} · ${n > 1 ? `${n} equivalent products` : 'no equivalents found'}</span>
     </div>
     ${state.stores.map((s) => priceCell(s, g.best[s], g.cheapest, a)).join('')}
+    ${(() => {
+      const missing = state.stores.filter((s) => !g.best[s]);
+      return missing.length && missing.length < state.stores.length ? `<div class="missing-shops hint">Not at ${missing.map((s) => esc(storeName(s))).join(', ')}</div>` : '';
+    })()}
     <button class="add small" data-add="${a.id}">+ List</button>
     ${valueHint(g.betterValue)}
   </div>`;
@@ -960,7 +1047,7 @@ async function openProduct(id) {
         <td>${dot(x.store)} ${esc(storeName(x.store))}</td>
         <td><a href="#" data-product="${x.id}">${esc(x.name)}</a> ${x.on_special ? '<span class="tag-special">SPECIAL</span>' : ''} ${dealBadges(x)}</td>
         <td class="num">${money(shownPrice(x))}</td>
-        <td class="num">${esc(x.unit_price_text || '')}</td>
+        <td class="num">${unitText(x)}</td>
         <td class="num">${x.via === 'barcode' ? '<span title="Same barcode">barcode</span>' : x.via === 'confirmed' ? 'confirmed' : `${Math.round(x.score * 100)}%`}</td>
         <td class="row-actions"><button class="small" data-add="${x.id}">+ List</button>
           ${x.id !== p.id ? `<button class="small ghost" data-report="${x.id}" data-anchor="${p.id}" title="These aren’t the same product">Wrong match?</button>` : ''}</td></tr>`).join('')}</tbody>
@@ -1139,8 +1226,14 @@ async function refreshListCount() {
   if (l) $('#list-count').textContent = l.item_count;
 }
 
+/** Grey outlines of `n` cards, shown while something loads. */
+function skeleton(n = 3) {
+  return `<div class="skeleton" aria-busy="true" aria-label="Loading">${'<div class="skel-card"><div class="skel w60"></div><div class="skel w40"></div><div class="skel w80"></div></div>'.repeat(n)}</div>`;
+}
+
 async function loadList() {
   const root = $('#list-root');
+  if (user() && !root.children.length) root.innerHTML = skeleton(3);
   if (!user()) {
     root.innerHTML = `<div class="empty">
       <p>Log in to build shopping lists. You can share a list with your household so everyone can add to it.</p>
@@ -1195,17 +1288,17 @@ function renderList() {
         <select id="list-select" aria-label="Shopping list">
           ${state.lists.map((l) => `<option value="${l.id}" ${l.id === L.id ? 'selected' : ''}>${esc(l.name)}${l.member_count > 1 ? ' (shared)' : ''}</option>`).join('')}
         </select>
-        <button class="small ghost" id="new-list">+ New list</button>
-        <button class="small ghost" id="rename-list">Rename</button>
-        ${isOwner ? '<button class="small ghost" id="delete-list">Delete</button>' : '<button class="small ghost" id="leave-list">Leave</button>'}
-      </div>
-      <div class="actions">
-        <button class="small" id="share-list">Share${others.length ? ` · ${others.length + 1} people` : ''}</button>
-        <button class="small" id="snapshots-btn">Saved shops</button>
-        <button class="small" id="spending-btn">Spending</button>
-        <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear</button>
         <button class="small" id="shop-mode" ${L.items.length ? '' : 'disabled'}>🛒 In the shop</button>
-        <button class="primary" id="order-btn" ${L.items.length ? '' : 'disabled'}>Order cheapest</button>
+        <details class="list-menu"><summary class="button small" aria-label="More list options">⋯</summary>
+          <div class="menu">
+            <button class="small ghost" id="share-list">Share${others.length ? ` · ${others.length + 1} people` : ''}</button>
+            <button class="small ghost" id="snapshots-btn">Saved shops</button>
+            <button class="small ghost" id="spending-btn">Spending</button>
+            <button class="small ghost" id="new-list">+ New list</button>
+            <button class="small ghost" id="rename-list">Rename</button>
+            ${isOwner ? '<button class="small ghost" id="delete-list">Delete list</button>' : '<button class="small ghost" id="leave-list">Leave list</button>'}
+            <button class="small ghost" id="clear-list" ${L.items.length ? '' : 'disabled'}>Clear all items</button>
+          </div></details>
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
@@ -1215,8 +1308,9 @@ function renderList() {
       <button class="small ghost" type="button" id="quick-note" title="Add exactly what you typed, without looking for a product">Add as note</button>
       <button class="small ghost" type="button" id="paste-list">Paste a list</button>
     </form>
-    ${renderStorePanel(L)}
     <div id="items">${L.items.length ? L.items.map(renderItem).join('') : '<div class="empty">This list is empty. Search on the <a href="#" data-goto="compare">Compare</a> tab and press “+ List”, or add a <button type="button" class="linkish" id="snapshots-empty">saved shop</button>.</div>'}</div>
+    ${L.items.length ? totalBar(L) : ''}
+    ${renderStorePanel(L)}
     ${L.items.length ? renderSummary(L) : ''}`;
 }
 
@@ -1797,16 +1891,45 @@ function storeToggle(s, on, note) {
   </label>`;
 }
 
+// ------------------------------------------------------------------ list items
+// Each item is one card: what it is, the shop to buy it at and that price,
+// the other shops' prices on one line, and an Options panel (opened one at a
+// time) with the matching, "buy at" and per-shop choices.
+
+state.openItem = null; // the item whose Options are open
+
+/** "milk 2l" → "Milk 2L": a search, written as a title. */
+const niceQuery = (q) => String(q).replace(/^./, (c) => c.toUpperCase())
+  .replace(/(\d)\s*(ml|l|kg|g)\b/gi, (m, n, u) => n + ({ ml: 'mL', l: 'L', kg: 'kg', g: 'g' }[u.toLowerCase()]));
+
+const MODE_NOTE = { similar: 'any brand', exact: 'same brand only', this: 'this exact product' };
+
+function stepper(qty) {
+  return `<div class="stepper" role="group" aria-label="Quantity">
+    <button type="button" data-step="-1" aria-label="One less" ${qty <= 1 ? 'disabled' : ''}>−</button>
+    <span>${qty}</span>
+    <button type="button" data-step="1" aria-label="One more" ${qty >= 99 ? 'disabled' : ''}>+</button></div>`;
+}
+
+function itemFoot(it, left = '') {
+  const open = state.openItem === it.id;
+  return `<div class="item-foot"><span class="hint">${left}</span>
+    <button type="button" class="linkish" data-toggle-item aria-expanded="${open}">${open ? 'Close ▴' : 'Options ▾'}</button></div>`;
+}
+
 function renderNoteItem(it) {
   const L = state.list;
-  return `<div class="item note-item" data-item="${it.id}">
+  const open = state.openItem === it.id;
+  return `<div class="item note-item ${open ? 'open' : ''}" data-item="${it.id}">
     <div class="item-top">
       <div class="name"><strong>${esc(it.note)}</strong>
-        <div class="meta">Note — not priced${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
-      <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
-      <button class="small" data-find-note>Find a product</button>
-      <button class="small ghost" data-remove>Remove</button>
+        <div class="meta">Note${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
+      ${stepper(it.quantity)}
     </div>
+    ${open ? `<div class="item-options"><div class="actions">
+      <button class="small" data-find-note>Find a product</button>
+      <button class="small ghost" data-remove>Remove</button></div></div>` : ''}
+    ${itemFoot(it)}
   </div>`;
 }
 
@@ -1814,48 +1937,105 @@ function renderItem(it) {
   if (it.note != null) return renderNoteItem(it);
   const a = it.anchor;
   const L = state.list;
-  return `<div class="item" data-item="${it.id}">
+  const open = state.openItem === it.id;
+  const cheapestMode = it.matchMode === 'cheapest';
+  const title = cheapestMode ? `${niceQuery(it.query)}, any brand` : a.name;
+  const meta = [
+    cheapestMode ? '🔄 Cheapest pick updates as prices change' : [a.size_text, MODE_NOTE[it.matchMode]].filter(Boolean).map(esc).join(' · '),
+    !a.available ? '<span class="warn">no longer available</span>' : '',
+    it.addedBy && L.members.length > 1 ? `added by ${esc(it.addedBy)}` : '',
+    it.checkedAt ? '<span class="saving">✓ ticked</span>' : '',
+  ].filter(Boolean).join(' · ');
+
+  // Where to buy it, and what the other shops charge.
+  const priced = L.included.map((s) => ({ s, ps: it.perStore[s] })).filter(({ ps }) => ps?.product && !ps.excluded);
+  const win = it.cheapest && it.perStore[it.cheapest]?.product ? it.cheapest : null;
+  const winP = win ? it.perStore[win].product : null;
+  let tag = '';
+  if (win) {
+    if (it.pin?.honoured && it.pinnedStore === win) tag = '<span class="tag pin">📌 Always here</span>';
+    else if (priced.length === 1) tag = '<span class="tag warn">Only here</span>';
+    else tag = '<span class="tag good">Cheapest</span>';
+  }
+  const others = priced.filter(({ s }) => s !== win)
+    .map(({ s, ps }) => ({ s, cost: lineCost(ps.product, it.quantity) }))
+    .sort((x, y) => x.cost - y.cost)
+    .map(({ s, cost }) => `${esc(storeName(s))} <b>${money(cost)}</b>`);
+  const missing = L.included.filter((s) => !priced.some((x) => x.s === s)).map(storeName);
+  const otherLine = [
+    it.pin?.honoured && it.pin.extra > 0.004 ? `${money(it.pin.extra)} more than ${esc(storeName(it.pin.cheapest))}` : '',
+    it.quantity > 1 && winP ? `${it.quantity} × ${money(shownPrice(winP))}` : '',
+    ...others,
+    missing.length ? `not at ${missing.map(esc).join(', ')}` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `<div class="item ${open ? 'open' : ''}" data-item="${it.id}">
     <div class="item-top">
-      <div class="name" data-product="${a.id}"><strong>${esc(a.name)}</strong>
-        ${it.matchMode === 'cheapest' ? `<div class="meta cheapest-item">🔄 Cheapest ${esc(it.query)}, any brand — picks itself as prices change</div>` : ''}
-        <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
-      <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
-      <select data-mode aria-label="Matching">
-        ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
-        <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
-        <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
-        <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
-      </select>
-      <select data-pin aria-label="Which shop to buy it at">
-        <option value="" ${!it.pinnedStore ? 'selected' : ''}>Buy at: cheapest shop</option>
-        ${state.allStores.map((s) => `<option value="${s}" ${it.pinnedStore === s ? 'selected' : ''}>Always buy at ${esc(storeName(s))}</option>`).join('')}
-      </select>
-      <button class="small ghost" data-remove>Remove</button>
+      <div class="name" data-product="${a.id}"><strong>${esc(title)}</strong><div class="meta">${meta}</div></div>
+      ${stepper(it.quantity)}
     </div>
-    <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
-    ${pinNote(it)}
+    ${win ? `<div class="best-line">${dot(win)}<span class="shop">${esc(storeName(win))}</span>${tag}${dealBadges(winP)}
+      <span class="best-amount">${money(lineCost(winP, it.quantity))}</span></div>`
+    : '<div class="best-line"><span class="warn">Not found at the shops on this list</span></div>'}
+    ${otherLine ? `<div class="other-prices">${otherLine}</div>` : ''}
+    ${it.pin && !it.pin.honoured ? pinNote(it) : ''}
     ${insightNote(it.priceInsight)}
     ${valueHint(it.betterValue, it.id)}
+    ${open ? renderOptions(it) : ''}
+    ${itemFoot(it, cheapestMode && !open && winP ? esc(winP.name) : '')}
   </div>`;
 }
 
-function renderPick(it, store, enabled) {
-  const ps = it.perStore[store] || { candidates: [] };
-  const win = it.cheapest === store;
-  const p = ps.product;
-  const opts = [
-    `<option value="auto" ${!ps.manual && !ps.excluded ? 'selected' : ''}>Auto: cheapest match</option>`,
-    ...ps.candidates.map((c) => `<option value="${c.id}" ${ps.manual && p?.id === c.id ? 'selected' : ''}>${esc(c.name)} — ${money(shownPrice(c))}</option>`),
-    ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}" selected>${esc(p.name)} — ${money(shownPrice(p))}</option>`] : []),
-    `<option value="exclude" ${ps.excluded ? 'selected' : ''}>Don't buy here</option>`,
-  ];
-  return `<div class="pick ${win ? 'win' : ''} ${ps.excluded || !enabled ? 'excluded' : ''}">
-    <div class="ph"><span class="store">${dot(store)}${esc(storeName(store))}</span>
-      <span class="price">${p && !ps.excluded ? money(lineCost(p, it.quantity)) : '—'}</span></div>
-    <span class="pname" title="${esc(p?.name || '')}">${!enabled ? 'Shop excluded' : ps.excluded ? 'Excluded' : p ? `${esc(p.name)}${win ? (it.pin?.honoured && it.pinnedStore === store ? ' · <strong>📌 buying here</strong>' : ' · <strong class="saving">cheapest</strong>') : ''}` : 'No match found'}</span>
-    ${p && !ps.excluded ? dealBadges(p) : ''}
-    ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">Wrong match?</button>` : ''}
-    <select data-pick="${store}" aria-label="${esc(storeName(store))} product">${opts.join('')}</select>
+/** The opened item: matching, "buy at", and each shop's pick. */
+function renderOptions(it) {
+  const L = state.list;
+  const rows = state.allStores.map((s) => {
+    const ps = it.perStore[s] || { candidates: [] };
+    const p = ps.product;
+    const enabled = L.included.includes(s);
+    const win = it.cheapest === s;
+    const what = !enabled ? 'Not used on this list' : ps.excluded ? 'Not buying here' : p ? esc(p.name) : 'No match found';
+    const opts = [
+      '<option value="" selected disabled>Change</option>',
+      `<option value="auto">Auto: cheapest match${!ps.manual && !ps.excluded ? ' ✓' : ''}</option>`,
+      ...ps.candidates.map((c) => `<option value="${c.id}">${esc(c.name)} — ${money(shownPrice(c))}${ps.manual && p?.id === c.id ? ' ✓' : ''}</option>`),
+      ...(ps.manual && p && !ps.candidates.some((c) => c.id === p.id) ? [`<option value="${p.id}">${esc(p.name)} — ${money(shownPrice(p))} ✓</option>`] : []),
+      `<option value="exclude">Don't buy here${ps.excluded ? ' ✓' : ''}</option>`,
+    ];
+    return `<div class="pick-row ${win ? 'win' : ''} ${!enabled || ps.excluded || !p ? 'off' : ''}">
+      ${dot(s)}<span class="pick-name"><b>${esc(storeName(s))}</b> · ${what}${ps.manual ? ' <span class="hint">(your pick)</span>' : ''}
+        ${p && !ps.excluded && !ps.manual && p.id !== it.anchor.id ? `<button type="button" class="linkish small-link" data-report="${p.id}" data-anchor="${it.anchor.id}">wrong?</button>` : ''}</span>
+      <span class="pick-price">${p && !ps.excluded && enabled ? money(lineCost(p, it.quantity)) : '—'}</span>
+      ${enabled ? `<select class="pick-change" data-pick="${s}" aria-label="Change the ${esc(storeName(s))} product">${opts.join('')}</select>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="item-options">
+    <label>Match<select data-mode aria-label="Matching">
+      ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
+      <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
+      <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
+      <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
+    </select></label>
+    <label>Buy at<select data-pin aria-label="Which shop to buy it at">
+      <option value="" ${!it.pinnedStore ? 'selected' : ''}>Whichever shop is cheapest</option>
+      ${state.allStores.map((s) => `<option value="${s}" ${it.pinnedStore === s ? 'selected' : ''}>Always ${esc(storeName(s))}</option>`).join('')}
+    </select></label>
+    <div class="pick-rows">${rows}</div>
+    <div class="actions"><button class="small ghost" data-product="${it.anchor.id}">Price history</button>
+      <button class="small ghost" data-remove style="margin-left:auto">Remove</button></div>
+  </div>`;
+}
+
+/** Always in view at the bottom of a list: the total and the order button. */
+function totalBar(L) {
+  const complete = state.allStores.map((s) => L.singleStore[s]).filter((x) => x && !x.missing);
+  const best = complete.length ? Math.min(...complete.map((x) => x.total)) : null;
+  const saves = best != null ? best - L.plan.total : 0;
+  const shops = state.allStores.filter((s) => L.plan.byStore[s]?.items.length).length;
+  return `<div class="total-bar">
+    <div><div class="total-bar-total">${money(L.plan.total)}</div>
+      <div class="hint">${saves > 0.004 ? `<span class="saving">Saves ${money(saves)} vs all at one shop</span>` : `${plural(L.items.length, 'item')} · ${plural(shops, 'shop')}`}</div></div>
+    <button class="primary" id="order-btn">Order cheapest</button>
   </div>`;
 }
 
@@ -1956,6 +2136,7 @@ $('#list-root').addEventListener('change', async (e) => {
 
 $('#list-root').addEventListener('click', async (e) => {
   const t = e.target;
+  if (t.closest('.list-menu .menu')) t.closest('details').removeAttribute('open');
   if (t.dataset.resetLayout) {
     if (!confirm('Go back to the usual section order for this shop? It will start learning again from your next trips.')) return;
     await api(`/api/me/shop-layouts/${t.dataset.resetLayout}`, { method: 'DELETE' });
@@ -1982,9 +2163,34 @@ $('#list-root').addEventListener('click', async (e) => {
     }
     return;
   }
+  // Options: one item open at a time.
+  const toggle = t.closest('[data-toggle-item]');
+  if (toggle) {
+    const id = Number(toggle.closest('[data-item]').dataset.item);
+    state.openItem = state.openItem === id ? null : id;
+    renderList();
+    return;
+  }
+  const step = t.closest('[data-step]');
+  if (step) {
+    const id = Number(step.closest('[data-item]').dataset.item);
+    const it = state.list.items.find((x) => x.id === id);
+    const quantity = Math.min(99, Math.max(1, it.quantity + Number(step.dataset.step)));
+    if (quantity === it.quantity) return;
+    it.quantity = quantity;
+    step.parentElement.querySelector('span').textContent = quantity; // straight away; prices follow
+    try {
+      await api(`/api/items/${id}`, { method: 'PATCH', body: { quantity } });
+      return loadList();
+    } catch (err) {
+      return toast(err.message);
+    }
+  }
   try {
     if (t.matches('[data-remove]')) {
-      await api(`/api/items/${t.closest('[data-item]').dataset.item}`, { method: 'DELETE' });
+      const id = Number(t.closest('[data-item]').dataset.item);
+      if (state.openItem === id) state.openItem = null;
+      await api(`/api/items/${id}`, { method: 'DELETE' });
       return loadList();
     }
     if (t.matches('[data-swap-item]')) {
@@ -2306,12 +2512,23 @@ function adminStoreTiles(o) {
       const status = s.status.running
         ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
         : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
+      const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : '';
       return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
         <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
         <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
           : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>`;
+}
+
+/** Coles in steady mode: what it's up to. */
+function colesSteadyNote(c) {
+  const parts = [`${c.lastHour} of ${c.perHour} requests in the last hour`];
+  if (c.specials) parts.push(`specials ${c.specials.done}/${c.specials.of} pages today`);
+  if (c.pass) parts.push(`whole shop ${c.pass.of ? Math.round((c.pass.done / c.pass.of) * 100) : 0}% (started ${fmtDate(c.pass.startedAt)})`);
+  else if (c.lastPassAt) parts.push(`whole shop last done ${fmtDate(c.lastPassAt)}`);
+  if (c.waiting) parts.push(`${c.waiting} searches waiting`);
+  return `<br><span class="hint">Steady refresh: ${parts.join(' · ')}</span>${c.blockedUntil ? `<br><span class="warn">Paused by a Coles bot check until ${new Date(c.blockedUntil).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })}</span>` : ''}`;
 }
 
 function adminIgaCheck(o) {
@@ -2680,8 +2897,8 @@ $('#admin-root').addEventListener('click', async (e) => {
   }
   const stores = t.id === 'scrape-all' ? state.allStores : t.dataset.scrape ? [t.dataset.scrape] : null;
   if (!stores) return;
-  await api('/api/admin/scrape', { method: 'POST', body: { stores } });
-  toast('Refresh started');
+  const res = await api('/api/admin/scrape', { method: 'POST', body: { stores } });
+  toast(res.colesSteady ? (res.started.length ? 'Refresh started — Coles starts a new steady pass' : 'Coles starts a new steady pass (a page every couple of minutes)') : 'Refresh started');
   watchAdminProgress(500);
 });
 $('#admin-root').addEventListener('change', async (e) => {

@@ -39,7 +39,27 @@ export const VARIANT_WORDS = new Set([
   'double', 'crunchy', 'smooth', 'frozen', 'kids', 'baby', 'toddler', 'mini', 'thin', 'thick', 'boneless', 'skinless', 'mince', 'diced', 'half', 'brown', 'red', 'green',
   'black', 'longlife', 'unscented', 'sensitive', 'concentrate', 'concentrated', 'refill', 'cage', 'freerange', 'barn',
   '1%', '2%', 'a2', 'flavoured', 'iced', 'coffee', 'powder', 'whitener', 'creamer', 'sauce', 'spread', 'crumbs', 'flour',
+  'dried',
 ]);
+
+// Words that often end a name without being what it is: "Bread Original",
+// "Eggs Medium", "Chicken Breast Fillets", "Bananas Each".
+export const DESCRIPTORS = new Set([
+  'original', 'classic', 'regular', 'standard', 'premium', 'family', 'size', 'loose', 'fresh', 'australian', 'variety', 'multi',
+  'small', 'medium', 'large', 'jumbo', 'xl', 'prepacked', 'prepack', 'punnet', 'bunch', 'dozen', 'tub', 'pat', 'roll', 'loaf',
+  'fillet', 'steak', 'piece', 'portion', 'strip', 'each', 'per', 'kg', 'approx', 'pack', 'bag', 'eco',
+]);
+
+export const sameWord = (t, w) => t === w || t === `${w}s` || w === `${t}s` || t === `${w}es` || w === `${t}es`;
+
+/**
+ * Is one of `words` what the product *is* — among the last `n` words of its
+ * name, descriptors aside? "Bananas Each" is bananas; "Banana Bread" isn't.
+ */
+export function namedFor(p, words, n = 1) {
+  const toks = [...nameTokens(p.name, null)].filter((t) => !DESCRIPTORS.has(t));
+  return toks.slice(-n).some((t) => [...words].some((w) => sameWord(t, w)));
+}
 
 export const MATCH_THRESHOLD = 0.75;
 

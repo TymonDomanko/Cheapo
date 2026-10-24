@@ -15,12 +15,13 @@ import {
 } from './auth.js';
 import * as lists from './lists.js';
 import * as iga from './iga.js';
-import { siteUrl, mailConfigured, siteName, sendMail, emailHtml } from './mailer.js';
+import { siteUrl, mailConfigured, siteName, sendMail, emailHtml, escapeHtml } from './mailer.js';
 import * as backup from './backup.js';
 import * as settings from './settings.js';
 import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
+import * as colesLive from './coles-live.js';
 import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
@@ -76,7 +77,10 @@ const h = (fn) => async (req, res) => {
 function versionedIndex() {
   const pub = path.resolve('public');
   const tag = (file) => crypto.createHash('sha256').update(fs.readFileSync(path.join(pub, file))).digest('hex').slice(0, 10);
+  const name = escapeHtml(siteName());
   return fs.readFileSync(path.join(pub, 'index.html'), 'utf8')
+    .replace('<title>Cheapo</title>', `<title>${name}</title>`) // SITE_NAME
+    .replace('<span class="brand-text">Cheapo</span>', `<span class="brand-text${name === 'Cheapo' ? ' bang' : ''}">${name}</span>`)
     .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
 }
@@ -109,6 +113,10 @@ export function createApp() {
   const indexHtml = versionedIndex();
   const spa = (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
   app.get('/', spa);
+  // The installable-app details, with the site's name.
+  const manifest = JSON.parse(fs.readFileSync(path.resolve('public/manifest.webmanifest'), 'utf8'));
+  manifest.name = siteName();
+  app.get('/manifest.webmanifest', (req, res) => res.set('Cache-Control', 'no-cache').type('application/manifest+json').send(JSON.stringify(manifest)));
   app.use(express.static(path.resolve('public'), { index: false, setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
   // Libraries only change when the app is upgraded, so browsers may keep them for a day.
   const vendor = { maxAge: '1d' };
@@ -173,17 +181,26 @@ export function createApp() {
       limit: Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
+    // Coles prices over a day old: fetch Coles' own results for this search now.
+    colesLive.refreshForSearch(q, groups.flatMap((g) => (g.members || []).map((m) => m.product?.id ?? m.id)).filter(Boolean));
     // The page shows how many equivalents there are, not each one; leave them out to keep this small.
     return groups.map(({ members, ...g }) => ({ ...g, memberCount: members.length }));
   }));
 
   // The cheapest of what was searched for, any brand: by size, or for the size asked for.
-  app.get('/api/best-price', searchLimit, h((req) => bestPrices(String(req.query.q || '').slice(0, 100), {
-    stores: req.user?.preferredStores,
-    igaStore: igaFor(req),
-    memberships: req.user?.memberships || [],
-    alcohol: wantsAlcohol(req),
-  })));
+  app.get('/api/best-price', searchLimit, h((req) => {
+    const q = String(req.query.q || '').slice(0, 100);
+    const best = bestPrices(q, {
+      stores: req.user?.preferredStores,
+      igaStore: igaFor(req),
+      memberships: req.user?.memberships || [],
+      alcohol: wantsAlcohol(req),
+    });
+    if (!best) return best;
+    // Over a day old at Coles? Fresher prices are being fetched: the page asks again in a moment.
+    const ids = best.groups.flatMap((g) => g.products.map((p) => p.id));
+    return { ...best, refreshing: colesLive.refreshForSearch(q, ids) };
+  }));
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {
@@ -510,6 +527,7 @@ export function createApp() {
     const d = getDb();
     return {
       version: APP_VERSION,
+      colesLive: colesLive.status(),
       stores: STORES.map((s) => ({
         store: s,
         products: d.prepare('SELECT COUNT(*) n FROM products WHERE store = ? AND available = 1').get(s).n,
@@ -539,9 +557,12 @@ export function createApp() {
 
   app.post('/api/admin/scrape', requireAdmin, h((req) => {
     const wanted = Array.isArray(req.body?.stores) ? req.body.stores.filter((s) => serverStores().includes(s)) : serverStores();
-    const stores = wanted.filter((s) => !scrapeStatus[s].running);
+    // Coles in steady mode: start its whole-shop pass again rather than crawl it all at once.
+    const steady = colesLive.enabled() && wanted.includes('coles');
+    if (steady) colesLive.restartPass();
+    const stores = wanted.filter((s) => !scrapeStatus[s].running && !(steady && s === 'coles'));
     scrapeAll(stores).catch(() => {});
-    return { started: stores };
+    return { started: stores, colesSteady: steady };
   }));
 
   // Site settings (email, site details, home collector). .env values win and can't be changed here.

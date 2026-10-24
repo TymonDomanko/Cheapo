@@ -2,7 +2,7 @@
 # A persistent disk needs a paid instance type (Starter or above).
 services:
   - type: web
-    name: grocery-compare
+    name: cheapo
     runtime: docker
     plan: starter
     region: singapore

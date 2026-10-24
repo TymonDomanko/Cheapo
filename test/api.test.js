@@ -1102,3 +1102,25 @@ test('the page asks for its script by content, so updates are never hidden by a 
     assert.equal(js.headers.get('cache-control'), 'no-cache');
   }
 });
+
+test('fruit and veg: bananas, not banana bread, compared by the kilo and each', async () => {
+  upsertProducts('aldi', [{ store_product_id: 'ban1', name: 'Testfruit Bananas per kg', category: 'Fruits & Vegetables', price: 4.49 }]);
+  upsertProducts('coles', [
+    { store_product_id: 'ban2', name: 'Coles Testfruit Bananas', size_text: 'approx. 170g', category: 'Fruit', price: 0.83 },
+    { store_product_id: 'ban3', name: 'Testfruit Banana Bread', size_text: '1kg', category: 'Bakery', price: 7.99 },
+  ]);
+  upsertProducts('harrisfarm', [
+    { store_product_id: 'ban4', name: 'Testfruit Banana Each', category: 'Fruit', price: 0.99 },
+    { store_product_id: 'ban5', name: 'Testfruit Banana Bread Loaf', size_text: '500g', category: 'Bakery', price: 6 },
+  ]);
+  const api = client();
+  for (const q of ['testfruit bananas', 'testfruit bananas 1kg']) {
+    const b = (await api('GET', `/api/best-price?q=${encodeURIComponent(q)}`)).body;
+    assert.equal(b.produce, true, q);
+    assert.deepEqual(b.groups.map((g) => g.label), ['By the kilo', 'Each'], q);
+    assert.deepEqual(b.groups[0].products.map((p) => p.name), ['Testfruit Bananas per kg', 'Coles Testfruit Bananas'], 'cheapest per kg first');
+    assert.equal(b.groups[1].products[0].name, 'Testfruit Banana Each');
+  }
+  const names = (await api('GET', '/api/search?q=testfruit+bananas')).body.map((g) => g.anchor.name);
+  assert.ok(!/Bread/.test(names[0]), `fruit before banana bread: ${names.join(', ')}`);
+});

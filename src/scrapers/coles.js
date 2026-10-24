@@ -7,7 +7,7 @@ import { parseMultiBuy } from '../promos.js';
 const ORIGIN = 'https://www.coles.com.au';
 const IMAGE_BASE = 'https://cdn.productimages.coles.com.au/productimages';
 // Top-level categories that are duplicates of others or not groceries.
-const SKIP = new Set(
+export const SKIP = new Set(
   (process.env.COLES_SKIP_CATEGORIES ?? 'bonus-credit-products,back-to-school,big-pack-value,deliver-more-range,tobacco')
     .split(',').map((s) => s.trim()).filter(Boolean),
 );

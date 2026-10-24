@@ -183,6 +183,9 @@ function migrate(d) {
   if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'query')) {
     d.exec('ALTER TABLE list_items ADD COLUMN query TEXT');
   }
+  // Products named "… Each" with no size (Harris Farm fruit) are sold by the item. Refreshes now
+  // record that; this fills it in for ones already saved.
+  d.exec(`UPDATE products SET size_qty = 1, size_unit = 'ea' WHERE size_unit IS NULL AND lower(name) LIKE '% each'`);
   // The order a shopper ticks things off at each shop, to learn its layout.
   d.exec(`CREATE TABLE IF NOT EXISTS tick_log (
       id INTEGER PRIMARY KEY,

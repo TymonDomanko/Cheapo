@@ -3,7 +3,7 @@
 import { getDb, catalogueVersion } from './db.js';
 import { isAlcohol } from './aisles.js';
 import { STORES } from './stores.js';
-import { rankMatches, sameBrand, matchScore, MATCH_THRESHOLD } from './matcher.js';
+import { rankMatches, sameBrand, matchScore, MATCH_THRESHOLD, nameTokens, namedFor } from './matcher.js';
 import { unitPriceFor } from './promos.js';
 import { parseSizeFrom, SIZE_TOKEN_RE } from './units.js';
 import { sameSizeCandidates, sameWordCandidates } from './match-index.js';
@@ -243,7 +243,12 @@ export function betterValue(product, { igaStore = null, stores = STORES, members
  */
 export function compareSearch(q, opts = {}) {
   const stores = storeSet(opts.stores);
-  const results = searchProducts(q, { ...opts, limit: opts.limit ?? 30 });
+  // Things that are what was searched for first ("Bananas" before "Banana Bread"), otherwise in search order.
+  const words = nameTokens(String(expandQuery(q)).replace(SIZE_TOKEN_RE, ' '));
+  const results = searchProducts(q, { ...opts, limit: opts.limit ?? 30 })
+    .map((p, i) => ({ p, i, named: words.size && namedFor(p, words, 1) }))
+    .sort((a, b) => b.named - a.named || a.i - b.i)
+    .map((x) => x.p);
   const seen = new Set();
   const groups = [];
   for (const p of results) {

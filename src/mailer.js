@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer';
 import { getDb, nowIso } from './db.js';
 import { getSetting, onSettingChange } from './settings.js';
 
-const FROM = () => getSetting('MAIL_FROM') || 'Grocery Price Compare <no-reply@localhost>';
+const FROM = () => getSetting('MAIL_FROM') || `${siteName()} <no-reply@localhost>`;
 let transport = null;
 // Reconnect with the new details when an admin changes the mail server.
 onSettingChange((key) => {
@@ -24,7 +24,7 @@ export function siteUrl(req) {
   return base.replace(/\/$/, '');
 }
 
-export const siteName = () => process.env.SITE_NAME || 'Grocery Price Compare';
+export const siteName = () => process.env.SITE_NAME || 'Cheapo';
 
 // Tests read sent mail from here instead of a mail server.
 export const capturedMail = [];
@@ -61,11 +61,11 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 export function emailHtml({ heading, paragraphs = [], button, footer, extraHtml = '' }) {
   return `<!doctype html><html><body style="margin:0;padding:24px;background:#f6f6f4;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0b0b0b">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e2e1dc;border-radius:12px;padding:24px">
-    <p style="margin:0 0 4px;color:#7a7974;font-size:13px">${esc(siteName())}</p>
+    <p style="margin:0 0 6px;color:#7a7974;font-size:13px"><img src="${esc(siteUrl())}/icon-192.png" alt="" width="22" height="22" style="vertical-align:middle;border-radius:5px;margin-right:6px">${esc(siteName())}</p>
     <h1 style="font-size:20px;margin:0 0 12px">${esc(heading)}</h1>
     ${paragraphs.map((p) => `<p style="font-size:15px;line-height:1.5;margin:0 0 12px">${esc(p)}</p>`).join('')}
     ${extraHtml}
-    ${button ? `<p style="margin:20px 0"><a href="${esc(button.url)}" style="background:#2a78d6;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:600;display:inline-block">${esc(button.label)}</a></p>
+    ${button ? `<p style="margin:20px 0"><a href="${esc(button.url)}" style="background:#d6232c;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:600;display:inline-block">${esc(button.label)}</a></p>
     <p style="font-size:12px;color:#7a7974;word-break:break-all">Or open: ${esc(button.url)}</p>` : ''}
     ${footer ? `<p style="font-size:12px;color:#7a7974;margin-top:20px">${footer}</p>` : ''}
   </div></body></html>`;

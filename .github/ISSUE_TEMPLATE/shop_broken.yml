@@ -1,0 +1,32 @@
+name: A shop's prices stopped refreshing
+description: A supermarket's refresh fails or finds far fewer products than usual.
+labels: [scraper]
+body:
+  - type: dropdown
+    id: shop
+    attributes:
+      label: Which shop?
+      options: [Woolworths, Coles, ALDI, IGA, Harris Farm]
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: The error
+      description: The message under the shop on the Admin page, or from the summary email.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it crawl from?
+      options:
+        - A home connection (e.g. Unraid at home)
+        - A cloud server
+        - The home collector
+  - type: input
+    id: version
+    attributes:
+      label: Running version
+      description: From Admin → Product data → "Running version".
