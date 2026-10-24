@@ -12,9 +12,10 @@ import { matchScore } from './matcher.js';
 import { AISLES, aisleFor } from './aisles.js';
 import { productInsight } from './insights.js';
 import { layoutsFor } from './layouts.js';
+import { bestPrices } from './bestprice.js';
 
 const INVITE_DAYS = 7;
-const MATCH_MODES = ['similar', 'exact', 'this'];
+const MATCH_MODES = ['similar', 'exact', 'this', 'cheapest'];
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -165,10 +166,10 @@ function itemListId(itemId) {
 export function addItem(listId, userId, productId, quantity = 1, matchMode = 'similar') {
   requireMember(listId, userId);
   if (!getProduct(productId)) throw httpError(400, 'Unknown product');
-  if (!MATCH_MODES.includes(matchMode)) throw httpError(400, 'Bad match mode');
+  if (!MATCH_MODES.includes(matchMode) || matchMode === 'cheapest') throw httpError(400, 'Bad match mode');
   const qty = clampQty(quantity);
   const d = getDb();
-  const existing = d.prepare('SELECT id FROM list_items WHERE list_id = ? AND product_id = ?').get(listId, productId);
+  const existing = d.prepare('SELECT id FROM list_items WHERE list_id = ? AND product_id = ? AND query IS NULL').get(listId, productId);
   if (existing) {
     d.prepare('UPDATE list_items SET quantity = MIN(quantity + ?, 99) WHERE id = ?').run(qty, existing.id);
     return existing.id;
@@ -213,14 +214,20 @@ export function updateItem(itemId, userId, { quantity, matchMode, note, productI
   // Turn a note into a product once you've found the one you want.
   if (productId != null) {
     if (!getProduct(Number(productId))) throw httpError(400, 'Unknown product');
-    d.prepare('UPDATE list_items SET product_id = ?, note = NULL WHERE id = ?').run(Number(productId), itemId);
+    // (A chosen product also stops an "add cheapest" item picking for itself.)
+    d.prepare(`UPDATE list_items SET product_id = ?, note = NULL, query = NULL,
+      match_mode = CASE match_mode WHEN 'cheapest' THEN 'similar' ELSE match_mode END WHERE id = ?`).run(Number(productId), itemId);
     // Per-shop picks were for the old product (e.g. another pack size): start afresh.
     d.prepare('DELETE FROM list_item_overrides WHERE item_id = ?').run(itemId);
   }
   if (quantity != null) d.prepare('UPDATE list_items SET quantity = ? WHERE id = ?').run(clampQty(quantity), itemId);
   if (matchMode != null) {
     if (!MATCH_MODES.includes(matchMode)) throw httpError(400, 'Bad match mode');
+    const row = d.prepare('SELECT query FROM list_items WHERE id = ?').get(itemId);
+    if (matchMode === 'cheapest' && !row?.query) throw httpError(400, 'Use “Add cheapest” on a search to add one of these');
     d.prepare('UPDATE list_items SET match_mode = ? WHERE id = ?').run(matchMode, itemId);
+    // Back to a fixed product: the one it's currently picking (sent as productId).
+    if (matchMode !== 'cheapest') d.prepare('UPDATE list_items SET query = NULL WHERE id = ?').run(itemId);
   }
 }
 
@@ -270,6 +277,7 @@ export function resolveItems(listId, igaStore = null, memberships = []) {
         checkedAt: item.checked_at, checkedBy: item.checked_by_name, anchor: null, perStore: {},
       };
     }
+    if (item.match_mode === 'cheapest' && item.query) return resolveCheapest(item, overrides, igaStore, memberships);
     const anchor = getProduct(item.product_id, igaStore);
     const eq = findEquivalents(anchor, item.match_mode, igaStore);
     // Cheapest equivalent at each store *for this quantity* (multi-buys and member prices count).
@@ -300,6 +308,56 @@ export function resolveItems(listId, igaStore = null, memberships = []) {
       anchor, perStore,
     };
   });
+}
+
+/**
+ * An "add cheapest" item: re-run its search ("1L milk", any brand) and take
+ * the cheapest plain match at each shop, so it follows the prices.
+ */
+function resolveCheapest(item, overrides, igaStore, memberships) {
+  const best = bestPrices(item.query, { igaStore, memberships });
+  const g = best?.groups?.[0];
+  const perShop = g?.cheapestPerStore || {};
+  const picks = Object.values(perShop).sort((a, b) => a.price - b.price);
+  const anchor = (picks[0] && getProduct(picks[0].id, igaStore)) || getProduct(item.product_id, igaStore);
+  const perStore = {};
+  for (const s of STORES) {
+    const ov = overrides.find((o) => o.item_id === item.id && o.store === s);
+    const candidates = (g?.products || []).filter((p) => p.store === s).map((p) => getProduct(p.id, igaStore)).filter(Boolean);
+    if (ov && ov.product_id == null) perStore[s] = { excluded: true, candidates };
+    else if (ov) {
+      const p = getProduct(ov.product_id, igaStore);
+      perStore[s] = p ? { product: p, manual: true, score: 1, candidates } : { candidates };
+    } else if (perShop[s]) {
+      perStore[s] = { product: getProduct(perShop[s].id, igaStore), score: 1, candidates };
+    } else perStore[s] = { candidates };
+  }
+  return {
+    id: item.id, quantity: item.quantity, matchMode: 'cheapest', query: item.query, addedBy: item.added_by_name,
+    checkedAt: item.checked_at, checkedBy: item.checked_by_name, pinnedStore: item.pinned_store || null,
+    anchor, perStore,
+  };
+}
+
+/**
+ * Add "the cheapest of this, any brand" (e.g. "milk 1L"): it keeps picking
+ * the cheapest as prices change. The search has to name a size.
+ */
+export function addCheapest(listId, userId, query, quantity = 1, { igaStore, memberships } = {}) {
+  requireMember(listId, userId);
+  const q = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const best = bestPrices(q, { igaStore, memberships });
+  if (!best?.size) throw httpError(400, 'Say which size, e.g. “milk 2L”');
+  const top = Object.values(best.groups[0]?.cheapestPerStore || {}).sort((a, b) => a.price - b.price)[0];
+  if (!top) throw httpError(400, `No ${q} found at your shops`);
+  const d = getDb();
+  const existing = d.prepare("SELECT id FROM list_items WHERE list_id = ? AND match_mode = 'cheapest' AND lower(query) = lower(?)").get(listId, q);
+  if (existing) {
+    d.prepare('UPDATE list_items SET quantity = MIN(quantity + ?, 99) WHERE id = ?').run(clampQty(quantity), existing.id);
+    return existing.id;
+  }
+  return d.prepare(`INSERT INTO list_items (list_id, product_id, query, quantity, match_mode, added_by, added_at)
+    VALUES (?, ?, ?, ?, 'cheapest', ?, ?)`).run(listId, top.id, q, clampQty(quantity), userId, nowIso()).lastInsertRowid;
 }
 
 function buyable(ps) {
@@ -446,7 +504,7 @@ export function setChecked(itemId, userId, checked) {
 export function finishShop(listId, userId) {
   requireMember(listId, userId);
   const d = getDb();
-  const ticked = d.prepare('SELECT product_id, note, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').all(listId);
+  const ticked = d.prepare('SELECT product_id, note, query, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ? AND checked_at IS NOT NULL').all(listId);
   if (!ticked.length) throw httpError(400, 'Tick off what you bought first');
   const name = `Shop on ${new Date().toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}`;
   const spent = shopCost(listId, userId);
@@ -518,7 +576,7 @@ export function spending(listId, userId) {
 function saveSnapshot(listId, userId, name, kind, rows) {
   const items = rows.map((r) => (r.product_id == null
     ? { note: r.note, quantity: r.quantity }
-    : { productId: r.product_id, quantity: r.quantity, matchMode: r.match_mode, pinnedStore: r.pinned_store || undefined }));
+    : { productId: r.product_id, quantity: r.quantity, matchMode: r.match_mode, pinnedStore: r.pinned_store || undefined, query: r.query || undefined }));
   return getDb().prepare('INSERT INTO list_snapshots (list_id, name, kind, items_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(listId, name, kind, JSON.stringify(items), userId, nowIso()).lastInsertRowid;
 }
@@ -526,7 +584,7 @@ function saveSnapshot(listId, userId, name, kind, rows) {
 /** Save what's on the list now as a "regular shop" you can add again any time. */
 export function saveRegularShop(listId, userId, name) {
   requireMember(listId, userId);
-  const rows = getDb().prepare('SELECT product_id, note, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ?').all(listId);
+  const rows = getDb().prepare('SELECT product_id, note, query, quantity, match_mode, pinned_store FROM list_items WHERE list_id = ?').all(listId);
   if (!rows.length) throw httpError(400, 'The list is empty');
   return { id: saveSnapshot(listId, userId, cleanName(name), 'saved', rows) };
 }
@@ -555,8 +613,10 @@ export function addSnapshot(listId, userId, snapshotId) {
     }
     if (!getProduct(it.productId)) continue;
     if (d.prepare('SELECT 1 FROM list_items WHERE list_id = ? AND product_id = ?').get(listId, it.productId)) continue;
-    d.prepare(`INSERT INTO list_items (list_id, product_id, quantity, match_mode, pinned_store, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(listId, it.productId, it.quantity, it.matchMode || 'similar', STORES.includes(it.pinnedStore) ? it.pinnedStore : null, userId, nowIso());
+    const cheapest = it.matchMode === 'cheapest' && it.query;
+    d.prepare(`INSERT INTO list_items (list_id, product_id, query, quantity, match_mode, pinned_store, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(listId, it.productId, cheapest ? it.query : null, it.quantity, cheapest ? 'cheapest' : MATCH_MODES.includes(it.matchMode) ? it.matchMode : 'similar',
+        STORES.includes(it.pinnedStore) ? it.pinnedStore : null, userId, nowIso());
     added++;
   }
   return { added };

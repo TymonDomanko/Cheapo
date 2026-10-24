@@ -757,7 +757,8 @@ function renderBestPrice(b) {
           <div class="hint">${dot(top.store)}${esc(storeName(top.store))}${top.size_text ? ` · ${esc(top.size_text)}` : ''}</div>
           <div><span class="price big">${money(top.price)}</span> <span class="hint">${perUnitText(top)}</span> ${dealBadges(top)}</div>
         </div>
-        <button class="add small primary" data-add="${top.id}">+ List</button>
+        <div class="actions"><button class="add small primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
+          <button class="add small" data-add="${top.id}">+ This one</button></div>
       </div>
       ${rest.length ? `<ol class="best-rest" start="2">${rest.map((p) => `<li>
         <span>${dot(p.store)}<a href="#" data-product="${p.id}">${esc(p.name)}</a></span>
@@ -775,7 +776,8 @@ function renderBestPrice(b) {
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
         <div class="hint">${dot(p.store)}${esc(storeName(p.store))}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
-        <div class="actions"><button class="add small" data-add="${p.id}">+ List</button>
+        <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
+          <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
           ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
       </div>`;
     }).join('')}</div>
@@ -871,6 +873,16 @@ function renderGroup(g) {
   </div>`;
 }
 
+/** "The cheapest milk 2L, any brand": a list item that picks itself as prices change. */
+async function addCheapestToList(query) {
+  if (!requireLogin('Create an account (or log in) to keep a shopping list.')) return;
+  await ensureLists();
+  const list = state.lists.find((l) => l.id === state.listId);
+  await api(`/api/lists/${state.listId}/items`, { method: 'POST', body: { cheapest: query } });
+  toast(`Added the cheapest ${query} to ${list?.name || 'your list'} — it'll follow the prices`);
+  refreshListCount();
+}
+
 async function addToList(productId) {
   if (!requireLogin('Create an account (or log in) to keep a shopping list.', { type: 'add', productId })) return;
   await ensureLists();
@@ -881,6 +893,15 @@ async function addToList(productId) {
 }
 
 document.addEventListener('click', async (e) => {
+  const cheapest = e.target.closest('[data-add-cheapest]');
+  if (cheapest) {
+    try {
+      await addCheapestToList(cheapest.dataset.addCheapest);
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
   const add = e.target.closest('[data-add]');
   if (add) {
     try {
@@ -1449,7 +1470,7 @@ async function openPaste(text = '', noteItem = null, direct = false) {
           <div class="paste-pick">
             ${noteItem ? '' : `<input class="qty" type="number" min="1" max="99" name="qty${i}" value="${r.quantity}" aria-label="Quantity">`}
             <select name="pick${i}" aria-label="Product for ${esc(r.line)}">
-              ${r.options.map((o, j) => `<option value="${o.productId}" ${j === 0 && pickFirst(r) ? 'selected' : ''}>${o.cheapest ? '★ Cheapest: ' : ''}${esc(o.name)}${o.size ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — ${o.cheapest ? '' : 'from '}${money(o.price)} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
+               ${r.options.map((o, j) => `<option value="${o.cheapest && o.query ? `cheapest:${esc(o.query)}` : o.productId}" ${j === 0 && pickFirst(r) ? 'selected' : ''}>${o.cheapest ? (o.query ? '★ Cheapest, updates itself: ' : '★ Cheapest: ') : ''}${esc(o.name)}${o.size ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — ${o.cheapest ? '' : 'from '}${money(o.price)} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
               ${noteItem ? '' : `<option value="note" ${pickFirst(r) ? '' : 'selected'}>Keep as a note: “${esc(r.query)}”</option>`}
             </select>
           </div></li>`).join('')}</ul>
@@ -1471,7 +1492,9 @@ async function openPaste(text = '', noteItem = null, direct = false) {
           const lines = rows.map((r, i) => {
             const pick = f[`pick${i}`].value;
             const quantity = Number(f[`qty${i}`].value) || 1;
-            return pick === 'note' ? { note: r.query, quantity } : { productId: Number(pick), quantity };
+            if (pick === 'note') return { note: r.query, quantity };
+            if (pick.startsWith('cheapest:')) return { cheapest: pick.slice(9), quantity };
+            return { productId: Number(pick), quantity };
           });
           const res = await api(`/api/lists/${state.listId}/paste`, { method: 'POST', body: { lines } });
           toast(`Added ${plural(res.added, 'item')}`);
@@ -1790,9 +1813,11 @@ function renderItem(it) {
   return `<div class="item" data-item="${it.id}">
     <div class="item-top">
       <div class="name" data-product="${a.id}"><strong>${esc(a.name)}</strong>
+        ${it.matchMode === 'cheapest' ? `<div class="meta cheapest-item">🔄 Cheapest ${esc(it.query)}, any brand — picks itself as prices change</div>` : ''}
         <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
       <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
       <select data-mode aria-label="Matching">
+        ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
         <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
         <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
         <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
@@ -1905,7 +1930,12 @@ $('#list-root').addEventListener('change', async (e) => {
     if (!item) return;
     const id = item.dataset.item;
     if (t.matches('[data-qty]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { quantity: Number(t.value) } });
-    else if (t.matches('[data-mode]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { matchMode: t.value } });
+    else if (t.matches('[data-mode]')) {
+      // Leaving "cheapest": keep what it picks now as the product.
+      const it = state.list.items.find((x) => String(x.id) === id);
+      const body = it?.matchMode === 'cheapest' ? { productId: it.anchor.id, matchMode: t.value } : { matchMode: t.value };
+      await api(`/api/items/${id}`, { method: 'PATCH', body });
+    }
     else if (t.matches('[data-pin]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { pinnedStore: t.value || null } });
     else if (t.matches('[data-pick]')) {
       const v = t.value;

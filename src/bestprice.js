@@ -16,6 +16,7 @@ import { parseSizeFrom, SIZE_TOKEN_RE, formatSize } from './units.js';
 import { nameTokens, tokensOf, VARIANT_WORDS } from './matcher.js';
 import { unitPriceFor } from './promos.js';
 import { aisleFor } from './aisles.js';
+import { catalogueVersion } from './db.js';
 
 const CANDIDATES = 600;
 const SIZES_SHOWN = 5;
@@ -54,11 +55,26 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const sizeKey = (p) => (p.per_weight ? `${p.size_unit}:per` : `${p.size_unit}:${Math.round(p.size_qty)}`);
 const sizeLabel = (p) => (p.per_weight ? (p.size_unit === 'ea' ? 'each' : 'per kg') : formatSize(p.size_qty, p.size_unit));
 
+// Lists with "add cheapest" items re-run their searches every time they're
+// shown, so remember answers until the prices change (or for a minute).
+const CACHE_MS = 60 * 1000;
+const cache = new Map();
+
 /**
  * @param {string} q the search as typed
  * @param {{stores?: string[], igaStore?: string, memberships?: string[]}} opts
  */
-export function bestPrices(q, { stores, igaStore, memberships = [] } = {}) {
+export function bestPrices(q, opts = {}) {
+  const key = JSON.stringify([String(q).trim().toLowerCase(), opts.stores || null, opts.igaStore || null, [...(opts.memberships || [])].sort(), catalogueVersion()]);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  const value = compute(q, opts);
+  if (cache.size > 500) cache.clear();
+  cache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+function compute(q, { stores, igaStore, memberships = [] } = {}) {
   const asTyped = String(q).trim();
   q = expandQuery(q);
   const size = parseSizeFrom(q);

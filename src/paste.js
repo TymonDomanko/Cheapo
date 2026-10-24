@@ -54,8 +54,10 @@ export function previewPaste(text, opts = {}) {
     let cheapest = [];
     try {
       const best = bestPrices(l.query, opts);
-      cheapest = (best?.groups || []).map((g) => g.products[0]).filter(Boolean).map((p) => ({
-        productId: p.id, name: p.name, size: p.size_text || null, store: p.store, price: p.price, cheapest: true,
+      // query: the search an "add cheapest" item keeps re-running ("milk 2L").
+      cheapest = (best?.groups || []).filter((g) => g.products[0]).map((g) => ({
+        productId: g.products[0].id, name: g.products[0].name, size: g.products[0].size_text || null, store: g.products[0].store,
+        price: g.products[0].price, cheapest: true, query: best.size ? best.query : g.qty ? `${best.query} ${g.label}` : null,
       }));
     } catch {
       cheapest = [];

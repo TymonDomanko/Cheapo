@@ -179,6 +179,10 @@ function migrate(d) {
   if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'pinned_store')) {
     d.exec('ALTER TABLE list_items ADD COLUMN pinned_store TEXT');
   }
+  // "The cheapest 1L milk, any brand": the search an item keeps re-running (match_mode 'cheapest').
+  if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'query')) {
+    d.exec('ALTER TABLE list_items ADD COLUMN query TEXT');
+  }
   // The order a shopper ticks things off at each shop, to learn its layout.
   d.exec(`CREATE TABLE IF NOT EXISTS tick_log (
       id INTEGER PRIMARY KEY,

@@ -337,7 +337,10 @@ export function createApp() {
   app.delete('/api/lists/:id', requireUser, h((req) => lists.deleteList(id(req.params.id), req.user.id)));
 
   app.post('/api/lists/:id/items', requireUser, h((req) => {
-    const { productId, note, quantity = 1, matchMode = 'similar' } = req.body || {};
+    const { productId, note, cheapest, quantity = 1, matchMode = 'similar' } = req.body || {};
+    if (cheapest != null) {
+      return { id: lists.addCheapest(id(req.params.id), req.user.id, cheapest, quantity, { igaStore: igaFor(req), memberships: req.user.memberships || [] }) };
+    }
     if (productId == null && note != null) return { id: lists.addNote(id(req.params.id), req.user.id, note, quantity) };
     return { id: lists.addItem(id(req.params.id), req.user.id, id(productId), quantity, matchMode) };
   }));
@@ -358,7 +361,8 @@ export function createApp() {
     const lines = Array.isArray(req.body?.lines) ? req.body.lines.slice(0, 60) : [];
     let added = 0;
     for (const l of lines) {
-      if (l.productId != null) lists.addItem(listId, req.user.id, id(l.productId), l.quantity);
+      if (l.cheapest != null) lists.addCheapest(listId, req.user.id, l.cheapest, l.quantity, { igaStore: igaFor(req), memberships: req.user.memberships || [] });
+      else if (l.productId != null) lists.addItem(listId, req.user.id, id(l.productId), l.quantity);
       else lists.addNote(listId, req.user.id, l.note, l.quantity);
       added++;
     }

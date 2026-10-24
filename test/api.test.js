@@ -1001,3 +1001,31 @@ test('swapping a list item to another product clears its per-shop picks', async 
   assert.equal(v.items[0].anchor.id, one);
   assert.ok(!v.items[0].perStore.coles.excluded, 'old picks were for the old size');
 });
+
+test('"add cheapest" items follow the prices', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'cheapskate@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  assert.equal((await api('POST', `/api/lists/${list.id}/items`, { cheapest: 'milk' })).status, 400, 'needs a size');
+  const { id } = (await api('POST', `/api/lists/${list.id}/items`, { cheapest: '1l milk' })).body;
+  await api('POST', `/api/lists/${list.id}/items`, { cheapest: '1L milk' });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 1, 'the same search again adds to its quantity');
+  assert.equal(v.items[0].quantity, 2);
+  assert.equal(v.items[0].matchMode, 'cheapest');
+  assert.equal(v.items[0].query, '1l milk');
+  assert.equal(v.items[0].anchor.name, 'Otherbrand Full Cream Milk 1L');
+  assert.equal(v.items[0].perStore.coles.product.name, 'Bestprice Full Cream Milk');
+
+  upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 2.5 }]);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].anchor.name, 'Bestprice Full Cream Milk', 'the price went up: now the other one is cheapest');
+
+  // Back to a fixed product: the one it picks now.
+  await api('PATCH', `/api/items/${id}`, { productId: v.items[0].anchor.id, matchMode: 'similar' });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].matchMode, 'similar');
+  assert.ok(!v.items[0].query);
+  assert.equal(v.items[0].anchor.name, 'Bestprice Full Cream Milk');
+  upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 1.6 }]);
+});
