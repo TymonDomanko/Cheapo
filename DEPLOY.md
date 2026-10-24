@@ -294,7 +294,7 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days. A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
+- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);

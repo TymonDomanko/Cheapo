@@ -8,9 +8,10 @@
 //      old, Coles' own search for those words (one page, up to 48 products)
 //      is fetched straight away;
 //   2. the Coles products on people's lists and watches, once a day;
-//   3. everything on special, once a day;
+//   3. everything on special, once a day (skipped when the whole shop is
+//      done daily anyway);
 //   4. the whole shop, every COLES_FULL_EVERY_DAYS (default 2), carrying on
-//      where it left off;
+//      where it left off. The days count from when the last pass started;
 //   5. barcodes for matching, with whatever time is left.
 // A bot check stops everything for a while (2 hours, doubling up to a day).
 // Set COLES_PAGES_PER_HOUR=0 to go back to the nightly full crawl.
@@ -128,9 +129,13 @@ function savePage(json, category = null) {
 function nextJob(st) {
   if (queries.length) return { kind: 'query' };
   if (st.listQueue.length) return { kind: 'list' };
-  const specialsDone = st.specials?.day === today() && st.specials.page > st.specials.pages;
+  // A daily whole-shop pass sees every special anyway.
+  const specialsDone = fullEveryMs() <= 86400000 || (st.specials?.day === today() && st.specials.page > st.specials.pages);
   if (!specialsDone) return { kind: 'specials' };
-  if (st.pass || !st.lastPassAt || clock() - Date.parse(st.lastPassAt) >= fullEveryMs()) return { kind: 'pass' };
+  // Counted from when the last pass started, so "every day" stays every day
+  // rather than a day plus however long the pass took.
+  const lastStart = st.lastPassStartedAt || st.lastPassAt;
+  if (st.pass || !lastStart || clock() - Date.parse(lastStart) >= fullEveryMs()) return { kind: 'pass' };
   if (barcodeTodo(1).length) return { kind: 'barcode' };
   return null;
 }
@@ -204,6 +209,7 @@ function finishPass(st) {
     VALUES ('coles', ?, ?, 'ok', ?, 'server')`).run(st.pass.startedAt, iso(), products).lastInsertRowid;
   checkRun(getRun(runId)); // and tells admins if it found far fewer than last time
   st.lastPassAt = iso();
+  st.lastPassStartedAt = st.pass.startedAt;
   st.pass = null;
 }
 
@@ -311,6 +317,7 @@ export function restartPass() {
   const st = load();
   st.pass = null;
   st.lastPassAt = null;
+  st.lastPassStartedAt = null;
   st.blockedUntil = null;
   save(st);
   pump().catch(() => {});

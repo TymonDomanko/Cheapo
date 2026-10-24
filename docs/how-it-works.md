@@ -30,6 +30,8 @@ Coles' bot protection blocks bursts, home connections included, so instead of cr
 4. **The whole shop**, every `COLES_FULL_EVERY_DAYS` (2), carrying on where it left off. Products only become unavailable once a whole pass has missed them, and a finished pass counts as a refresh on the admin page (and in the "far fewer products" check).
 5. **Barcodes** with whatever time is left.
 
+Coles has about 30,000 products on about 640 pages. At the default 30 pages an hour (720 a day), the whole shop takes about two days, with specials every day. For **every price within a day**, set `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`: a pass then starts every 24 hours and takes about 16 of them, and the separate specials run is skipped because the pass covers them. More requests an hour means a greater chance of a bot check.
+
 A bot check pauses all of it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
 
 ## Matching the same product across shops
