@@ -179,6 +179,10 @@ function migrate(d) {
   if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'pinned_store')) {
     d.exec('ALTER TABLE list_items ADD COLUMN pinned_store TEXT');
   }
+  // A one-time link can carry a value: the new address for an email change.
+  if (!d.prepare('PRAGMA table_info(auth_tokens)').all().some((c) => c.name === 'data')) {
+    d.exec('ALTER TABLE auth_tokens ADD COLUMN data TEXT');
+  }
   // "The cheapest 1L milk, any brand": the search an item keeps re-running (match_mode 'cheapest').
   if (!d.prepare('PRAGMA table_info(list_items)').all().some((c) => c.name === 'query')) {
     d.exec('ALTER TABLE list_items ADD COLUMN query TEXT');
@@ -381,7 +385,7 @@ function migrateAccountsAndShopping(d) {
     CREATE TABLE IF NOT EXISTS auth_tokens (
       token_hash TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      purpose TEXT NOT NULL,             -- reset | verify
+      purpose TEXT NOT NULL,             -- reset | verify | email-change
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       used_at TEXT

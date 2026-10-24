@@ -240,25 +240,26 @@ export function purgeExpiredSessions() {
 
 // ---------------------------------------------------------------- one-time links (reset, verify)
 
-const LINK_TTL = { reset: 60, verify: 7 * 24 * 60 }; // minutes
+const LINK_TTL = { reset: 60, verify: 7 * 24 * 60, 'email-change': 24 * 60 }; // minutes
 
-function createAuthToken(userId, purpose) {
+function createAuthToken(userId, purpose, data = null) {
   const token = crypto.randomBytes(32).toString('base64url');
   const d = getDb();
   d.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(userId, purpose); // only the latest link works
-  d.prepare('INSERT INTO auth_tokens (token_hash, user_id, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
-    .run(tokenHash(token), userId, purpose, nowIso(), new Date(Date.now() + LINK_TTL[purpose] * 60000).toISOString());
+  d.prepare('INSERT INTO auth_tokens (token_hash, user_id, purpose, created_at, expires_at, data) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(tokenHash(token), userId, purpose, nowIso(), new Date(Date.now() + LINK_TTL[purpose] * 60000).toISOString(), data);
   return token;
 }
 
-function consumeAuthToken(token, purpose) {
+/** Use up a one-time link: its user id (and `data`, with `withData`). */
+function consumeAuthToken(token, purpose, { withData = false } = {}) {
   const d = getDb();
   const row = d.prepare('SELECT * FROM auth_tokens WHERE token_hash = ? AND purpose = ?').get(tokenHash(String(token || '')), purpose);
   if (!row || row.used_at || row.expires_at <= nowIso()) {
     throw httpError(400, purpose === 'reset' ? 'This reset link is invalid or has expired — ask for a new one.' : 'This link is invalid or has expired.');
   }
   d.prepare('UPDATE auth_tokens SET used_at = ? WHERE token_hash = ?').run(nowIso(), row.token_hash);
-  return row.user_id;
+  return withData ? { userId: row.user_id, data: row.data } : row.user_id;
 }
 
 /**
@@ -316,6 +317,56 @@ export function verifyEmail(token) {
   const userId = consumeAuthToken(token, 'verify');
   getDb().prepare('UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?').run(nowIso(), userId);
   return userId;
+}
+
+// ---------------------------------------------------------------- changing your email
+
+/**
+ * Change the account's email: needs the password, and only happens once a
+ * link sent to the new address is opened (so nobody can move an account to
+ * an address they don't own). The old address is told it's happening.
+ */
+export async function requestEmailChange(userId, { email, password }, baseUrl) {
+  await requirePassword(userId, password);
+  const next = String(email || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next) || next.length > 200) throw httpError(400, 'Enter a valid email address');
+  const d = getDb();
+  const u = d.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (next.toLowerCase() === u.email.toLowerCase()) throw httpError(400, 'That’s already your email');
+  if (d.prepare('SELECT 1 FROM users WHERE email = ?').get(next)) throw httpError(409, 'Another account already uses that email');
+  const url = `${baseUrl}/verify-email?change=${createAuthToken(userId, 'email-change', next)}`;
+  await sendMail({
+    to: next,
+    kind: 'verify',
+    subject: `Confirm your new email for ${siteName()}`,
+    text: `Hi ${u.name},\n\nOpen this link within a day to use ${next} for your ${siteName()} account:\n\n${url}\n\nIf you didn't ask for this, ignore this email.`,
+    html: emailHtml({
+      heading: 'Confirm your new email',
+      paragraphs: [`Hi ${u.name},`, `Press the button within a day to use ${next} for your ${siteName()} account. Until then, nothing changes.`],
+      button: { url, label: 'Use this email' },
+      footer: 'If you didn’t ask for this, ignore this email.',
+    }),
+  });
+  await sendMail({
+    to: u.email,
+    kind: 'notice',
+    subject: `Your ${siteName()} email is being changed`,
+    text: `Hi ${u.name},\n\nSomeone signed in to your ${siteName()} account asked to change its email to ${next}. It changes once that address confirms it.\n\nIf this wasn't you, change your password now.`,
+    html: emailHtml({
+      heading: 'Your email is being changed',
+      paragraphs: [`Hi ${u.name},`, `Someone signed in to your ${siteName()} account asked to change its email to ${next}. It changes once that address confirms it.`],
+      footer: 'If this wasn’t you, change your password now.',
+    }),
+  }).catch(() => {}); // a heads-up only
+}
+
+/** The link from requestEmailChange was opened: switch the account over. */
+export function confirmEmailChange(token) {
+  const { userId, data: email } = consumeAuthToken(token, 'email-change', { withData: true });
+  const d = getDb();
+  if (d.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').get(email, userId)) throw httpError(409, 'Another account now uses that email');
+  d.prepare('UPDATE users SET email = ?, email_verified_at = ? WHERE id = ?').run(email, nowIso(), userId);
+  return publicUser(d.prepare('SELECT * FROM users WHERE id = ?').get(userId));
 }
 
 export function getUser(userId) {

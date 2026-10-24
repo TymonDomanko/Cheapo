@@ -50,14 +50,24 @@ export function previewPaste(text, opts = {}) {
     } catch {
       groups = []; // a query FTS can't parse: keep it as a note
     }
-    // First the cheapest of it, any brand: for the size typed, or the cheapest of each common size.
+    // First the cheapest of it, any brand: for the size typed, or the cheapest of each common size,
+    // best value (lowest price per L / kg / item) first.
     let cheapest = [];
     try {
       const best = bestPrices(l.query, opts);
+      const groups = (best?.groups || []).filter((g) => g.products[0]);
+      if (!best?.size && !best?.produce) {
+        // Sizes measured the most common way first (L for milk), each cheapest per unit first.
+        const per = (g) => g.products[0].perUnit ?? Infinity;
+        const n = {};
+        for (const g of groups) n[g.unit] = (n[g.unit] || 0) + 1;
+        groups.sort((a, b) => n[b.unit] - n[a.unit] || a.unit.localeCompare(b.unit) || per(a) - per(b));
+      }
       // query: the search an "add cheapest" item keeps re-running ("milk 2L").
-      cheapest = (best?.groups || []).filter((g) => g.products[0]).map((g) => ({
-        productId: g.products[0].id, name: g.products[0].name, size: g.products[0].size_text || null, store: g.products[0].store,
+      cheapest = groups.map((g, i) => ({
+        productId: g.products[0].id, name: g.products[0].name, size: g.products[0].size_text || g.label || null, store: g.products[0].store,
         price: g.products[0].price, cheapest: true, query: best.size ? best.query : g.qty ? `${best.query} ${g.label}` : null,
+        perUnit: g.products[0].perUnit, unitWord: g.products[0].unitWord, bestValue: !best.size && !best.produce && i === 0 && groups.length > 1,
       }));
     } catch {
       cheapest = [];

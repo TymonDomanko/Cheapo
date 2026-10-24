@@ -24,6 +24,13 @@
   --store-harrisfarm: #e87ba4;
   --cost: #c0392b;
   --brand: #e3262f;
+  /* Shop badges: each chain's own colour, dark enough for white text. Coles/IGA (both red) and
+     Woolworths/Harris Farm (both green) use different shades so they're easy to tell apart. */
+  --brand-woolworths: #178841;
+  --brand-coles: #e01a22;
+  --brand-aldi: #1b2a7a;
+  --brand-iga: #9b1b30;
+  --brand-harrisfarm: #24502f;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -554,3 +561,17 @@ a.plain-link:hover { text-decoration: underline; }
   .row .cell .alt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 }
 .size-label .badge.cheap { background: var(--highlight); color: var(--highlight-ink); padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; transform: rotate(-2deg); }
+
+/* A shop's name on a badge in its brand colour */
+.store-chip {
+  /* Equal space above and below the capital letters, so the name looks centred. */
+  display: inline-block; box-sizing: border-box; padding: .5em .6em; border-radius: 6px;
+  vertical-align: middle; text-align: center;
+  background: var(--chip); color: #fff; font-weight: 600; font-size: .86em; line-height: 1;
+  white-space: nowrap; letter-spacing: .01em;
+  text-box: trim-both cap alphabetic;
+}
+/* Without trimming, the font's box sits the letters a little high: shift the padding down. */
+@supports not (text-box: trim-both cap alphabetic) {
+  .store-chip { padding: .32em .6em .24em; }
+}
