@@ -613,9 +613,15 @@ test('home collector as a single program: download with settings appended, and t
   const saved = process.env.COLLECTOR_TOKEN;
   delete process.env.COLLECTOR_TOKEN;
   const res = await get('/api/admin/collector/programs/linux-x64');
-  assert.match(res.headers.get('content-disposition'), /filename="grocery-collector"/);
-  const body = Buffer.from(await res.arrayBuffer());
-  assert.equal(Number(res.headers.get('content-length')), body.length);
+  assert.match(res.headers.get('content-disposition'), /filename="grocery-collector-linux-x64\.tar\.gz"/);
+  // Unpack it with the real tar: one executable file.
+  const unpack = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-tar-'));
+  fs.writeFileSync(path.join(unpack, 'c.tar.gz'), Buffer.from(await res.arrayBuffer()));
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('tar', ['xzf', 'c.tar.gz'], { cwd: unpack });
+  const exe = path.join(unpack, 'grocery-collector');
+  assert.ok(fs.statSync(exe).mode & 0o100, 'still executable');
+  const body = fs.readFileSync(exe);
   assert.ok(body.subarray(0, fake.length).equals(fake), 'the program, unchanged');
   const tail = body.subarray(fake.length).toString('latin1');
   assert.ok(tail.startsWith(CONFIG_MARK) && tail.endsWith(CONFIG_END));

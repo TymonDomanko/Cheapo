@@ -204,7 +204,7 @@ Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from
 2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
    - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
-     - On Linux, make it executable first: `chmod +x grocery-collector && ./grocery-collector`.
+     - On Linux it comes as a `.tar.gz` (so it stays executable): `tar xzf grocery-collector-linux-x64.tar.gz && ./grocery-collector`.
      - To start it with the computer, run it once with `--autostart` (undo with `--no-autostart`). On Windows this adds it to the Startup folder; on a Linux desktop it adds a log-in entry. On a Linux server, use a systemd service instead (below).
    - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside; `COLLECT_CRON` sets the time.
 

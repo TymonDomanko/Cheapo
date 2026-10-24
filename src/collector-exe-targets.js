@@ -11,8 +11,9 @@ export const LAUNCHER = 'src/collector-launcher.cjs';
 
 export const TARGETS = {
   'windows-x64': { label: 'Windows', dist: 'win-x64', windows: true, filename: 'grocery-collector.exe' },
-  'linux-x64': { label: 'Linux (x64)', dist: 'linux-x64', filename: 'grocery-collector' },
-  'linux-arm64': { label: 'Linux (ARM, e.g. Raspberry Pi)', dist: 'linux-arm64', filename: 'grocery-collector' },
+  // Linux: in a .tar.gz, which keeps the program executable (a bare download loses that).
+  'linux-x64': { label: 'Linux (x64)', dist: 'linux-x64', filename: 'grocery-collector', archive: 'grocery-collector-linux-x64.tar.gz' },
+  'linux-arm64': { label: 'Linux (ARM, e.g. Raspberry Pi)', dist: 'linux-arm64', filename: 'grocery-collector', archive: 'grocery-collector-linux-arm64.tar.gz' },
 };
 
 /** Changes when a program needs rebuilding: the launcher's code or the Node.js version. */
