@@ -29,7 +29,7 @@ const SYNONYMS = {
 // Words that define a *different* product variant. If one name has one of
 // these and the other doesn't, they aren't the same item no matter how similar
 // the rest of the name is ("Lactose Free Full Cream Milk" ≠ "Full Cream Milk").
-const VARIANT_WORDS = new Set([
+export const VARIANT_WORDS = new Set([
   'light', 'low', 'reduced', 'skim', 'lactose', 'free', 'organic', 'protein', 'unsalted', 'salted',
   'sliced', 'slice', 'grated', 'shredded', 'block', 'spreadable', 'vintage', 'extra', 'mild', 'sharp',
   'wholemeal', 'white', 'multigrain', 'wholegrain', 'sourdough', 'sugar', 'diet', 'zero', 'decaf', 'gluten',
@@ -38,7 +38,7 @@ const VARIANT_WORDS = new Set([
   'chicken', 'beef', 'pork', 'lamb', 'fish', 'tuna', 'cheese', 'onion', 'tomato', 'sour', 'cream', 'thickened',
   'double', 'crunchy', 'smooth', 'frozen', 'kids', 'baby', 'toddler', 'mini', 'thin', 'thick', 'boneless', 'skinless', 'mince', 'diced', 'half', 'brown', 'red', 'green',
   'black', 'longlife', 'unscented', 'sensitive', 'concentrate', 'concentrated', 'refill', 'cage', 'freerange', 'barn',
-  '1%', '2%', 'a2',
+  '1%', '2%', 'a2', 'flavoured', 'iced', 'coffee', 'powder', 'whitener', 'creamer', 'sauce', 'spread', 'crumbs', 'flour',
 ]);
 
 export const MATCH_THRESHOLD = 0.75;

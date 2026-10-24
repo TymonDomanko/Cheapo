@@ -648,14 +648,20 @@ async function runSearch() {
   // Nothing searched or filtered: the home page.
   if (!params.get('q') && !params.get('store') && !params.get('specials')) return renderHome(seq);
   try {
-    const groups = await api(withIga(`/api/search?${params}`));
+    // The cheapest of it, any brand (only for a plain search across all shops).
+    const wantBest = params.get('q') && !params.get('store') && !params.get('specials');
+    const [groups, best] = await Promise.all([
+      api(withIga(`/api/search?${params}`)),
+      wantBest ? api(withIga(`/api/best-price?${new URLSearchParams({ q: params.get('q') })}`)).catch(() => null) : null,
+    ]);
     if (seq !== searchSeq) return;
+    const bestHtml = renderBestPrice(best);
     if (!groups.length) {
-      box.innerHTML = '<div class="empty">No matching products.</div>';
+      box.innerHTML = bestHtml || '<div class="empty">No matching products.</div>';
       return;
     }
     box.style.setProperty('--store-cols', state.stores.length);
-    box.innerHTML = `<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${dot(s)} ${esc(storeName(s))}${s === 'iga' ? `<button type="button" class="linkish col-sub" data-change-iga>${esc(igaShortName(state.config.igaStore))} ▾</button>` : ''}</span>`).join('')}<span></span></div>`
+    box.innerHTML = `${bestHtml}${bestHtml ? '<h2 class="section">All products</h2>' : ''}<div class="row head"><span></span><span>Product</span>${state.stores.map((s) => `<span>${dot(s)} ${esc(storeName(s))}${s === 'iga' ? `<button type="button" class="linkish col-sub" data-change-iga>${esc(igaShortName(state.config.igaStore))} ▾</button>` : ''}</span>`).join('')}<span></span></div>`
       + groups.map(renderGroup).join('');
   } catch (e) {
     box.innerHTML = `<div class="empty">Search failed: ${esc(e.message)}</div>`;
@@ -724,6 +730,71 @@ $('#results').addEventListener('click', (e) => {
   runSearch();
 });
 
+// ------------------------------------------------------------------ cheapest of what you searched for
+// "1l milk": the cheapest 1L milk, any brand. "milk": the cheapest of each
+// common size, with the best value per litre / kg / item highlighted.
+
+const perUnitText = (p) => (p.perUnit != null ? `${money(p.perUnit)}/${esc(p.unitWord)}` : '');
+
+function renderBestPrice(b) {
+  if (!b || !b.groups?.length) return '';
+  const what = esc(b.query.replace(/\s+/g, ' '));
+  const chips = b.variants?.length
+    ? `<div class="variant-chips"><span class="hint">${b.mixed ? 'All types shown. Just:' : `Regular ${esc(b.query.replace(/\b\d.*?\b(ml|l|g|kg|pack)\b/gi, '').trim())} shown. Or:`}</span>
+        ${b.variants.map((v) => `<button type="button" class="chip" data-narrow="${esc(v.word)}">${esc(v.label)}</button>`).join('')}</div>`
+    : '';
+  if (b.size) {
+    const g = b.groups[0];
+    const [top, ...rest] = g.products;
+    const stores = state.allStores.filter((s) => g.cheapestPerStore?.[s]);
+    return `<section class="best-price">
+      <h2>Cheapest ${what} <span class="hint">${plural(g.count, 'product')} compared, any brand</span></h2>
+      ${chips}
+      <div class="best-top">
+        ${thumb(top)}
+        <div class="best-main">
+          <a href="#" class="deal-name" data-product="${top.id}">${esc(top.name)}</a>
+          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}${top.size_text ? ` · ${esc(top.size_text)}` : ''}</div>
+          <div><span class="price big">${money(top.price)}</span> <span class="hint">${perUnitText(top)}</span> ${dealBadges(top)}</div>
+        </div>
+        <div class="actions"><button class="add small primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
+          <button class="add small" data-add="${top.id}">+ This one</button></div>
+      </div>
+      ${rest.length ? `<ol class="best-rest" start="2">${rest.map((p) => `<li>
+        <span>${dot(p.store)}<a href="#" data-product="${p.id}">${esc(p.name)}</a></span>
+        <span class="best-rest-price">${money(p.price)} <button class="add small" data-add="${p.id}">+ List</button></span></li>`).join('')}</ol>` : ''}
+      ${stores.length > 1 ? `<div class="per-store hint">Cheapest at each shop: ${stores.map((s) => `${dot(s)}${esc(storeName(s))} ${money(g.cheapestPerStore[s].price)}`).join(' · ')}</div>` : ''}
+    </section>`;
+  }
+  return `<section class="best-price">
+    <h2>Cheapest ${what} by size <span class="hint">any brand</span></h2>
+    ${chips}
+    <div class="size-cards">${b.groups.map((g) => {
+      const p = g.products[0];
+      return `<div class="size-card ${g.bestValue ? 'best' : ''}">
+        <div class="size-label">${esc(g.label)}${g.bestValue ? ` <span class="badge cheap">★ Best value per ${esc(p.unitWord)}</span>` : ''}</div>
+        <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
+        <div class="hint">${dot(p.store)}${esc(storeName(p.store))}</div>
+        <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
+        <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
+          <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
+          ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
+      </div>`;
+    }).join('')}</div>
+  </section>`;
+}
+
+// Narrow a search: a type ("lactose free") or a size ("2L").
+$('#results').addEventListener('click', (e) => {
+  const narrow = e.target.closest('[data-narrow]');
+  const size = e.target.closest('[data-size-search]');
+  if (!narrow && !size) return;
+  const q = $('#q');
+  q.value = `${q.value.trim()} ${narrow ? narrow.dataset.narrow : size.dataset.sizeSearch}`;
+  window.scrollTo(0, 0);
+  runSearch();
+});
+
 function thumb(p) {
   return p.image_url
     ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
@@ -778,11 +849,13 @@ function insightNote(ins, { always = false } = {}) {
   return `<div class="insight insight-${ins.verdict}">${icon} <strong>${esc(ins.headline || 'No price history yet')}</strong>${ins.detail ? ` — ${esc(ins.detail)}` : ''}</div>`;
 }
 
-function valueHint(bv) {
+/** "3L is 18% cheaper per litre". On a list item (itemId), with a button to swap to it. */
+function valueHint(bv, itemId = null) {
   if (!bv) return '';
   const p = bv.product;
   return `<div class="value-hint">💡 Better value: <a href="#" data-product="${p.id}">${esc(p.name)}${p.size_text && !p.name.includes(p.size_text) ? ` ${esc(p.size_text)}` : ''}</a>
-    at ${esc(storeName(p.store))} is <strong>${bv.savingPct}% cheaper per ${esc(bv.unit)}</strong> (${money(bv.perUnit)} vs ${money(bv.basePerUnit)}).</div>`;
+    at ${esc(storeName(p.store))} is <strong>${bv.savingPct}% cheaper per ${esc(bv.unit)}</strong> (${money(bv.perUnit)} vs ${money(bv.basePerUnit)}).
+    ${itemId ? `<button type="button" class="small" data-swap-item="${itemId}" data-swap-to="${p.id}">Swap to this</button>` : ''}</div>`;
 }
 
 function renderGroup(g) {
@@ -800,6 +873,16 @@ function renderGroup(g) {
   </div>`;
 }
 
+/** "The cheapest milk 2L, any brand": a list item that picks itself as prices change. */
+async function addCheapestToList(query) {
+  if (!requireLogin('Create an account (or log in) to keep a shopping list.')) return;
+  await ensureLists();
+  const list = state.lists.find((l) => l.id === state.listId);
+  await api(`/api/lists/${state.listId}/items`, { method: 'POST', body: { cheapest: query } });
+  toast(`Added the cheapest ${query} to ${list?.name || 'your list'} — it'll follow the prices`);
+  refreshListCount();
+}
+
 async function addToList(productId) {
   if (!requireLogin('Create an account (or log in) to keep a shopping list.', { type: 'add', productId })) return;
   await ensureLists();
@@ -810,6 +893,15 @@ async function addToList(productId) {
 }
 
 document.addEventListener('click', async (e) => {
+  const cheapest = e.target.closest('[data-add-cheapest]');
+  if (cheapest) {
+    try {
+      await addCheapestToList(cheapest.dataset.addCheapest);
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
   const add = e.target.closest('[data-add]');
   if (add) {
     try {
@@ -1114,8 +1206,9 @@ function renderList() {
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
     <form id="quick-add" class="quick-add">
-      <input name="note" maxlength="120" placeholder="Add anything — e.g. birthday card" aria-label="Add a note to the list" autocomplete="off">
+      <input name="note" maxlength="120" placeholder="Add something — e.g. milk 2L, or birthday card" aria-label="Add to the list" autocomplete="off">
       <button class="small" type="submit">Add</button>
+      <button class="small ghost" type="button" id="quick-note" title="Add exactly what you typed, without looking for a product">Add as note</button>
       <button class="small ghost" type="button" id="paste-list">Paste a list</button>
     </form>
     ${renderStorePanel(L)}
@@ -1343,7 +1436,7 @@ async function openSpending() {
  * Match typed lines to products and let the shopper confirm. With `noteItem`,
  * it's finding a product for one note already on the list.
  */
-async function openPaste(text = '', noteItem = null) {
+async function openPaste(text = '', noteItem = null, direct = false) {
   const box = $('#paste-detail');
   const step1 = () => {
     box.innerHTML = `<h2>Paste a list</h2>
@@ -1367,16 +1460,18 @@ async function openPaste(text = '', noteItem = null) {
       return;
     }
     if (!rows.length) return step1();
-    box.innerHTML = `<h2>${noteItem ? `Find “${esc(noteItem.note)}”` : 'Check the matches'}</h2>
-      <p class="hint">${noteItem ? 'Pick the product to compare prices for.' : 'Pick the right product for each line, or keep it as a note.'}</p>
+    // Typed into the list's Add box (direct): pick a product, the first match by default.
+    const pickFirst = (r) => r.options.length && (r.confident || noteItem || direct);
+    box.innerHTML = `<h2>${noteItem ? `Find “${esc(noteItem.note)}”` : direct ? 'Add to the list' : 'Check the matches'}</h2>
+      <p class="hint">${noteItem ? 'Pick the product to compare prices for.' : 'Pick the product, or keep what you typed as a note.'}</p>
       <form id="paste-confirm" class="stack">
         <ul class="paste-rows">${rows.map((r, i) => `<li>
           <div class="paste-line"><span>${esc(r.line)}</span>${r.confident || noteItem ? '' : ' <span class="hint">· not sure</span>'}</div>
           <div class="paste-pick">
             ${noteItem ? '' : `<input class="qty" type="number" min="1" max="99" name="qty${i}" value="${r.quantity}" aria-label="Quantity">`}
             <select name="pick${i}" aria-label="Product for ${esc(r.line)}">
-              ${r.options.map((o, j) => `<option value="${o.productId}" ${j === 0 && (r.confident || noteItem) ? 'selected' : ''}>${esc(o.name)}${o.size ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — from ${money(o.price)} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
-              ${noteItem ? '' : `<option value="note" ${r.confident ? '' : 'selected'}>Keep as a note: “${esc(r.query)}”</option>`}
+               ${r.options.map((o, j) => `<option value="${o.cheapest && o.query ? `cheapest:${esc(o.query)}` : o.productId}" ${j === 0 && pickFirst(r) ? 'selected' : ''}>${o.cheapest ? (o.query ? '★ Cheapest, updates itself: ' : '★ Cheapest: ') : ''}${esc(o.name)}${o.size ? ` (${esc(o.size)})` : ''}${o.price != null ? ` — ${o.cheapest ? '' : 'from '}${money(o.price)} at ${esc(storeName(o.store))}` : ''}</option>`).join('')}
+              ${noteItem ? '' : `<option value="note" ${pickFirst(r) ? '' : 'selected'}>Keep as a note: “${esc(r.query)}”</option>`}
             </select>
           </div></li>`).join('')}</ul>
         ${noteItem && !rows[0].options.length ? '<p class="warn">No products found. Try different words.</p>' : ''}
@@ -1385,7 +1480,7 @@ async function openPaste(text = '', noteItem = null) {
           <button class="primary" type="submit" ${noteItem && !rows[0].options.length ? 'disabled' : ''}>${noteItem ? 'Use this product' : `Add ${plural(rows.length, 'item')}`}</button>
         </div>
       </form>`;
-    $('#paste-back').addEventListener('click', () => (noteItem ? $('#paste-dialog').close() : step1()));
+    $('#paste-back').addEventListener('click', () => (noteItem || direct ? $('#paste-dialog').close() : step1()));
     $('#paste-confirm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target;
@@ -1397,7 +1492,9 @@ async function openPaste(text = '', noteItem = null) {
           const lines = rows.map((r, i) => {
             const pick = f[`pick${i}`].value;
             const quantity = Number(f[`qty${i}`].value) || 1;
-            return pick === 'note' ? { note: r.query, quantity } : { productId: Number(pick), quantity };
+            if (pick === 'note') return { note: r.query, quantity };
+            if (pick.startsWith('cheapest:')) return { cheapest: pick.slice(9), quantity };
+            return { productId: Number(pick), quantity };
           });
           const res = await api(`/api/lists/${state.listId}/paste`, { method: 'POST', body: { lines } });
           toast(`Added ${plural(res.added, 'item')}`);
@@ -1410,6 +1507,7 @@ async function openPaste(text = '', noteItem = null) {
     });
   };
   if (noteItem) step2(noteItem.note);
+  else if (direct) step2(text);
   else step1();
   $('#paste-dialog').showModal();
 }
@@ -1715,9 +1813,11 @@ function renderItem(it) {
   return `<div class="item" data-item="${it.id}">
     <div class="item-top">
       <div class="name" data-product="${a.id}"><strong>${esc(a.name)}</strong>
+        ${it.matchMode === 'cheapest' ? `<div class="meta cheapest-item">🔄 Cheapest ${esc(it.query)}, any brand — picks itself as prices change</div>` : ''}
         <div class="meta">${esc(a.size_text || '')}${!a.available ? ' · <span class="warn">no longer available</span>' : ''}${it.addedBy && L.members.length > 1 ? ` · added by ${esc(it.addedBy)}` : ''}${it.checkedAt ? ' · <span class="saving">✓ ticked</span>' : ''}</div></div>
       <label class="check">Qty <input class="qty" type="number" min="1" max="99" value="${it.quantity}" data-qty></label>
       <select data-mode aria-label="Matching">
+        ${it.matchMode === 'cheapest' ? `<option value="cheapest" selected>Cheapest ${esc(it.query)}, any brand</option>` : ''}
         <option value="similar" ${it.matchMode === 'similar' ? 'selected' : ''}>Any brand, same size</option>
         <option value="exact" ${it.matchMode === 'exact' ? 'selected' : ''}>Same brand only</option>
         <option value="this" ${it.matchMode === 'this' ? 'selected' : ''}>This exact product</option>
@@ -1731,7 +1831,7 @@ function renderItem(it) {
     <div class="store-picks">${state.allStores.map((s) => renderPick(it, s, L.included.includes(s))).join('')}</div>
     ${pinNote(it)}
     ${insightNote(it.priceInsight)}
-    ${valueHint(it.betterValue)}
+    ${valueHint(it.betterValue, it.id)}
   </div>`;
 }
 
@@ -1786,16 +1886,24 @@ $('#list-root').addEventListener('submit', async (e) => {
   const input = e.target.note;
   const text = input.value.trim();
   if (!text) return;
+  // Look it up: pick the product (or keep it as a note) in the dialog.
+  input.value = '';
+  openPaste(text, null, true);
+});
+
+/** "Add as note": exactly what was typed, no product lookup. */
+async function addQuickNote() {
+  const input = $('#quick-add input');
+  const text = input?.value.trim();
+  if (!text) return input?.focus();
   try {
-    // Several things at once ("milk, bread") go through the matcher.
-    if (/[,;\n]/.test(text)) return openPaste(text);
     await api(`/api/lists/${state.listId}/items`, { method: 'POST', body: { note: text } });
     await loadList();
     $('#quick-add input')?.focus();
   } catch (err) {
     toast(err.message);
   }
-});
+}
 
 $('#list-root').addEventListener('change', async (e) => {
   const t = e.target;
@@ -1822,7 +1930,12 @@ $('#list-root').addEventListener('change', async (e) => {
     if (!item) return;
     const id = item.dataset.item;
     if (t.matches('[data-qty]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { quantity: Number(t.value) } });
-    else if (t.matches('[data-mode]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { matchMode: t.value } });
+    else if (t.matches('[data-mode]')) {
+      // Leaving "cheapest": keep what it picks now as the product.
+      const it = state.list.items.find((x) => String(x.id) === id);
+      const body = it?.matchMode === 'cheapest' ? { productId: it.anchor.id, matchMode: t.value } : { matchMode: t.value };
+      await api(`/api/items/${id}`, { method: 'PATCH', body });
+    }
     else if (t.matches('[data-pin]')) await api(`/api/items/${id}`, { method: 'PATCH', body: { pinnedStore: t.value || null } });
     else if (t.matches('[data-pick]')) {
       const v = t.value;
@@ -1870,6 +1983,12 @@ $('#list-root').addEventListener('click', async (e) => {
       await api(`/api/items/${t.closest('[data-item]').dataset.item}`, { method: 'DELETE' });
       return loadList();
     }
+    if (t.matches('[data-swap-item]')) {
+      t.disabled = true;
+      await api(`/api/items/${t.dataset.swapItem}`, { method: 'PATCH', body: { productId: Number(t.dataset.swapTo) } });
+      toast('Swapped to the better-value size');
+      return loadList();
+    }
     if (t.matches('[data-find-note]')) {
       const item = state.list.items.find((it) => it.id === Number(t.closest('[data-item]').dataset.item));
       return openPaste('', item);
@@ -1877,6 +1996,8 @@ $('#list-root').addEventListener('click', async (e) => {
     switch (t.id) {
       case 'paste-list':
         return openPaste();
+      case 'quick-note':
+        return addQuickNote();
       case 'spending-btn':
         return openSpending();
       case 'scan-btn':
@@ -2080,32 +2201,12 @@ async function loadAdmin() {
     <div class="list-head"><h2>Product data</h2>
       <button class="primary" id="scrape-all" ${o.stores.some((s) => s.status.running) ? 'disabled' : ''}>Refresh all prices</button></div>
     <p class="hint">Prices also refresh automatically (schedule “${esc(o.scrapeCron || 'off')}”). A full refresh takes 20–60 minutes.</p>
-    <div class="stat-grid">${o.stores.map((s) => {
-      const r = s.runs[0];
-      const status = s.status.running
-        ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
-        : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
-      return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
-        <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
-        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
-          : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
-    }).join('')}</div>
+    <div id="admin-live-stores">${adminStoreTiles(o)}</div>
     <h2 class="section">IGAs with prices online</h2>
-    <p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
-      ${o.iga.check.running ? `<span class="state pending">Checking now… ${o.iga.check.done} of ${o.iga.check.total}</span>`
-        : o.iga.lastCheck ? `<span class="hint">Last checked ${fmtDate(o.iga.lastCheck.started_at)}${o.iga.lastCheck.error
-          ? ` — <span class="warn">failed: ${esc(o.iga.lastCheck.error)}</span>`
-          : ` — ${o.iga.lastCheck.came_online} came online, ${o.iga.lastCheck.went_offline} went offline`}.</span>` : '<span class="hint">Not checked yet.</span>'}
-      <button class="small" id="iga-check" ${o.iga.check.running ? 'disabled' : ''}>Check now</button></p>
+    <div id="admin-live-iga-check">${adminIgaCheck(o)}</div>
     <p class="hint">Checked automatically every day before prices refresh: IGA’s store list is reloaded and each store is asked for one product.</p>
     <h2 class="section">IGA stores <span class="hint">${o.iga.tracked.length} followed${o.iga.maxStores ? ` of ${o.iga.maxStores} allowed` : ' (no limit)'} — prices are collected only for stores people have picked</span></h2>
-    <div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
-      ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
-        <td>${fmtDate(t.added_at)}</td>
-        <td>${(o.iga.queue.fetching || [o.iga.queue.current]).includes(t.store_id) ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
-        <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
-    </tbody></table></div>
+    <div id="admin-live-iga-stores">${adminIgaStores(o)}</div>
     <h2 class="section">Data health <button class="small ghost" id="health-refresh">Check again</button></h2>
     <div id="admin-health"><p class="hint">Checking the data… (this can take a few seconds on a big catalogue)</p></div>
 
@@ -2113,10 +2214,7 @@ async function loadAdmin() {
     <div id="admin-matches"><p class="hint">Loading…</p></div>
 
     <h2 class="section">Barcodes</h2>
-    <p>${(o.barcodes.with_barcode || 0).toLocaleString()} of ${(o.barcodes.total || 0).toLocaleString()} Coles products have a barcode
-      (${(o.barcodes.checked || 0).toLocaleString()} pages checked).
-      ${o.barcodes.status.running ? `<span class="state pending">Fetching… ${o.barcodes.status.done} of ${o.barcodes.status.total}</span>`
-        : '<button class="small" id="barcodes-now">Fetch more now</button>'}</p>
+    <div id="admin-live-barcodes">${adminBarcodes(o)}</div>
     <p class="hint">Coles only shows barcodes on product pages, so they’re filled in a batch at a time each day (products on lists first). Woolworths barcodes come with every refresh. Same barcode = same product.</p>
 
     <h2 class="section">Home collector</h2>
@@ -2142,16 +2240,73 @@ async function loadAdmin() {
   loadAdminExtras();
   loadAdminSettings();
   loadHealth();
-  const busy = o.stores.some((s) => s.status.running) || o.iga.queue.current || o.iga.check.running || o.barcodes.status.running;
-  if (busy && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
+  if (adminBusy(o) && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminProgress, 3000);
 }
 
-/** Live progress refresh, but never while someone is typing in a settings form. */
-function refreshAdminWhenIdle() {
-  const editing = document.activeElement?.closest?.('#admin-root form')
-    || [...$$('#admin-root form input')].some((i) => i.type === 'password' ? i.value : false);
-  if (editing) adminTimer = setTimeout(refreshAdminWhenIdle, 3000);
-  else loadAdmin();
+const adminBusy = (o) => o.stores.some((s) => s.status.running) || (o.iga.queue.fetching?.length || o.iga.queue.current)
+  || o.iga.check.running || o.barcodes.status.running;
+
+/**
+ * While prices are refreshing: update just the progress (store tiles, IGA
+ * status, barcodes) every few seconds, leaving the rest of the page — your
+ * scroll position, open sections and anything you're typing — alone.
+ */
+async function refreshAdminProgress() {
+  if (currentTab() !== 'admin' || !$('#admin-live-stores')) return;
+  let o;
+  try {
+    o = await api('/api/admin/overview');
+  } catch {
+    adminTimer = setTimeout(refreshAdminProgress, 10000); // offline for a moment: try again later
+    return;
+  }
+  $('#admin-live-stores').innerHTML = adminStoreTiles(o);
+  $('#admin-live-iga-check').innerHTML = adminIgaCheck(o);
+  $('#admin-live-iga-stores').innerHTML = adminIgaStores(o);
+  $('#admin-live-barcodes').innerHTML = adminBarcodes(o);
+  const all = $('#scrape-all');
+  if (all) all.disabled = o.stores.some((s) => s.status.running);
+  if (adminBusy(o)) adminTimer = setTimeout(refreshAdminProgress, 3000);
+  else loadHealth(); // finished: the product counts and freshness have changed
+}
+
+function adminStoreTiles(o) {
+  return `<div class="stat-grid">${o.stores.map((s) => {
+      const r = s.runs[0];
+      const status = s.status.running
+        ? `<strong>Running…</strong> ${s.status.products} products<br><span class="hint">${esc(s.status.message)}</span>`
+        : r ? `Last run ${fmtDate(r.started_at)}: <strong>${esc(r.status)}</strong>${r.error ? `<br><span class="warn">${esc(r.error)}</span>` : ` · ${r.price_changes} price changes`}` : 'Never refreshed';
+      return `<div class="tile"><div class="label">${dot(s.store)} ${esc(storeName(s.store))}</div>
+        <div class="value">${s.products.toLocaleString()}</div>
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}</div>
+        <p>${s.fedByCollector ? '<span class="hint">Collected from home (not crawled by this server)</span>'
+          : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
+    }).join('')}</div>`;
+}
+
+function adminIgaCheck(o) {
+  return `<p>${o.iga.onlineStores.toLocaleString()} IGA stores currently publish prices online and can be picked.
+      ${o.iga.check.running ? `<span class="state pending">Checking now… ${o.iga.check.done} of ${o.iga.check.total}</span>`
+        : o.iga.lastCheck ? `<span class="hint">Last checked ${fmtDate(o.iga.lastCheck.started_at)}${o.iga.lastCheck.error
+          ? ` — <span class="warn">failed: ${esc(o.iga.lastCheck.error)}</span>`
+          : ` — ${o.iga.lastCheck.came_online} came online, ${o.iga.lastCheck.went_offline} went offline`}.</span>` : '<span class="hint">Not checked yet.</span>'}
+      <button class="small" id="iga-check" ${o.iga.check.running ? 'disabled' : ''}>Check now</button></p>`;
+}
+
+function adminIgaStores(o) {
+  return `<div class="table-scroll"><table class="data"><thead><tr><th>Store</th><th>Added</th><th>Prices updated</th><th></th></tr></thead><tbody>
+      ${o.iga.tracked.map((t) => `<tr><td>${esc(t.name || `Store ${t.store_id}`)} <span class="hint">${esc([t.suburb, t.state].filter(Boolean).join(' '))}</span></td>
+        <td>${fmtDate(t.added_at)}</td>
+        <td>${(o.iga.queue.fetching || [o.iga.queue.current]).includes(t.store_id) ? '<span class="state pending">fetching now…</span>' : o.iga.queue.waiting.includes(t.store_id) ? '<span class="state pending">queued</span>' : t.last_scraped_at ? fmtDate(t.last_scraped_at) : 'not yet'}</td>
+        <td>${t.store_id === o.iga.defaultStoreId ? '<span class="hint">default</span>' : `<button class="small ghost" data-untrack-iga="${esc(t.store_id)}">Stop following</button>`}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function adminBarcodes(o) {
+  return `<p>${(o.barcodes.with_barcode || 0).toLocaleString()} of ${(o.barcodes.total || 0).toLocaleString()} Coles products have a barcode
+      (${(o.barcodes.checked || 0).toLocaleString()} pages checked).
+      ${o.barcodes.status.running ? `<span class="state pending">Fetching… ${o.barcodes.status.done} of ${o.barcodes.status.total}</span>`
+        : '<button class="small" id="barcodes-now">Fetch more now</button>'}</p>`;
 }
 
 // ------------------------------------------------------------------ site settings

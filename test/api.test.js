@@ -957,3 +957,75 @@ test('responses are compressed and search results stay small', async () => {
   const js = await fetch(base + '/app.js', { headers: { 'Accept-Encoding': 'gzip' } });
   assert.equal(js.headers.get('content-encoding'), 'gzip');
 });
+
+test('cheapest of what you searched for, any brand: by size, or for the size asked for', async () => {
+  upsertProducts('coles', [
+    { store_product_id: 'bp1', name: 'Bestprice Full Cream Milk', brand: 'Bestprice', size_text: '1L', category: 'Milk', price: 1.9 },
+    { store_product_id: 'bp2', name: 'Bestprice Lactose Free Milk', brand: 'Bestprice', size_text: '1L', category: 'Milk', price: 1.2 },
+    { store_product_id: 'bp3', name: 'Bestprice Milk Chocolate Block', brand: 'Bestprice', size_text: '200g', category: 'Chocolate', price: 0.5 },
+  ]);
+  upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 1.6 }]);
+  const api = client();
+  const sized = (await api('GET', '/api/best-price?q=1l+milk')).body;
+  assert.equal(sized.size, '1L');
+  const g = sized.groups[0];
+  assert.equal(g.products[0].name, 'Otherbrand Full Cream Milk 1L', 'the cheapest plain 1L milk, whatever the brand');
+  assert.ok(!g.products.some((p) => /Lactose/.test(p.name)), 'lactose free is a different milk');
+  assert.ok(!g.products.some((p) => /Chocolate/.test(p.name)), 'milk chocolate isn’t milk');
+  assert.equal(g.cheapestPerStore.coles.name, 'Bestprice Full Cream Milk');
+  assert.ok(sized.variants.length === 0 || sized.variants.every((v) => v.word && v.label));
+  const lf = (await api('GET', '/api/best-price?q=lactose+free+milk+1l')).body;
+  assert.equal(lf.groups[0].products[0].name, 'Bestprice Lactose Free Milk', 'asking for a variant gets it');
+
+  const bySize = (await api('GET', '/api/best-price?q=milk')).body;
+  assert.equal(bySize.size, null);
+  const labels = bySize.groups.map((x) => x.label);
+  assert.ok(labels.includes('1L') && labels.includes('2L'), labels.join(','));
+  assert.equal(bySize.groups.filter((x) => x.bestValue).length, 1, 'one best value per litre');
+  const best = bySize.groups.find((x) => x.bestValue);
+  assert.ok(bySize.groups.every((x) => x.products[0].perUnit >= best.products[0].perUnit));
+});
+
+test('swapping a list item to another product clears its per-shop picks', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'swapper@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  const two = await productId(api, 'milk', 'woolworths');
+  const { id } = (await api('POST', `/api/lists/${list.id}/items`, { productId: two })).body;
+  await api('PUT', `/api/items/${id}/stores/coles`, { productId: null });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.ok(v.items[0].perStore.coles.excluded);
+  const one = (await api('GET', '/api/search?q=otherbrand+full+cream+milk')).body[0].anchor.id;
+  await api('PATCH', `/api/items/${id}`, { productId: one });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].anchor.id, one);
+  assert.ok(!v.items[0].perStore.coles.excluded, 'old picks were for the old size');
+});
+
+test('"add cheapest" items follow the prices', async () => {
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'cheapskate@example.com', password: 'password123' });
+  const list = (await api('GET', '/api/lists')).body[0];
+  assert.equal((await api('POST', `/api/lists/${list.id}/items`, { cheapest: 'milk' })).status, 400, 'needs a size');
+  const { id } = (await api('POST', `/api/lists/${list.id}/items`, { cheapest: '1l milk' })).body;
+  await api('POST', `/api/lists/${list.id}/items`, { cheapest: '1L milk' });
+  let v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items.length, 1, 'the same search again adds to its quantity');
+  assert.equal(v.items[0].quantity, 2);
+  assert.equal(v.items[0].matchMode, 'cheapest');
+  assert.equal(v.items[0].query, '1l milk');
+  assert.equal(v.items[0].anchor.name, 'Otherbrand Full Cream Milk 1L');
+  assert.equal(v.items[0].perStore.coles.product.name, 'Bestprice Full Cream Milk');
+
+  upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 2.5 }]);
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].anchor.name, 'Bestprice Full Cream Milk', 'the price went up: now the other one is cheapest');
+
+  // Back to a fixed product: the one it picks now.
+  await api('PATCH', `/api/items/${id}`, { productId: v.items[0].anchor.id, matchMode: 'similar' });
+  v = (await api('GET', `/api/lists/${list.id}`)).body;
+  assert.equal(v.items[0].matchMode, 'similar');
+  assert.ok(!v.items[0].query);
+  assert.equal(v.items[0].anchor.name, 'Bestprice Full Cream Milk');
+  upsertProducts('woolworths', [{ store_product_id: 'bp4', name: 'Otherbrand Full Cream Milk 1L', brand: 'Otherbrand', size_text: '1L', category: 'Milk', price: 1.6 }]);
+});

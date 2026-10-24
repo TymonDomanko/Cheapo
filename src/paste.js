@@ -3,6 +3,7 @@
 // anything that doesn't match well can be added as a free-text note instead.
 
 import { compareSearch } from './compare.js';
+import { bestPrices } from './bestprice.js';
 
 const MAX_LINES = 60;
 
@@ -49,16 +50,29 @@ export function previewPaste(text, opts = {}) {
     } catch {
       groups = []; // a query FTS can't parse: keep it as a note
     }
-    const options = groups.map((g) => ({
+    // First the cheapest of it, any brand: for the size typed, or the cheapest of each common size.
+    let cheapest = [];
+    try {
+      const best = bestPrices(l.query, opts);
+      // query: the search an "add cheapest" item keeps re-running ("milk 2L").
+      cheapest = (best?.groups || []).filter((g) => g.products[0]).map((g) => ({
+        productId: g.products[0].id, name: g.products[0].name, size: g.products[0].size_text || null, store: g.products[0].store,
+        price: g.products[0].price, cheapest: true, query: best.size ? best.query : g.qty ? `${best.query} ${g.label}` : null,
+      }));
+    } catch {
+      cheapest = [];
+    }
+    const options = [...cheapest, ...groups.map((g) => ({
       productId: g.anchor.id,
       name: g.anchor.name,
       size: g.anchor.size_text,
       store: g.cheapest,
       price: g.cheapest ? g.best[g.cheapest]?.product.price ?? null : null,
-    }));
+    }))].filter((o, i, all) => all.findIndex((x) => x.productId === o.productId) === i).slice(0, 8);
     const wanted = words(l.query).filter((w) => w.length > 2 || /\d/.test(w));
     const top = options[0] ? new Set(words(options[0].name)) : null;
-    const confident = !!top && wanted.length > 0 && wanted.every((w) => top.has(w) || [...top].some((t) => t.startsWith(w)));
+    const confident = cheapest.length > 0
+      || (!!top && wanted.length > 0 && wanted.every((w) => top.has(w) || [...top].some((t) => t.startsWith(w))));
     return { ...l, options, confident };
   });
 }
