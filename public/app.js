@@ -740,34 +740,46 @@ $('#results').addEventListener('click', (e) => {
 
 const perUnitText = (p) => (p.perUnit != null ? `${money(p.perUnit)}/${esc(p.unitWord)}` : '');
 
+// Short enough for five across a phone screen.
+const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.' };
+
 function renderBestPrice(b) {
   if (!b || !b.groups?.length) return '';
   const what = esc(b.query.replace(/\s+/g, ' '));
+  // The first few type chips, then "+N" for the rest.
+  const CHIPS = 4;
   const chips = b.variants?.length
-    ? `<div class="variant-chips"><span class="hint">${b.mixed ? 'All types shown. Just:' : `Regular ${esc(b.query.replace(/\b\d.*?\b(ml|l|g|kg|pack)\b/gi, '').trim())} shown. Or:`}</span>
-        ${b.variants.map((v) => `<button type="button" class="chip" data-narrow="${esc(v.word)}">${esc(v.label)}</button>`).join('')}</div>`
+    ? `<div class="variant-chips">${b.mixed ? '<span class="hint">All types shown. Just:</span>' : ''}
+        ${b.variants.map((v, i) => `<button type="button" class="chip" data-narrow="${esc(v.word)}" ${i >= CHIPS ? 'hidden data-more' : ''}>${esc(v.label)}</button>`).join('')}
+        ${b.variants.length > CHIPS ? `<button type="button" class="chip ghost" data-show-more>+${b.variants.length - CHIPS}</button>` : ''}</div>`
     : '';
   if (b.size) {
     const g = b.groups[0];
     const [top, ...rest] = g.products;
     const stores = state.allStores.filter((s) => g.cheapestPerStore?.[s]);
+    const low = Math.min(...stores.map((s) => g.cheapestPerStore[s].price));
+    const SHOWN = 4;
+    const noun = esc(b.query.replace(/\b\d\S*\s*(ml|l|g|kg|pack)?\b/gi, '').trim());
     return `<section class="best-price">
-      <h2>Cheapest ${what} <span class="hint">${plural(g.count, 'product')} compared, any brand</span></h2>
+      <h2>Cheapest ${esc(niceQuery(b.query.replace(/\s+/g, ' ')))}</h2>
+      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed ? '' : ` · regular ${noun}`}</div>
       ${chips}
-      <div class="best-top">
+      <div class="bp-top">
         ${thumb(top)}
-        <div class="best-main">
-          <a href="#" class="deal-name" data-product="${top.id}">${esc(top.name)}</a>
-          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}${top.size_text ? ` · ${esc(top.size_text)}` : ''}</div>
-          <div><span class="price big">${money(top.price)}</span> <span class="hint">${perUnitText(top)}</span> ${dealBadges(top)}</div>
-        </div>
-        <div class="actions"><button class="add small primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
-          <button class="add small" data-add="${top.id}">+ This one</button></div>
+        <div class="bp-name"><a href="#" class="plain-link" data-product="${top.id}">${esc(top.name)}</a>
+          <div class="hint">${dot(top.store)}${esc(storeName(top.store))}</div></div>
+        <div class="bp-price"><span class="price big">${money(top.price)}</span><span class="hint">${perUnitText(top)}</span>${dealBadges(top)}</div>
       </div>
-      ${rest.length ? `<ol class="best-rest" start="2">${rest.map((p) => `<li>
-        <span>${dot(p.store)}<a href="#" data-product="${p.id}">${esc(p.name)}</a></span>
-        <span class="best-rest-price">${money(p.price)} <button class="add small" data-add="${p.id}">+ List</button></span></li>`).join('')}</ol>` : ''}
-      ${stores.length > 1 ? `<div class="per-store hint">Cheapest at each shop: ${stores.map((s) => `${dot(s)}${esc(storeName(s))} ${money(g.cheapestPerStore[s].price)}`).join(' · ')}</div>` : ''}
+      <div class="bp-add"><button class="add primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
+        <button class="add" data-add="${top.id}">+ This one</button></div>
+      ${stores.length > 1 ? `<div class="bp-shops">${stores.map((s) => `<div class="${g.cheapestPerStore[s].price <= low + 0.004 ? 'win' : ''}">
+        <span>${esc(SHORT_STORE[s] || storeName(s))}</span><b>${money(g.cheapestPerStore[s].price)}</b></div>`).join('')}</div>` : ''}
+      ${rest.length ? `<ol class="bp-rank">${rest.map((p, i) => `<li ${i >= SHOWN ? 'hidden data-more' : ''}>
+        <span class="bp-n">${i + 2}</span>
+        <div class="bp-row-name" data-product="${p.id}"><div>${esc(p.name)}</div><small>${dot(p.store)}${esc(storeName(p.store))}</small></div>
+        <div class="bp-row-price">${money(p.price)}<small>${perUnitText(p)}</small></div>
+        <button class="add round" data-add="${p.id}" aria-label="Add ${esc(p.name)} to the list">+</button></li>`).join('')}</ol>
+        ${rest.length > SHOWN ? `<button type="button" class="linkish bp-more" data-show-more>Show ${rest.length - SHOWN} more ▾</button>` : ''}` : ''}
     </section>`;
   }
   return `<section class="best-price">
@@ -792,6 +804,13 @@ function renderBestPrice(b) {
 
 // Narrow a search: a type ("lactose free") or a size ("2L").
 $('#results').addEventListener('click', (e) => {
+  const more = e.target.closest('[data-show-more]');
+  if (more) {
+    more.parentElement.closest('section, .variant-chips').querySelectorAll(more.closest('.variant-chips') ? '.chip[data-more]' : 'li[data-more]')
+      .forEach((el) => { el.hidden = false; });
+    more.remove();
+    return;
+  }
   const narrow = e.target.closest('[data-narrow]');
   const size = e.target.closest('[data-size-search]');
   if (!narrow && !size) return;

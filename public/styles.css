@@ -431,19 +431,30 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .best-price h2 { margin: 0 0 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .variant-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .chip { border-radius: 999px; padding: 3px 10px; font-size: 13px; }
-.best-top { display: grid; grid-template-columns: 72px 1fr auto; gap: 12px; align-items: center; }
-.best-top .thumb { width: 72px; height: 72px; }
-.best-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.best-top .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-@media (max-width: 600px) {
-  .best-top { grid-template-columns: 72px 1fr; }
-  .best-top .actions { grid-column: 1 / -1; justify-content: flex-start; }
-}
-.price.big { font-size: 24px; font-weight: 700; }
-.best-rest { margin: 10px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
-.best-rest li { display: list-item; }
-.best-rest li > span:first-child { margin-right: 8px; }
-.best-rest-price { float: right; font-variant-numeric: tabular-nums; }
+.bp-sub { margin: 2px 0 10px; }
+.bp-top { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.bp-top .thumb { width: 64px; height: 64px; border-radius: 10px; }
+.bp-name { min-width: 0; font-weight: 600; line-height: 1.3; }
+.bp-name .hint { font-weight: 400; margin-top: 2px; }
+.bp-price { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; }
+.bp-add { display: flex; gap: 8px; margin-top: 12px; }
+.bp-add button { flex: 1; padding: 8px 12px; }
+.bp-shops { display: grid; grid-template-columns: repeat(auto-fit, minmax(58px, 1fr)); gap: 4px; margin-top: 12px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); }
+.bp-shops b { display: block; color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; }
+.bp-shops .win b { color: var(--good); }
+.bp-rank { list-style: none; margin: 4px 0 0; padding: 0; }
+.bp-rank li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 34px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.bp-rank li:last-child { border-bottom: 0; }
+.bp-n { color: var(--muted); font-size: 13px; text-align: right; }
+.bp-row-name { min-width: 0; cursor: pointer; }
+.bp-row-name div { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bp-row-name small { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.bp-row-price { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.bp-row-price small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+button.round { width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 18px; line-height: 1; }
+.bp-more { display: block; margin: 8px auto 0; }
+a.plain-link { color: inherit; text-decoration: none; }
+a.plain-link:hover { text-decoration: underline; }
 .per-store { margin-top: 10px; }
 .size-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 .size-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
@@ -453,3 +464,4 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 #admin-health.busy { opacity: 0.5; transition: opacity 0.2s; }
 /* Room for the table before it arrives, so the sections below don't jump down. */
 #admin-health { min-height: 300px; }
+.bp-price .price { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; }
