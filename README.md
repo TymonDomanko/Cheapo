@@ -2,7 +2,7 @@
 
 <h1 align="center">Cheapo</h1>
 
-<p align="center"><strong>The cheapest groceries across Woolworths, Coles, ALDI, IGA and Harris Farm, on one shopping list.</strong></p>
+<p align="center"><strong>The cheapest groceries across Woolworths, Coles, ALDI, IGA and Harris Farm, on one shopping list. Plus Dan Murphy's, BWS and Liquorland, if you want them.</strong></p>
 
 A self-hosted price comparison site for Australian supermarkets. It collects every product and price from each chain daily (about 75,000 products), matches the same item across shops, and keeps a shared shopping list that always knows where each thing is cheapest. Run it for your household on a home server, or host it publicly with accounts.
 

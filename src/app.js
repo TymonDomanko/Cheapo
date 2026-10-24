@@ -6,7 +6,7 @@ import compression from 'compression';
 import path from 'node:path';
 import fs from 'node:fs';
 import { getDb } from './db.js';
-import { STORES, STORE_INFO } from './stores.js';
+import { STORES, STORE_INFO, LIQUOR_STORES, visibleStores } from './stores.js';
 import { compareSearch, productDetail, lookupBarcode, alcoholCategories, NO_ALCOHOL_SQL } from './compare.js';
 import {
   createUser, checkLogin, startSession, endSession, loadUser, requireUser, requireAdmin,
@@ -44,6 +44,15 @@ const APP_VERSION = process.env.APP_VERSION || 'dev';
 
 // Alcohol is left out of search, deals and price changes unless you've turned it on in Settings.
 const wantsAlcohol = (req) => !!req.user?.showAlcohol;
+/**
+ * The shops to compare for this person: the ones they picked (or all), less
+ * liquor shops unless they've turned on Show alcohol.
+ */
+const shopsFor = (req) => {
+  const visible = visibleStores(wantsAlcohol(req));
+  const picked = (req.user?.preferredStores || []).filter((s) => visible.includes(s));
+  return picked.length ? picked : visible;
+};
 
 const ALLOW_SIGNUPS = process.env.ALLOW_SIGNUPS !== 'false';
 // Filling trolleys drives a browser on the *server* machine, so it only makes
@@ -175,7 +184,7 @@ export function createApp() {
     const { q = '', store, specials, mode } = req.query;
     const groups = compareSearch(String(q).slice(0, 100), {
       store,
-      stores: req.user?.preferredStores,
+      stores: shopsFor(req),
       igaStore: igaFor(req),
       memberships: req.user?.memberships || [],
       alcohol: wantsAlcohol(req),
@@ -194,7 +203,7 @@ export function createApp() {
   app.get('/api/best-price', searchLimit, h((req) => {
     const q = String(req.query.q || '').slice(0, 100);
     const best = bestPrices(q, {
-      stores: req.user?.preferredStores,
+      stores: shopsFor(req),
       igaStore: igaFor(req),
       memberships: req.user?.memberships || [],
       alcohol: wantsAlcohol(req),
@@ -207,7 +216,7 @@ export function createApp() {
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {
-    const stores = req.user?.preferredStores;
+    const stores = shopsFor(req);
     return {
       unusual: unusualDeals({ stores, alcohol: wantsAlcohol(req) }),
       regulars: req.user ? regularsOnSale(req.user.id, { stores, igaStore: igaFor(req), memberships: req.user.memberships || [], alcohol: wantsAlcohol(req) }) : null,
@@ -216,13 +225,13 @@ export function createApp() {
 
   // A barcode scanned in the shop.
   app.get('/api/barcode/:code', searchLimit, h((req) => {
-    const out = lookupBarcode(req.params.code, { stores: req.user?.preferredStores, igaStore: igaFor(req), memberships: req.user?.memberships || [] });
+    const out = lookupBarcode(req.params.code, { stores: shopsFor(req), igaStore: igaFor(req), memberships: req.user?.memberships || [] });
     if (!out) throw bad('That doesn’t look like a product barcode');
     return out;
   }));
 
   app.get('/api/products/:id', h((req) => {
-    const out = productDetail(id(req.params.id), req.user?.preferredStores, igaFor(req));
+    const out = productDetail(id(req.params.id), shopsFor(req), igaFor(req));
     if (!out) throw bad('Not found', 404);
     out.insight = productInsight(out.product, igaFor(req));
     if (req.user) {
@@ -236,7 +245,8 @@ export function createApp() {
   app.get('/api/changes', h((req) => {
     const days = Math.min(Number(req.query.days) || 7, 90);
     const dir = req.query.direction === 'up' ? 'AND h.price > old_price' : req.query.direction === 'down' ? 'AND h.price < old_price' : '';
-    const drinks = wantsAlcohol(req) ? '' : `AND ${NO_ALCOHOL_SQL}`;
+    // Without alcohol: no drinks, and nothing from liquor shops (their mixers and snacks too).
+    const drinks = wantsAlcohol(req) ? '' : `AND ${NO_ALCOHOL_SQL} AND p.store NOT IN (${LIQUOR_STORES.map((s) => `'${s}'`).join(', ')})`;
     return getDb().prepare(`
       SELECT p.id, p.store, p.name, p.size_text, p.image_url, h.price AS new_price, h.recorded_at,
         (SELECT price FROM price_history e WHERE e.product_id = h.product_id AND e.location IS h.location AND e.id < h.id
@@ -322,7 +332,13 @@ export function createApp() {
   // ------------------------------------------------------------ your account
 
   app.patch('/api/me', requireUser, h((req) => {
-    const { name, preferredStores, applyToLists, alertsWeekly, alertsPrice, memberships, showAlcohol } = req.body || {};
+    const { name, applyToLists, alertsWeekly, alertsPrice, memberships, showAlcohol } = req.body || {};
+    let { preferredStores } = req.body || {};
+    // Turning alcohol on adds the liquor shops to the shops someone picked (they can untick them).
+    if (showAlcohol && !req.user.showAlcohol) {
+      const picked = Array.isArray(preferredStores) ? preferredStores : req.user.preferredStores;
+      if (picked?.length && !picked.some((s) => LIQUOR_STORES.includes(s))) preferredStores = [...picked, ...LIQUOR_STORES];
+    }
     const user = updateProfile(req.user.id, { name, preferredStores, alertsWeekly, alertsPrice, memberships, showAlcohol });
     if (preferredStores != null && applyToLists) lists.applyPreferredToOwnedLists(req.user.id, user.preferredStores);
     return { user };
@@ -400,7 +416,7 @@ export function createApp() {
     const list = lists.getListSummary(listId, req.user.id);
     const text = String(req.body?.text || '').slice(0, 5000);
     return previewPaste(text, {
-      stores: STORES.filter((s) => !list.excludedStores.includes(s)),
+      stores: list.stores.filter((s) => !list.excludedStores.includes(s)),
       igaStore: list.igaStoreId,
       memberships: req.user.memberships || [],
       alcohol: wantsAlcohol(req),

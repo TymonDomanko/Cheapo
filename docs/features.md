@@ -2,7 +2,7 @@
 
 ## Searching and comparing
 
-- **Every product and price** from Woolworths, Coles, ALDI, IGA and Harris Farm (about 75,000 products), refreshed every night. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
+- **Every product and price** from Woolworths, Coles, ALDI, IGA and Harris Farm (about 75,000 products), and the liquor shops Dan Murphy's, BWS and Liquorland, refreshed every night. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
 - **The cheapest of it, any brand.** Search `1l milk` and the top of the page shows the cheapest 1L milk at your shops, whatever the brand, then the next cheapest and the cheapest at each shop. Search `milk` and it shows each common size with its cheapest, highlighting the best value per litre, kilo or item.
   - "Milk" means plain milk. Lite, lactose-free, oat and so on are one tap away as chips. Free range, barn and cage eggs count as grades of the same thing.
   - Nicknames work: `coke` finds Coca-Cola, and `tp` finds toilet paper.
@@ -13,6 +13,7 @@
 - **Your shops.** Pick the shops you use at sign-up or in Settings, and search only compares those.
 - **Your IGA.** Every IGA sets its own prices, so you pick yours by suburb, postcode or "Near me". Only IGAs that publish prices online can be picked, and which ones do is re-checked daily.
 - **Alcohol** is hidden unless you turn on **Show alcohol** in Settings. It's recognised by each shop's own category, so ginger beer soft drinks and cooking wine still show.
+- **Liquor shops.** With Show alcohol on, Dan Murphy's, BWS and Liquorland join the comparison. Bottles, packs and cases are compared like for like ("24 x 375mL"), and "any six" prices count as multi-buys. With it off, the liquor shops don't appear anywhere, not even for mixers.
 
 ## Prices over time
 

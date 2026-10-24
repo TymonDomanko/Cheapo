@@ -50,7 +50,7 @@ export function lastScheduled(now = clock()) {
 }
 
 /** Shops whose refresh is shared out. */
-export const SHARED = ['woolworths', 'aldi', 'harrisfarm'].filter((s) => SCRAPERS[s]);
+export const SHARED = ['woolworths', 'aldi', 'harrisfarm', 'danmurphys', 'bws', 'liquorland'].filter((s) => SCRAPERS[s]);
 /** How many parts of a shop may be fetched at once, by everyone together. */
 export function atOnce(store) {
   const n = Number(process.env[`${store.toUpperCase()}_CONCURRENCY`]);

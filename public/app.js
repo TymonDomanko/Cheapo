@@ -50,7 +50,7 @@ async function loadConfig() {
   } catch {
     /* storage blocked */
   }
-  state.allStores = state.config.stores.map((s) => s.id);
+  state.allStores = shopsShown(!!state.config.user?.showAlcohol).map((s) => s.id);
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
@@ -197,6 +197,11 @@ function requireLogin(reason, after) {
   return false;
 }
 
+/** The shops someone sees: liquor shops only with Show alcohol on. */
+function shopsShown(alcohol) {
+  return state.config.stores.filter((s) => alcohol || !s.liquor);
+}
+
 /** Tick boxes for each shop, pre-ticked with the user's choice (or all). */
 function renderShopBoxes(el) {
   // Keep any ticks the person has already changed; otherwise start from their saved choice.
@@ -205,7 +210,9 @@ function renderShopBoxes(el) {
   const signup = !!el.closest('#signup-form');
   // On the sign-up page nothing is saved yet; elsewhere it's the store in use.
   const igaStore = signup ? state.signupIga : state.config.igaStore;
-  el.innerHTML = state.config.stores.map((s) => `<label class="check shop-box">
+  // Liquor shops appear once Show alcohol is ticked (in Settings; never at sign-up, where it's off).
+  const alcohol = !signup && !!($('[name=showAlcohol]')?.checked ?? user()?.showAlcohol);
+  el.innerHTML = shopsShown(alcohol).map((s) => `<label class="check shop-box">
     <input type="checkbox" name="shops" value="${s.id}" ${chosen.includes(s.id) ? 'checked' : ''}>
     <span>${chip(s.id, s.name)} <span class="hint">${esc(s.note || '')}</span></span></label>
     ${s.id === 'iga' ? `<div class="iga-choice">${igaStore
@@ -363,6 +370,10 @@ $('#alerts-form').addEventListener('submit', async (e) => {
       },
     });
     await loadConfig();
+    // Liquor shops come and go from "Shops I use" with Show alcohol: redraw it from the saved choice.
+    const boxes = $('#shops-form [data-shop-boxes]');
+    boxes.innerHTML = '';
+    renderShopBoxes(boxes);
     formError(f, null);
     toast('Saved');
     runSearch();
@@ -828,7 +839,7 @@ function unitText(p) {
 }
 
 // Short enough for five across a phone screen.
-const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.' };
+const SHORT_STORE = { woolworths: 'Woolies', harrisfarm: 'Harris F.', danmurphys: 'Dan’s', liquorland: 'Liquorl.' };
 
 function renderBestPrice(b) {
   if (!b || !b.groups?.length) return '';
@@ -3088,7 +3099,7 @@ try {
   const cached = JSON.parse(localStorage.getItem('lastConfig') || 'null');
   if (!cached) throw new Error('offline');
   state.config = cached;
-  state.allStores = cached.stores.map((x) => x.id);
+  state.allStores = shopsShown(!!cached.user?.showAlcohol).map((x) => x.id);
   state.names = Object.fromEntries(cached.stores.map((x) => [x.id, x.name]));
   state.stores = state.allStores;
   renderAccount();

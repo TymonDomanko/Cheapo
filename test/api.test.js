@@ -625,7 +625,7 @@ test('helpers: approved by an admin, each with its own token, handed shops to re
   const samApi = as(token);
 
   // Shops' refreshes are shared out a part at a time; Harris Farm one block of pages at a time.
-  assert.deepEqual((await samApi('GET', '/api/collector/sharing')).body.shops, ['woolworths', 'aldi', 'harrisfarm']);
+  assert.deepEqual((await samApi('GET', '/api/collector/sharing')).body.shops, ['woolworths', 'aldi', 'harrisfarm', 'danmurphys', 'bws', 'liquorland']);
   const job = (await samApi('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body;
   assert.deepEqual([job.store, job.part.key, job.part.from, job.part.to], ['harrisfarm', 'p1', 1, 3]);
   assert.equal((await as(alex.token)('POST', '/api/collector/parts/next', { stores: ['harrisfarm'] })).body.part, undefined, 'one part of Harris Farm at a time');
@@ -1209,6 +1209,37 @@ test('alcohol is left out unless you turn it on in Settings', async () => {
   assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L']);
   assert.equal((await api('PATCH', '/api/me', { showAlcohol: true })).body.user.showAlcohol, true);
   assert.deepEqual(await names(api), ['Settingtest Ginger Beer 1.25L', 'Settingtest Lager Cans 375mL x 6 pack']);
+});
+
+test('liquor shops only appear for people with alcohol on, mixers and all', async () => {
+  upsertProducts('danmurphys', [
+    { store_product_id: 'dm1-each', name: 'Liqtest Tonic Water 1L', brand: 'Liqtest', size_text: '1L', category: 'Mixers', price: 3 },
+    { store_product_id: 'dm2-case', name: 'Liqtest Lager Case', brand: 'Liqtest', size_text: '24 x 375mL', category: 'Beer', price: 50 },
+  ]);
+  upsertProducts('coles', [{ store_product_id: 'lq1', name: 'Coles Liqtest Tonic Water 1L', brand: 'Coles', size_text: '1L', category: 'Soft Drinks', price: 2.5 }]);
+  const stores = async (api, q) => [...new Set((await api('GET', `/api/search?q=${q}`)).body
+    .flatMap((g) => [g.anchor.store, ...Object.keys(g.best || {}).filter((k) => g.best[k])]))].sort();
+  const config = (await client()('GET', '/api/config')).body;
+  assert.equal(config.stores.find((s) => s.id === 'danmurphys').liquor, true, 'the page is told which shops are liquor shops');
+
+  const visitor = client();
+  assert.deepEqual(await stores(visitor, 'liqtest%20tonic'), ['coles'], 'not even Dan Murphy’s tonic water');
+
+  const api = client();
+  await api('POST', '/api/auth/signup', { email: 'liq@example.com', password: 'password123', preferredStores: ['coles', 'woolworths'] });
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles']);
+  const listId = (await api('GET', '/api/lists')).body[0].id;
+  assert.ok(!(await api('GET', `/api/lists/${listId}`)).body.stores.includes('danmurphys'), 'nor on their lists');
+  // Turning alcohol on adds the liquor shops to the ones they picked.
+  const me = (await api('PATCH', '/api/me', { showAlcohol: true })).body.user;
+  assert.deepEqual(me.preferredStores, ['coles', 'woolworths', 'danmurphys', 'bws', 'liquorland']);
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles', 'danmurphys']);
+  assert.ok((await api('GET', `/api/lists/${listId}`)).body.stores.includes('danmurphys'));
+  // And off again: gone, though they're still in the saved choice for next time.
+  await api('PATCH', '/api/me', { showAlcohol: false });
+  assert.deepEqual(await stores(api, 'liqtest%20tonic'), ['coles']);
+  const changes = (await visitor('GET', '/api/changes?days=90')).body;
+  assert.ok(!changes.some((c) => c.store === 'danmurphys'), 'price changes leave them out too');
 });
 
 test('the page asks for its script by content, so updates are never hidden by a cache', async () => {

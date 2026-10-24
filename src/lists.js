@@ -3,7 +3,7 @@
 
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
-import { STORES } from './stores.js';
+import { STORES, visibleStores } from './stores.js';
 import { getProduct, findEquivalents, betterValue } from './compare.js';
 import { lineCost, unitPriceFor } from './promos.js';
 import { getUser } from './auth.js';
@@ -64,10 +64,13 @@ export function getListSummary(listId, userId) {
   const list = d.prepare('SELECT * FROM lists WHERE id = ?').get(listId);
   const members = d.prepare(`SELECT u.id, u.name, u.email, m.role FROM list_members m JOIN users u ON u.id = m.user_id
     WHERE m.list_id = ? ORDER BY m.role DESC, m.joined_at`).all(listId);
+  // Liquor shops only count for someone who's turned on Show alcohol.
+  const stores = visibleStores(!!getUser(userId)?.showAlcohol);
   return {
     id: list.id,
     name: list.name,
     role,
+    stores,
     excludedStores: parseStores(list.excluded_stores),
     igaStoreId: list.iga_store || defaultStoreId(),
     members,
@@ -413,10 +416,10 @@ export function planFor(items, stores, memberships = []) {
  * adding it back would save. Items that can only be bought at that store are
  * counted separately rather than folded into the dollar figure.
  */
-export function storeImpact(items, included, memberships = []) {
+export function storeImpact(items, included, memberships = [], stores = STORES) {
   const current = planFor(items, included, memberships);
   const out = {};
-  for (const s of STORES) {
+  for (const s of stores) {
     const isIn = included.includes(s);
     const alt = planFor(items, isIn ? included.filter((x) => x !== s) : [...included, s], memberships);
     let delta = 0; // alt - current, over items buyable in both scenarios
@@ -457,9 +460,9 @@ export function listView(listId, userId) {
   // Member prices are personal: each person on a shared list sees their own.
   const memberships = getUser(userId)?.memberships || [];
   const items = resolveItems(listId, summary.igaStoreId, memberships);
-  const included = STORES.filter((s) => !summary.excludedStores.includes(s));
+  const included = summary.stores.filter((s) => !summary.excludedStores.includes(s));
   const plan = planFor(items, included, memberships);
-  const singleStore = Object.fromEntries(STORES.map((s) => {
+  const singleStore = Object.fromEntries(summary.stores.map((s) => {
     const p = planFor(items, [s], memberships);
     return [s, { total: p.total, missing: p.unavailable.length }];
   }));
@@ -484,7 +487,7 @@ export function listView(listId, userId) {
       };
     }),
     plan: { byStore: plan.byStore, total: plan.total, unavailable: plan.unavailable, notes: plan.notes },
-    impact: storeImpact(items, included, memberships),
+    impact: storeImpact(items, included, memberships, summary.stores),
     singleStore,
     aisles: AISLES,
     layouts: layoutsFor(userId), // the section order this shopper walks each shop in, once learned
@@ -527,10 +530,10 @@ function shopCost(listId, userId) {
   const summary = getListSummary(listId, userId);
   const memberships = getUser(userId)?.memberships || [];
   const items = resolveItems(listId, summary.igaStoreId, memberships).filter((it) => it.checkedAt && it.note == null);
-  const included = STORES.filter((s) => !summary.excludedStores.includes(s));
+  const included = summary.stores.filter((s) => !summary.excludedStores.includes(s));
   const plan = planFor(items, included, memberships);
   let oneShop = null;
-  for (const s of STORES) {
+  for (const s of summary.stores) {
     const p = planFor(items, [s], memberships);
     if (!p.unavailable.length && items.length && (!oneShop || p.total < oneShop.total)) oneShop = { store: s, total: p.total };
   }
