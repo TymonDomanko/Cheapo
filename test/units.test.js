@@ -48,3 +48,10 @@ test('finds a second measure in a different unit', () => {
   assert.deepEqual(altSize('700g', 'Coles Free Range Eggs 12 Pack', primary), { qty: 12, unit: 'ea', perWeight: false });
   assert.equal(altSize('3L', 'Coles Full Cream Milk', parseSize('3L')), null);
 });
+
+test('"each" in a name, and "each" with a weight in the name', async () => {
+  const { parseSizeFrom } = await import('../src/units.js');
+  assert.deepEqual(parseSizeFrom(null, 'Banana Each'), { qty: 1, unit: 'ea', perWeight: false });
+  assert.equal(parseSizeFrom('each', 'Brushed Potato Prepack 5kg').qty, 5000);
+  assert.equal(parseSizeFrom('each', 'Truss Tomatoes each').unit, 'ea');
+});

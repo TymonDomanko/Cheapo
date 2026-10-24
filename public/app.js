@@ -771,7 +771,7 @@ function renderBestPrice(b) {
     </section>`;
   }
   return `<section class="best-price">
-    <h2>Cheapest ${what} by size <span class="hint">any brand</span></h2>
+    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : 'by size <span class="hint">any brand</span>'}</h2>
     ${chips}
     <div class="size-cards">${b.groups.map((g) => {
       const p = g.products[0];
@@ -780,6 +780,8 @@ function renderBestPrice(b) {
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
         <div class="hint">${dot(p.store)}${esc(storeName(p.store))}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
+        ${b.produce && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
+          .map((s) => `${dot(s)}${esc(storeName(s))} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
         <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
           <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
           ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
