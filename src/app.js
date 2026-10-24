@@ -25,6 +25,7 @@ import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
 import { dataHealth } from './health.js';
 import { unusualDeals, regularsOnSale } from './deals.js';
+import { bestPrices } from './bestprice.js';
 import { COLLECTOR_CODE } from './collector-files.js';
 import * as alerts from './alerts.js';
 import * as matchfix from './matchfix.js';
@@ -154,6 +155,13 @@ export function createApp() {
     // The page shows how many equivalents there are, not each one; leave them out to keep this small.
     return groups.map(({ members, ...g }) => ({ ...g, memberCount: members.length }));
   }));
+
+  // The cheapest of what was searched for, any brand: by size, or for the size asked for.
+  app.get('/api/best-price', searchLimit, h((req) => bestPrices(String(req.query.q || '').slice(0, 100), {
+    stores: req.user?.preferredStores,
+    igaStore: igaFor(req),
+    memberships: req.user?.memberships || [],
+  })));
 
   // The home page: unusual deals for everyone, and your regulars that are on sale.
   app.get('/api/home', searchLimit, h((req) => {

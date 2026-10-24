@@ -214,6 +214,8 @@ export function updateItem(itemId, userId, { quantity, matchMode, note, productI
   if (productId != null) {
     if (!getProduct(Number(productId))) throw httpError(400, 'Unknown product');
     d.prepare('UPDATE list_items SET product_id = ?, note = NULL WHERE id = ?').run(Number(productId), itemId);
+    // Per-shop picks were for the old product (e.g. another pack size): start afresh.
+    d.prepare('DELETE FROM list_item_overrides WHERE item_id = ?').run(itemId);
   }
   if (quantity != null) d.prepare('UPDATE list_items SET quantity = ? WHERE id = ?').run(clampQty(quantity), itemId);
   if (matchMode != null) {

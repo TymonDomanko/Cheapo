@@ -26,6 +26,16 @@ const PRODUCT_COLS = `p.id, p.store, p.store_product_id, p.name, p.brand, p.size
 const AVAILABLE_SQL = `${priced('available', 0)} = 1`;
 const loc = (igaStore) => String(igaStore || defaultStoreId());
 
+// What people type vs what's on the label.
+const NICKNAMES = [[/\bcoke\b/g, 'coca cola'], [/\b(tp|loo roll|bog roll)\b/g, 'toilet paper'], [/\bvego\b/g, 'vegetarian']];
+
+/** A search as it should be looked up: nicknames swapped for label wording. */
+export function expandQuery(q) {
+  let s = String(q || '').toLowerCase();
+  for (const [re, to] of NICKNAMES) s = s.replace(re, to);
+  return s;
+}
+
 function ftsQuery(text, op = 'AND', prefixLast = op === 'AND') {
   const toks = String(text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
   if (!toks.length) return null;
@@ -45,6 +55,7 @@ function storeSet(stores) {
 }
 
 export function searchProducts(q, opts = {}) {
+  q = expandQuery(q);
   // A size in the search ("coke 1.25l", "rice 5kg") is matched against each
   // product's size rather than its name: most shops don't put it in the name.
   const size = parseSizeFrom(q);
@@ -57,7 +68,7 @@ export function searchProducts(q, opts = {}) {
   return runSearch(q, opts);
 }
 
-function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false, size = null } = {}) {
+export function runSearch(q, { store, stores, igaStore, limit = 30, offset = 0, specialsOnly = false, size = null } = {}) {
   const d = getDb();
   const match = ftsQuery(q);
   const where = [AVAILABLE_SQL];
