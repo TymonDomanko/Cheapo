@@ -2212,6 +2212,7 @@ async function loadAdmin() {
     <div class="list-head"><h2>Product data</h2>
       <button class="primary" id="scrape-all" ${o.stores.some((s) => s.status.running) ? 'disabled' : ''}>Refresh all prices</button></div>
     <p class="hint">Prices also refresh automatically (schedule “${esc(o.scrapeCron || 'off')}”). A full refresh takes 20–60 minutes.</p>
+    <p class="hint">Running version: <code>${esc(shortVersion(o.version))}</code></p>
     <div id="admin-live-stores">${adminStoreTiles(o)}</div>
     <h2 class="section">IGAs with prices online</h2>
     <div id="admin-live-iga-check">${adminIgaCheck(o)}</div>
@@ -2253,6 +2254,13 @@ async function loadAdmin() {
   loadAdminSettings();
   loadHealth();
   if (adminBusy(o) && currentTab() === 'admin') adminTimer = setTimeout(refreshAdminProgress, 3000);
+}
+
+/** "main@9223972… 2026-10-24T00:14:13Z" → "9223972 · 24 Oct 26". */
+function shortVersion(v = 'dev') {
+  const m = /@([0-9a-f]{7})[0-9a-f]*\s*(\S+)?/.exec(v);
+  if (!m) return v;
+  return m[2] ? `${m[1]} · ${fmtDate(m[2])}` : m[1];
 }
 
 const adminBusy = (o) => o.stores.some((s) => s.status.running) || (o.iga.queue.fetching?.length || o.iga.queue.current)
