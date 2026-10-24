@@ -137,7 +137,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 /* Shopping list */
 .list-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .store-toggles { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--text-2); }
-.actions { display: flex; gap: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .item {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px; margin-bottom: 8px;

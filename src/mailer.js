@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer';
 import { getDb, nowIso } from './db.js';
 import { getSetting, onSettingChange } from './settings.js';
 
-const FROM = () => getSetting('MAIL_FROM') || 'Grocery Price Compare <no-reply@localhost>';
+const FROM = () => getSetting('MAIL_FROM') || `${siteName()} <no-reply@localhost>`;
 let transport = null;
 // Reconnect with the new details when an admin changes the mail server.
 onSettingChange((key) => {

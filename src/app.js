@@ -15,7 +15,7 @@ import {
 } from './auth.js';
 import * as lists from './lists.js';
 import * as iga from './iga.js';
-import { siteUrl, mailConfigured, siteName, sendMail, emailHtml } from './mailer.js';
+import { siteUrl, mailConfigured, siteName, sendMail, emailHtml, escapeHtml } from './mailer.js';
 import * as backup from './backup.js';
 import * as settings from './settings.js';
 import { getSetting } from './settings.js';
@@ -76,7 +76,9 @@ const h = (fn) => async (req, res) => {
 function versionedIndex() {
   const pub = path.resolve('public');
   const tag = (file) => crypto.createHash('sha256').update(fs.readFileSync(path.join(pub, file))).digest('hex').slice(0, 10);
+  const name = escapeHtml(siteName());
   return fs.readFileSync(path.join(pub, 'index.html'), 'utf8')
+    .replaceAll('Grocery Price Compare', name) // SITE_NAME
     .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
 }
@@ -109,6 +111,10 @@ export function createApp() {
   const indexHtml = versionedIndex();
   const spa = (req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml);
   app.get('/', spa);
+  // The installable-app details, with the site's name.
+  const manifest = JSON.parse(fs.readFileSync(path.resolve('public/manifest.webmanifest'), 'utf8'));
+  manifest.name = siteName();
+  app.get('/manifest.webmanifest', (req, res) => res.set('Cache-Control', 'no-cache').type('application/manifest+json').send(JSON.stringify(manifest)));
   app.use(express.static(path.resolve('public'), { index: false, setHeaders: (res) => res.set('Cache-Control', 'no-cache') }));
   // Libraries only change when the app is upgraded, so browsers may keep them for a day.
   const vendor = { maxAge: '1d' };
