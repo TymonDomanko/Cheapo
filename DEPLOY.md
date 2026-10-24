@@ -82,6 +82,8 @@ services:
       - /mnt/user/supermarket:/data
 ```
 
+**Updating on Unraid:** use Compose Manager's **Update Stack** (on the Docker tab, under the compose stacks), not the container's own "apply update" — Unraid's updater only works for containers made from its templates, so for a compose container it looks like it updated but keeps the old image. Admin → *Running version* shows which build is running (it should match the latest commit on GitHub), and so does the first line of the container's log.
+
 There's no `volumes:` section at the bottom: the data goes straight into the share. That folder then holds the database (`supermarket.db`), its daily backups and the cached collector programs. Back it up like any other share.
 
 ## 2. Docker on a server with your own domain

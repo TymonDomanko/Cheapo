@@ -62,7 +62,7 @@ cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
 }, { timezone: process.env.TZ || undefined });
 
 app.listen(PORT, () => {
-  console.log(`Supermarket tools running at http://localhost:${PORT}`);
+  console.log(`Supermarket tools (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
   resumeSummary(); // a refresh's admin summary that was waiting when the server stopped
 });

@@ -1,11 +1,13 @@
 # Run on your own machine or a home server: http://localhost:3000 (or HOST_PORT in .env)
 #   cp .env.example .env   (set ADMIN_EMAILS; for plain http on a LAN set SECURE_COOKIES=false)
 #   docker compose up -d
-# Uses the published image; add `--build` (and keep `build: .`) to build from this checkout instead.
+# Update: docker compose pull && docker compose up -d
+# Uses the published image. To build from this checkout instead, uncomment `build: .` and run
+# `docker compose up -d --build` (then pulling no longer updates it: it runs what's checked out here).
 services:
   app:
     image: ghcr.io/tymondomanko/supermarket-tools:latest
-    build: .
+    # build: .
     restart: unless-stopped
     ports:
       # HOST_PORT: the port on this machine (default 3000). PORT: the app's port inside the
