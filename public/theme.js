@@ -24,7 +24,7 @@
     else root.dataset.theme = theme;
     const isDark = theme === 'dark' || (theme === 'auto' && dark.matches);
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = isDark ? '#1a1a19' : '#2a78d6';
+    if (meta) meta.content = isDark ? '#1a1a19' : '#e3262f';
     const btn = document.getElementById('theme-toggle');
     if (btn) {
       btn.innerHTML = ICON[theme];

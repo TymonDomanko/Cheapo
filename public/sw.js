@@ -2,8 +2,8 @@
 // shop with no signal. Always tries the network first, so updates show up as
 // soon as you're online. API data is handled by the app (it keeps the last
 // copy of your list and queues ticks made offline).
-const CACHE = 'grocery-shell-v4';
-const SHELL = ['/', '/theme.js', '/styles.css', '/app.js', '/vendor/chart.js/chart.umd.js', '/icon.svg', '/manifest.webmanifest'];
+const CACHE = 'grocery-shell-v5';
+const SHELL = ['/', '/theme.js', '/styles.css', '/app.js', '/vendor/chart.js/chart.umd.js', '/icon.svg', '/favicon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

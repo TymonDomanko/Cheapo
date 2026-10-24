@@ -19,6 +19,7 @@
   --store-iga: #eda100;
   --store-harrisfarm: #e87ba4;
   --cost: #c0392b;
+  --brand: #e3262f;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -41,6 +42,7 @@
     --store-iga: #c98500;
     --store-harrisfarm: #d55181;
     --cost: #ef7a6c;
+    --brand: #ffe11a;
   }
 }
 :root[data-theme="dark"] {
@@ -50,6 +52,7 @@
   --good: #4cc27a; --bad: #ef7a6c; --special: #f0a14a;
   --store-aldi: #3987e5; --store-coles: #d95926; --store-woolworths: #199e70;
   --store-iga: #c98500; --store-harrisfarm: #d55181; --cost: #ef7a6c;
+  --brand: #ffe11a;
 }
 
 * { box-sizing: border-box; }
@@ -83,6 +86,11 @@ input[type="search"], select, input[type="number"] {
 }
 .brand { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; }
 .brand h1 { font-size: 18px; grid-column: 1; }
+/* The logo: the winking specials sticker and a "Cheapo!" wordmark */
+.brand-name { display: flex; align-items: center; gap: 8px; }
+.brand-icon { width: 30px; height: 30px; border-radius: 8px; flex: none; }
+.brand-text { font-family: "Arial Black", "Helvetica Neue", Impact, system-ui, sans-serif; font-weight: 900; font-size: 22px; letter-spacing: -.01em; color: var(--brand); display: inline-block; transform: rotate(-3deg); }
+.brand-text.bang::after { content: "!"; color: var(--text); }
 .brand .sub { grid-column: 1; }
 .theme-toggle { grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); border-color: var(--border); }
 .brand .sub { color: var(--muted); font-size: 13px; }

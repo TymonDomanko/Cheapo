@@ -61,7 +61,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 export function emailHtml({ heading, paragraphs = [], button, footer, extraHtml = '' }) {
   return `<!doctype html><html><body style="margin:0;padding:24px;background:#f6f6f4;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0b0b0b">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e2e1dc;border-radius:12px;padding:24px">
-    <p style="margin:0 0 4px;color:#7a7974;font-size:13px">${esc(siteName())}</p>
+    <p style="margin:0 0 6px;color:#7a7974;font-size:13px"><img src="${esc(siteUrl())}/icon-192.png" alt="" width="22" height="22" style="vertical-align:middle;border-radius:5px;margin-right:6px">${esc(siteName())}</p>
     <h1 style="font-size:20px;margin:0 0 12px">${esc(heading)}</h1>
     ${paragraphs.map((p) => `<p style="font-size:15px;line-height:1.5;margin:0 0 12px">${esc(p)}</p>`).join('')}
     ${extraHtml}

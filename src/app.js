@@ -79,7 +79,7 @@ function versionedIndex() {
   const name = escapeHtml(siteName());
   return fs.readFileSync(path.join(pub, 'index.html'), 'utf8')
     .replace('<title>Cheapo</title>', `<title>${name}</title>`) // SITE_NAME
-    .replace('<h1>Cheapo</h1>', `<h1>${name}</h1>`)
+    .replace('<span class="brand-text">Cheapo</span>', `<span class="brand-text${name === 'Cheapo' ? ' bang' : ''}">${name}</span>`)
     .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
 }
