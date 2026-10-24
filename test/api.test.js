@@ -650,6 +650,14 @@ test('helpers: approved by an admin, each with its own token, handed shops to re
   assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 'lots' })).status, 400);
   assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 45 })).body.settings.COLES_PAGES_PER_HOUR.value, '45');
   await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: '' });
+  // No one connection over a cap (the server included); a helper can be set lower.
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: 0 })).status, 400);
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: 20 })).body.settings.COLES_MAX_PER_CONNECTION.value, '20');
+  assert.equal((await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: 'lots' })).status, 400);
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: 8 });
+  assert.equal((await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id).coles_max, 8);
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { colesMax: null });
+  await admin('PUT', '/api/admin/settings', { COLES_MAX_PER_CONNECTION: '' });
 
   // An invite link, emailed: the helper downloads it themselves, set up with a token of its own.
   assert.equal((await admin('POST', '/api/admin/helpers', { name: 'Jo', email: 'jo@example.com', send: true })).status, 400, 'no mail server yet');

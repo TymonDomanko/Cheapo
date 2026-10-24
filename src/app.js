@@ -616,7 +616,9 @@ export function createApp() {
     for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
       if (body[key] !== undefined) updates.push([key, body[key]]);
     }
-    if (body.COLES_PAGES_PER_HOUR !== undefined) updates.push(['COLES_PAGES_PER_HOUR', body.COLES_PAGES_PER_HOUR === '' ? null : String(body.COLES_PAGES_PER_HOUR)]);
+    for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) {
+      if (body[k] !== undefined) updates.push([k, body[k] === '' || body[k] === null ? null : String(body[k])]);
+    }
     if (body.SERVER_SCRAPE_STORES !== undefined) {
       const list = Array.isArray(body.SERVER_SCRAPE_STORES) ? body.SERVER_SCRAPE_STORES : null;
       // Every store ticked = the default (crawl everything), so store nothing.
@@ -775,7 +777,9 @@ export function createApp() {
   }));
   app.post('/api/admin/helpers/:id/token', requireAdmin, h((req) => ({ token: helpers.newToken(id(req.params.id)) })));
   app.patch('/api/admin/helpers/:id', requireAdmin, h((req) => {
-    helpers.setDisabled(id(req.params.id), !!req.body?.disabled);
+    const b = req.body || {};
+    if ('colesMax' in b) helpers.setColesMax(id(req.params.id), b.colesMax === null || b.colesMax === '' ? null : Number(b.colesMax));
+    if ('disabled' in b) helpers.setDisabled(id(req.params.id), !!b.disabled);
     return { ok: true };
   }));
   app.delete('/api/admin/helpers/:id', requireAdmin, h((req) => {

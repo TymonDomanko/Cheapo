@@ -2578,7 +2578,7 @@ function colesSteadyNote(c) {
   if (c.waiting) parts.push(`${c.waiting} searches waiting`);
   const workers = (c.workers || []).map((w) => `<li>${esc(w.name)}: ${w.blockedUntil
     ? `<span class="warn">paused by a bot check until ${timeOf(w.blockedUntil)}</span>`
-    : `${w.doing ? esc(w.doing) : 'waiting for work'} · ${w.lastHour} pages in the last hour`}</li>`).join('');
+    : `${w.doing ? esc(w.doing) : 'waiting for work'} · ${w.lastHour} of at most ${w.cap} pages in the last hour`}</li>`).join('');
   return `<br><span class="hint">Steady refresh: ${parts.join(' · ')}</span>${workers ? `<ul class="worker-list hint">${workers}</ul>` : ''}`;
 }
 
@@ -2706,11 +2706,12 @@ function inviteNotice(name, inv, token = null) {
 }
 
 /** Helpers: other people's collectors, sharing the work. */
-function helpersCard(list, programs, justMade, canEmail) {
+function helpersCard(list, programs, justMade, canEmail, siteCap) {
   const rows = list.map((x) => `<div class="helper-row${x.disabled ? ' off' : ''}">
       <p><strong>${esc(x.name)}</strong>${x.disabled ? ' <span class="state">turned off</span>' : ''}${x.email ? ` <span class="hint">${esc(x.email)}</span>` : ''}<br><span class="hint">${helperStatus(x)}</span>
         <br><span class="hint">${x.inviteUntil ? `Invite link works until ${dayMonth(x.inviteUntil)}` : 'No invite link open'}</span></p>
       ${justMade?.id === x.id && justMade.invite ? inviteNotice(x.name, justMade.invite, justMade.token) : ''}
+      <form class="copy-row helper-cap" data-helper-cap="${x.id}"><label>Coles: at most <input name="colesMax" type="number" min="1" max="600" value="${x.coles_max ?? ''}" placeholder="${esc(siteCap)}"> pages an hour</label><button class="small" type="submit">Set</button></form>
       <details class="helper-downloads"><summary>Download it for them</summary><div class="actions">
         ${programs.map((p) => `<button type="button" class="small" data-program="${p.id}" data-helper="${x.id}">⬇ ${esc(p.label)}</button>`).join('')}
         <a class="button small" href="/api/admin/collector/download?helper=${x.id}" data-helper-zip="${x.id}" download>⬇ Mac / zip</a>
@@ -2793,16 +2794,18 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
           ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
         <label>Coles pages an hour, all connections together${envTag('COLES_PAGES_PER_HOUR')}
           <input name="COLES_PAGES_PER_HOUR" type="number" min="0" max="600" value="${esc(st.COLES_PAGES_PER_HOUR.value ?? 30)}" ${dis('COLES_PAGES_PER_HOUR')}></label>
-        <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day; this server, the home collector and helpers share these pages rather than adding to them. More an hour means a greater chance of a bot check. 0 goes back to one big crawl each night.</p>
+        <label>Most Coles pages an hour for any one connection${envTag('COLES_MAX_PER_CONNECTION')}
+          <input name="COLES_MAX_PER_CONNECTION" type="number" min="1" max="600" value="${esc(st.COLES_MAX_PER_CONNECTION.value ?? 30)}" ${dis('COLES_MAX_PER_CONNECTION')}></label>
+        <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day. This server, the home collector and helpers share the pages above rather than adding to them, and no one connection (this server included) fetches more than the second figure; a helper can be set lower below. More an hour means a greater chance of a bot check. 0 pages an hour goes back to one big crawl each night.</p>
         <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
           <p class="hint">Untick the stores the home collector sends instead. If this server is blocked by a shop it does crawl, a collector covers it.</p>
           ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
         <p class="warn" data-form-error hidden></p>
-        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') ? '' : '<button class="primary" type="submit">Save</button>'}
+        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
 
-      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail)}
+      ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 30)}
 
       <div class="card stack">
         <h3>Off-site backup</h3>
@@ -2816,6 +2819,16 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
 
 $('#admin-root').addEventListener('submit', async (e) => {
   const f = e.target;
+  if (f.dataset.helperCap) {
+    e.preventDefault();
+    try {
+      await api(`/api/admin/helpers/${f.dataset.helperCap}`, { method: 'PATCH', body: { colesMax: f.elements.colesMax.value || null } });
+      toast('Saved');
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
   if (f.id === 'add-helper') {
     e.preventDefault();
     try {
@@ -2846,7 +2859,7 @@ $('#admin-root').addEventListener('submit', async (e) => {
       body.SERVER_SCRAPE_STORES = [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value);
       if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
     }
-    if (!v('COLES_PAGES_PER_HOUR').disabled) body.COLES_PAGES_PER_HOUR = v('COLES_PAGES_PER_HOUR').value;
+    for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) if (!v(k).disabled) body[k] = v(k).value;
   }
   try {
     await api('/api/admin/settings', { method: 'PUT', body });

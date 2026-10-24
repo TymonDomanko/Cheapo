@@ -211,7 +211,8 @@ function migrate(d) {
       mode TEXT
     );`);
   // A link a helper can open to download the collector themselves (only its hash is kept), and where it was sent.
-  for (const [col, def] of [['invite_hash', 'TEXT'], ['invite_expires', 'TEXT'], ['email', 'TEXT']]) {
+  // coles_max: the most Coles pages an hour for this helper, if lower than the site's per-connection figure.
+  for (const [col, def] of [['invite_hash', 'TEXT'], ['invite_expires', 'TEXT'], ['email', 'TEXT'], ['coles_max', 'INTEGER']]) {
     if (!d.prepare('PRAGMA table_info(collectors)').all().some((c) => c.name === col)) d.exec(`ALTER TABLE collectors ADD COLUMN ${col} ${def}`);
   }
   // Which connection did a refresh: 'server', 'home' (the site's collector token) or 'h<id>' (a helper).

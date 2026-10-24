@@ -25,6 +25,7 @@ const minutes = (n) => { now += n * 60 * 1000; };
 
 // A stand-in Coles: 3 departments of 2 pages, 2 pages of specials. `blockedFor` holds connections it's blocking.
 const blockedFor = new Set();
+let deptProducts = 96; // 2 pages a department
 const asked = []; // [connection, page]
 const product = (id) => ({ _type: 'PRODUCT', id, brand: 'Test', name: `Shared ${id}`, size: '1L', pricing: { now: 2 } });
 const page = (ids, total) => JSON.stringify({ pageProps: { searchResults: { noOfResults: total, pageSize: 48, results: ids.map(product) } } });
@@ -43,7 +44,7 @@ const fakeColes = (who) => () => ({
     }
     if (p.startsWith('product/')) return JSON.stringify({ pageProps: {} });
     const dept = p.match(/^browse\/(\w+)\.json/)?.[1];
-    if (dept) return page([`${dept}${n}`], 96);
+    if (dept) return page([`${dept}${n}`], deptProducts);
     throw Object.assign(new Error(`unexpected ${url}`), { status: 404 });
   },
 });
@@ -172,6 +173,41 @@ test('Coles: a helper that stops answering is counted out at once, and its depar
   assert.equal(asked.length, n + 1, 'every 2 minutes again');
   for (let i = 0; i < 6; i++) { minutes(2); await live.pump(); }
   assert.ok(asked.some(([w, p]) => w === 'server' && p === `browse/${job.dept}.json?slug=${job.dept}&page=2`), 'Sam’s department, from page 2');
+});
+
+test('Coles: no connection goes over its cap, the server included; spare goes to the others', async () => {
+  process.env.COLES_PAGES_PER_HOUR = '60';
+  deptProducts = 48 * 100; // plenty to do
+  minutes(24 * 60);
+  live.reset();
+  live.restartPass();
+  await live.pump();
+  const lastHour = () => live.status().workers.reduce((o, w) => ({ ...o, [w.id]: w.lastHour }), {});
+
+  // On its own, the server is capped at 30 an hour, though the limit is 60.
+  for (let i = 0; i < 90; i++) { minutes(1); await live.pump(); }
+  assert.equal(live.capFor('server'), 30);
+  assert.ok(lastHour().server <= 30 && lastHour().server >= 28, `server: ${lastHour().server}`);
+
+  // Sam is capped lower, at 10: Sam gets 10 an hour, the server keeps its 30.
+  helpers.setColesMax(sam.id, 10);
+  for (let i = 0; i < 120; i++) {
+    minutes(1);
+    await samTurn();
+    await live.pump();
+  }
+  const h = lastHour();
+  assert.ok(h[samWorker.id] <= 10 && h[samWorker.id] >= 9, `Sam: ${h[samWorker.id]}`);
+  assert.ok(h.server <= 30, `server: ${h.server}`);
+  assert.ok(live.status().lastHour <= 60);
+  assert.equal(live.status().workers.find((w) => w.id === samWorker.id).cap, 10);
+
+  // A helper's own figure can only be lower than the site's.
+  helpers.setColesMax(sam.id, 500);
+  assert.equal(live.capFor(samWorker.id), 30);
+  helpers.setColesMax(sam.id, null);
+  process.env.COLES_PAGES_PER_HOUR = '30';
+  deptProducts = 96;
 });
 
 // ---------------------------------------------------------------- other shops, a part at a time

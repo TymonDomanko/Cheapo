@@ -118,9 +118,46 @@ function activeWorkers(st) {
   if (serverWorks()) ids.unshift(SERVER);
   return [...new Set(ids)].filter((w) => !isBlocked(st, w));
 }
-/** How long each connection waits between pages, so together they keep to the limit. */
-function gapMs(st) {
-  return (Math.max(1, activeWorkers(st).length) * 3600 * 1000) / rate();
+/** The most Coles pages an hour one connection may fetch (this server included). */
+export function capFor(w) {
+  const site = Number(getSetting('COLES_MAX_PER_CONNECTION') ?? 30) || 30;
+  const own = w === SERVER ? null : helpers.colesMax(w);
+  return Math.max(1, Math.min(own ?? site, site));
+}
+
+/**
+ * Pages an hour for each connection sharing the work (plus `w`): the limit
+ * split evenly, but none above its own cap; what a capped one can't use goes
+ * to the others. Together they never exceed the limit.
+ */
+function shares(st, w) {
+  let open = [...new Set([...activeWorkers(st), w])].map((id) => ({ id, cap: capFor(id) }));
+  let left = rate();
+  const out = {};
+  while (open.length) {
+    const even = left / open.length;
+    const capped = open.filter((o) => o.cap <= even);
+    if (!capped.length) {
+      for (const o of open) out[o.id] = even;
+      break;
+    }
+    for (const o of capped) {
+      out[o.id] = o.cap;
+      left -= o.cap;
+    }
+    open = open.filter((o) => o.cap > even);
+  }
+  return out;
+}
+/** How long connection `w` waits between pages. */
+function gapMs(st, w) {
+  return (3600 * 1000) / Math.max(0.01, shares(st, w)[w]);
+}
+/** Until when `w` is at its cap for the last hour (0 if it isn't). */
+function capWait(w) {
+  if (usedLastHour(w) < capFor(w)) return 0;
+  const mine = recent.filter((r) => r.worker === w);
+  return Math.max(1000, mine[mine.length - capFor(w)].at + 3600 * 1000 - clock());
 }
 const leaseFree = (st, holder, touchedAt) => !holder || (holder !== SERVER && overdue(holder)) || clock() - Date.parse(touchedAt || 0) > LEASE_MAX_MS;
 
@@ -201,9 +238,10 @@ function nextFor(w) {
     save(st);
     return { wait: Date.parse(ws.blockedUntil) - clock() };
   }
-  const gap = gapMs(st);
+  const gap = gapMs(st, w);
   const since = clock() - (lastAt.get(w) || 0);
   if (since < gap) return { wait: gap - since };
+  if (capWait(w)) return { wait: capWait(w) };
   if (usedLastHour() >= rate()) {
     prune();
     return { wait: Math.max(1000, (recent[0]?.at || clock()) + 3600 * 1000 - clock()) };
@@ -311,7 +349,7 @@ export function helperNext(worker) {
   if (!enabled()) return { job: null, wait: 3600, off: true };
   dueAt.set(worker.id, clock()); // here now
   const r = nextFor(worker.id);
-  const wait = r.job ? gapMs(load()) : r.wait;
+  const wait = r.job ? gapMs(load(), worker.id) : r.wait;
   dueAt.set(worker.id, clock() + wait);
   return { job: r.job || null, wait: Math.ceil(wait / 1000) };
 }
@@ -339,7 +377,7 @@ export function helperResult(worker, body) {
 function nextWaitMs(w) {
   const st = load();
   if (isBlocked(st, w)) return Date.parse(st.workers[w].blockedUntil) - clock();
-  return Math.max(0, gapMs(st) - (clock() - (lastAt.get(w) || 0)));
+  return Math.max(capWait(w), gapMs(st, w) - (clock() - (lastAt.get(w) || 0)));
 }
 
 // ---------------------------------------------------------------- this server
@@ -365,7 +403,7 @@ async function work() {
     if (queries.length) {
       const st = load();
       if (isBlocked(st, SERVER)) return;
-      if (clock() - (lastAt.get(SERVER) || 0) < QUERY_GAP_MS || usedLastHour() >= rate()) return;
+      if (clock() - (lastAt.get(SERVER) || 0) < QUERY_GAP_MS || usedLastHour() >= rate() || capWait(SERVER)) return;
       const { q } = queries.shift();
       queried.set(q, clock());
       lastAt.set(SERVER, clock());
@@ -463,9 +501,11 @@ export function status() {
     perHour: rate(),
     lastHour: usedLastHour(),
     blockedUntil: isBlocked(st, SERVER) ? st.workers[SERVER].blockedUntil : null,
+    perConnection: capFor(SERVER),
     workers: [...ids].map((w) => ({
       id: w,
       name: helpers.nameOf(w),
+      cap: capFor(w),
       blockedUntil: isBlocked(st, w) ? st.workers[w].blockedUntil : null,
       lastHour: usedLastHour(w),
       doing: doing(w),

@@ -43,7 +43,7 @@ export function nameOf(id) {
 // ---------------------------------------------------------------- the admin page
 
 export function list() {
-  return getDb().prepare('SELECT id, name, email, created_at, disabled, last_seen_at, version, mode, invite_expires FROM collectors ORDER BY id').all()
+  return getDb().prepare('SELECT id, name, email, created_at, disabled, last_seen_at, version, mode, invite_expires, coles_max FROM collectors ORDER BY id').all()
     .map(({ invite_expires: until, ...h }) => ({ ...h, disabled: !!h.disabled, worker: `h${h.id}`, inviteUntil: until && Date.parse(until) > Date.now() ? until : null }));
 }
 
@@ -99,6 +99,18 @@ export function newToken(id) {
   const token = newCollectorToken();
   getDb().prepare('UPDATE collectors SET token_hash = ? WHERE id = ?').run(hash(token), Number(id));
   return token;
+}
+
+/** A helper's own Coles cap (pages an hour), or null for the site's per-connection figure. */
+export function colesMax(worker) {
+  if (!/^h\d+$/.test(worker || '')) return null;
+  return getDb().prepare('SELECT coles_max FROM collectors WHERE id = ?').get(Number(worker.slice(1)))?.coles_max ?? null;
+}
+
+export function setColesMax(id, n) {
+  get(id);
+  if (n !== null && (!Number.isInteger(n) || n < 1 || n > 600)) throw httpError(400, 'Pages an hour should be a whole number from 1 to 600 (or blank)');
+  getDb().prepare('UPDATE collectors SET coles_max = ? WHERE id = ?').run(n, Number(id));
 }
 
 export function setDisabled(id, disabled) {
