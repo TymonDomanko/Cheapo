@@ -575,3 +575,10 @@ a.plain-link:hover { text-decoration: underline; }
 @supports not (text-box: trim-both cap alphabetic) {
   .store-chip { padding: .32em .6em .24em; }
 }
+
+/* Admin: helpers, and who's doing what in the Coles steady refresh */
+.helper-row { border-top: 1px solid var(--border); padding-top: 10px; }
+.helper-row p { margin: 0 0 6px; }
+.helper-row.off strong { color: var(--muted); }
+.helper-row .actions { flex-wrap: wrap; }
+.worker-list { margin: 4px 0 0; padding-left: 18px; }

@@ -591,6 +591,72 @@ test('home collector download, version check and self-update bundle', async () =
   if (saved) process.env.COLLECTOR_TOKEN = saved;
 });
 
+test('helpers: approved by an admin, each with its own token, handed shops to refresh', async () => {
+  const zlib = await import('node:zlib');
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  const anon = client();
+  assert.equal((await anon('POST', '/api/admin/helpers', { name: 'Sam' })).status, 401, 'admins only');
+  assert.equal((await admin('POST', '/api/admin/helpers', { name: ' ' })).status, 400, 'needs a name');
+  const sam = (await admin('POST', '/api/admin/helpers', { name: 'Sam’s PC' })).body;
+  const alex = (await admin('POST', '/api/admin/helpers', { name: 'Alex' })).body;
+  const as = (token) => (method, p, body) => fetch(base + p, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Collector-Version': 'v1', 'X-Collector-Mode': 'exe' },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  // Downloading for a helper makes it a new token, baked in; the old one stops working.
+  assert.equal((await as(sam.token)('GET', '/api/collector/latest')).status, 200);
+  const cookie = (await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }) }))
+    .headers.get('set-cookie').split(';')[0];
+  const zip = Buffer.from(await (await fetch(`${base}/api/admin/collector/download?helper=${sam.id}`, { headers: { Cookie: cookie } })).arrayBuffer());
+  const files = {};
+  for (let at = 0; zip.readUInt32LE(at) === 0x04034b50;) {
+    const size = zip.readUInt32LE(at + 18);
+    const nameLen = zip.readUInt16LE(at + 26);
+    files[zip.subarray(at + 30, at + 30 + nameLen).toString().replace(/^[^/]+\//, '')] = zlib.inflateRawSync(zip.subarray(at + 30 + nameLen, at + 30 + nameLen + size)).toString();
+    at += 30 + nameLen + size;
+  }
+  const token = files['.env'].match(/COLLECTOR_TOKEN=(\S+)/)[1];
+  assert.match(files['README.txt'], /Sam’s PC/);
+  assert.ok(files['src/scrapers/coles-pages.js'], 'it can fetch Coles pages');
+  assert.equal((await as(sam.token)('GET', '/api/collector/latest')).status, 401, 'old token stops working');
+  assert.equal((await fetch(`${base}/api/admin/collector/download?helper=999`, { headers: { Cookie: cookie } })).status, 404);
+  const samApi = as(token);
+
+  // A shop this server doesn't crawl is handed to the first helper to ask, with its run started.
+  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['woolworths', 'coles', 'aldi', 'iga'] });
+  const { runs } = (await samApi('POST', '/api/collector/claim', { stores: ['harrisfarm'] })).body;
+  assert.deepEqual(runs.map((r) => r.store), ['harrisfarm']);
+  assert.deepEqual((await as(alex.token)('POST', '/api/collector/claim', { stores: ['harrisfarm'] })).body.runs, [], 'not twice');
+  assert.equal((await as(alex.token)('POST', `/api/ingest/runs/${runs[0].runId}/items`, { items: [] })).status, 404, 'only Sam can send to Sam’s run');
+  await samApi('POST', `/api/ingest/runs/${runs[0].runId}/items`, { items: [{ store_product_id: 'hf1', name: 'Harris Farm Bananas', size_text: '1kg', price: 3.5 }] });
+  assert.equal((await samApi('POST', `/api/ingest/runs/${runs[0].runId}/finish`, { complete: true })).body.status, 'ok');
+  await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: null });
+
+  // The admin page lists helpers with when they last connected and what they last did.
+  const listed = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === sam.id);
+  assert.equal(listed.name, 'Sam’s PC');
+  assert.ok(listed.last_seen_at);
+  assert.equal(listed.mode, 'exe');
+  assert.equal(listed.lastRun.store, 'harrisfarm');
+  assert.ok(!('token_hash' in listed), 'token hashes stay on the server');
+
+  // Coles page sharing is off when steady mode is (as in these tests).
+  assert.equal((await samApi('POST', '/api/collector/coles/next', {})).body.off, true);
+  // The Coles page limit is a site setting.
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 'lots' })).status, 400);
+  assert.equal((await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: 45 })).body.settings.COLES_PAGES_PER_HOUR.value, '45');
+  await admin('PUT', '/api/admin/settings', { COLES_PAGES_PER_HOUR: '' });
+
+  // Turned off, then removed.
+  await admin('PATCH', `/api/admin/helpers/${sam.id}`, { disabled: true });
+  assert.equal((await samApi('GET', '/api/collector/latest')).status, 401);
+  await admin('DELETE', `/api/admin/helpers/${sam.id}`);
+  await admin('DELETE', `/api/admin/helpers/${alex.id}`);
+  assert.deepEqual((await admin('GET', '/api/admin/helpers')).body.helpers, []);
+});
+
 test('home collector as a single program: download with settings appended, and the launcher fetching its code', async () => {
   const zlib = await import('node:zlib');
   const { spawn } = await import('node:child_process');
@@ -646,7 +712,7 @@ test('home collector as a single program: download with settings appended, and t
   const latest = (await (await fetch(base + '/api/collector/latest', { headers: { Authorization: `Bearer ${config.COLLECTOR_TOKEN}` } })).json()).version;
   for (let i = 0; i < 100 && !out.includes('Collecting on schedule'); i++) await new Promise((r) => setTimeout(r, 100));
   child.kill();
-  assert.match(out, new RegExp(`Home collector ${latest} \\(exe\\)`), out);
+  assert.match(out, new RegExp(`Collector ${latest} \\(exe\\)`), out);
   assert.ok(fs.existsSync(path.join(home, 'code', latest, 'src', 'scrapers', 'aldi.js')), 'code cached for offline starts');
 
   fs.rmSync(pre, { recursive: true, force: true });

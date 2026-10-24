@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 // Home collector: crawls stores that block cloud servers (Woolworths, ALDI)
-// from your own connection and sends the products to your public site.
+// from your own connection and sends the products to your public site. It can
+// also be a helper on someone else's connection (the site's Admin page makes
+// one per helper), sharing the work with the site.
+//
+// Left running (COLLECT_CRON set, as a downloaded one is), it checks in every
+// few minutes and does what the site asks:
+//   - refresh a whole shop, when it's due today and nobody else has
+//     (src/claims.js). COLLECT_STORES limits which shops it will do;
+//   - fetch Coles a page at a time, at its share of the site's pace
+//     (src/coles-live.js). COLLECT_COLES=false turns that off.
+// With shops named on the command line (or an older site), it just crawls
+// those, daily at COLLECT_CRON.
 //
 // Easiest: download it from your site's Admin page (Site settings → Home
 // collector) — a single program for Windows or Linux, or a zip with
@@ -33,7 +44,10 @@ const server = (flag('server') || process.env.COLLECTOR_SERVER || '').replace(/\
 const token = flag('token') || process.env.COLLECTOR_TOKEN;
 const schedule = flag('cron') || process.env.COLLECT_CRON;
 const named = args.filter((a) => !a.startsWith('--'));
-const stores = named.length ? named : (process.env.COLLECT_STORES || 'woolworths,aldi').split(',').map((s) => s.trim());
+const listed = (process.env.COLLECT_STORES || '').split(',').map((s) => s.trim()).filter(Boolean);
+// The shops it does when the site doesn't share out the work (named, or the usual two).
+const stores = named.length ? named : listed.length ? listed : ['woolworths', 'aldi'];
+const helpColes = process.env.COLLECT_COLES !== 'false';
 
 // How this copy runs: a downloaded bundle can update itself; inside the Docker
 // image or a git checkout it can't (pull the new image / code instead).
@@ -44,6 +58,7 @@ const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf
 // Scrapers read proxy settings when loaded, so load them after .env.
 const { SCRAPERS } = await import('../scrapers/registry.js');
 const { sleep } = await import('../scrapers/http.js');
+const { colesPages } = await import('../scrapers/coles-pages.js');
 const cron = await import('../mini-cron.js');
 
 if (!server || !token) {
@@ -78,7 +93,7 @@ async function call(method, urlPath, body) {
       const res = await fetch(server + urlPath, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
       const data = await res.json().catch(() => ({}));
       if (res.ok) return data;
-      if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true });
+      if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true, status: res.status });
       throw new Error(data.error || `HTTP ${res.status}`);
     } catch (e) {
       if (e.fatal || attempt >= 4) throw e;
@@ -159,9 +174,95 @@ async function run() {
   return results.every((r) => r.status === 'fulfilled');
 }
 
-console.log(`Home collector ${VERSION} (${MODE}) for ${server}: ${stores.join(', ')}`);
-if (schedule) {
-  console.log(`Collecting on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
+// ---------------------------------------------------------------- sharing the work
+
+/** Send one claimed shop's refresh into the run the site started for it. */
+async function collectInto({ store, runId }) {
+  let sent = 0;
+  try {
+    for await (const batch of SCRAPERS[store].scrape({ log: (m) => console.log(m) })) {
+      if (!batch.length) continue;
+      await post(`/api/ingest/runs/${runId}/items`, { items: batch });
+      sent += batch.length;
+    }
+    const r = await post(`/api/ingest/runs/${runId}/finish`, { complete: true });
+    console.log(`${store}: sent ${sent} products — ${r.priceChanges} price changes recorded`);
+  } catch (e) {
+    console.error(`${store}: failed — ${e.message}`);
+    await post(`/api/ingest/runs/${runId}/finish`, { error: e.message }).catch(() => {});
+  }
+}
+
+const busy = new Set();
+/** Ask the site which shops to refresh now, and start them. False if the site doesn't share out work. */
+async function claimWork() {
+  let r;
+  try {
+    r = await post('/api/collector/claim', { stores: named.length ? named : listed });
+  } catch (e) {
+    if (e.status === 404) return false;
+    console.warn(`Couldn't ask for work: ${e.message}`);
+    return true;
+  }
+  for (const job of r.runs.filter((x) => SCRAPERS[x.store] && !busy.has(x.store))) {
+    console.log(`Refreshing ${job.store} (the site asked)`);
+    busy.add(job.store);
+    collectInto(job).finally(() => busy.delete(job.store));
+  }
+  return true;
+}
+
+/** Coles, a page at a time, for as long as the site wants. */
+async function colesLoop() {
+  const coles = colesPages();
+  for (;;) {
+    let wait = 60;
+    try {
+      const r = await post('/api/collector/coles/next', {});
+      wait = r.wait;
+      if (r.job) {
+        let body;
+        try {
+          body = { job: r.job, ...(await coles.run(r.job)) };
+        } catch (e) {
+          body = e.blocked ? { job: r.job, blocked: e.message, requests: e.requests } : { job: r.job, error: e.message, requests: e.requests };
+          console.warn(`Coles: ${e.message}`);
+        }
+        wait = (await post('/api/collector/coles/result', body)).wait;
+      }
+    } catch (e) {
+      if (e.status === 404) return; // an older site
+      console.warn(`Coles: couldn't reach the site (${e.message})`);
+    }
+    await sleep(Math.min(3600, Math.max(5, Number(wait) || 60)) * 1000);
+  }
+}
+
+async function shareWork() {
+  if (await updateIfNeeded()) process.exit(RESTART);
+  if (!(await claimWork())) return false;
+  console.log('Checking in with the site for work every 10 minutes.');
+  if (helpColes) colesLoop().catch((e) => console.error(`Coles: ${e.message}`));
+  let checkedForUpdate = Date.now();
+  setInterval(async () => {
+    if (Date.now() - checkedForUpdate > 3600 * 1000 && !busy.size) {
+      checkedForUpdate = Date.now();
+      if (await updateIfNeeded()) process.exit(RESTART);
+    }
+    claimWork().catch(() => {});
+  }, 10 * 60 * 1000);
+  return true;
+}
+
+console.log(`Collector ${VERSION} (${MODE}) for ${server}`);
+if (schedule && !named.length) {
+  if (!(await shareWork())) {
+    console.log(`This site doesn't share out work; collecting ${stores.join(', ')} on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
+    cron.schedule(schedule, () => run().catch((e) => console.error(e.message)), { timezone: process.env.TZ || undefined });
+    if (process.env.COLLECT_ON_START === 'true') run().catch((e) => console.error(e.message));
+  }
+} else if (schedule) {
+  console.log(`Collecting ${stores.join(', ')} on schedule "${schedule}"${process.env.TZ ? ` (${process.env.TZ})` : ''}`);
   cron.schedule(schedule, () => run().catch((e) => console.error(e.message)), { timezone: process.env.TZ || undefined });
   if (process.env.COLLECT_ON_START === 'true') run().catch((e) => console.error(e.message));
   else if (await updateIfNeeded()) process.exit(RESTART);

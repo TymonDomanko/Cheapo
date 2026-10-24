@@ -2,8 +2,9 @@
 //
 // Coles blocks connections that ask for a lot at once (a "Pardon Our
 // Interruption" bot check). So rather than crawl the whole shop in one go
-// every night, this asks for one page every couple of minutes (COLES_PAGES_PER_HOUR,
-// default 30), all day, in this order:
+// every night, Coles is asked for one page at a time, all day, at most
+// COLES_PAGES_PER_HOUR pages an hour (default 30; also on the Admin page) in
+// this order:
 //   1. searches: when someone searches and the Coles results are over a day
 //      old, Coles' own search for those words (one page, up to 48 products)
 //      is fetched straight away;
@@ -13,29 +14,45 @@
 //   4. the whole shop, every COLES_FULL_EVERY_DAYS (default 2), carrying on
 //      where it left off. The days count from when the last pass started;
 //   5. barcodes for matching, with whatever time is left.
-// A bot check stops everything for a while (2 hours, doubling up to a day).
+//
+// The work can be shared. This server and any helpers (approved collectors on
+// other connections, see src/helpers.js) each take a department (or the
+// specials) at a time and fetch its pages. The page limit is for all of them
+// together: with two connections each goes half as fast, so more helpers make
+// it more reliable, not heavier on Coles. Searches, lists and barcodes stay on
+// this server. A bot check pauses just the connection that got it (2 hours,
+// doubling up to a day), and its department goes back for someone else.
 // Set COLES_PAGES_PER_HOUR=0 to go back to the nightly full crawl.
 
-import { getDb, upsertProducts, markUnseenUnavailable, nowIso } from './db.js';
-import { createClient, isBotCheck, BlockedError } from './scrapers/http.js';
-import { mapProduct, SKIP } from './scrapers/coles.js';
+import { getDb, upsertProducts, markUnseenUnavailable } from './db.js';
+import { colesPages } from './scrapers/coles-pages.js';
+import { SKIP } from './scrapers/coles.js';
 import { startRun, getRun, finishRun, serverStores } from './scrapers/index.js';
 import { checkRun } from './admin-alerts.js';
 import { barcodeTodo, saveBarcode } from './barcodes.js';
+import { getSetting } from './settings.js';
+import * as helpers from './helpers.js';
 
-const ORIGIN = 'https://www.coles.com.au';
 const KEY = 'coles-live';
+const SERVER = helpers.SERVER.id;
 const STALE_MS = 24 * 3600 * 1000;
 const QUERY_AGAIN_MS = 6 * 3600 * 1000; // the same search isn't fetched again for this long
 const QUERY_GAP_MS = 3000; // searches go straight away, but not back to back
 const MAX_QUEUE = 20;
 const LIST_REFRESH_MS = 20 * 3600 * 1000;
 const LIST_LIMIT = 40;
+const ACTIVE_MS = 10 * 60 * 1000; // a helper that hasn't asked for work in this long isn't counted
+const MAX_ITEMS = 200; // products in one page's result
 
-export const rate = () => Number(process.env.COLES_PAGES_PER_HOUR ?? 30);
+export const rate = () => {
+  const n = Number(getSetting('COLES_PAGES_PER_HOUR') ?? 30);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
 const fullEveryMs = () => Number(process.env.COLES_FULL_EVERY_DAYS ?? 2) * 86400000;
-/** Steady mode is on (and this server crawls Coles itself). */
-export const enabled = () => rate() > 0 && serverStores().includes('coles') && process.env.DISABLE_BACKGROUND_SCRAPES !== 'true';
+/** Steady mode is on: Coles is refreshed a page at a time (by this server, helpers or both). */
+export const enabled = () => rate() > 0 && process.env.DISABLE_BACKGROUND_SCRAPES !== 'true';
+/** This server fetches Coles pages itself (and so can refresh searches). */
+const serverWorks = () => enabled() && serverStores().includes('coles');
 
 let clock = () => Date.now();
 /** Tests: pretend it's a different time. */
@@ -49,155 +66,196 @@ const today = () => new Date(clock()).toLocaleDateString('en-CA', { timeZone: pr
 
 function load() {
   const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(KEY);
-  return { specials: null, pass: null, lastPassAt: null, listsDay: null, listQueue: [], blockedUntil: null, backoffHours: 0, ...(row ? JSON.parse(row.value) : {}) };
+  const st = { specials: null, pass: null, lastPassAt: null, listsDay: null, listQueue: [], workers: {}, ...(row ? JSON.parse(row.value) : {}) };
+  // Saved by an older version: one connection's pause, and a pass without a department list.
+  if ('blockedUntil' in st) {
+    st.workers[SERVER] = { blockedUntil: st.blockedUntil, backoffHours: st.backoffHours || 0, blockReported: !!st.blockReported };
+    delete st.blockedUntil;
+    delete st.backoffHours;
+    delete st.blockReported;
+  }
+  if (st.pass && !('depts' in st.pass)) {
+    st.pass = { startedAt: st.pass.startedAt, depts: null, done: st.pass.done || [], resume: st.pass.cat ? { dept: st.pass.cat, page: st.pass.page } : null };
+  }
+  return st;
 }
 function save(st) {
   getDb().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value')
     .run(KEY, JSON.stringify(st));
 }
+const workerState = (st, w) => (st.workers[w] ||= { blockedUntil: null, backoffHours: 0, blockReported: false });
+const isBlocked = (st, w) => {
+  const until = st.workers[w]?.blockedUntil;
+  return !!until && clock() < Date.parse(until);
+};
 
-// Requests made in the last hour (in memory: a restart just starts counting again).
-const recent = [];
-function usedLastHour() {
-  while (recent.length && recent[0] < clock() - 3600 * 1000) recent.shift();
-  return recent.length;
+// Requests made in the last hour, by whom (in memory: a restart just starts counting again).
+const recent = []; // { at, worker }
+const lastAt = new Map(); // worker → when it last started a page
+const askedAt = new Map(); // helper → when it last asked for work
+function prune() {
+  while (recent.length && recent[0].at < clock() - 3600 * 1000) recent.shift();
 }
-let lastRequestAt = 0;
+function usedLastHour(worker = null) {
+  prune();
+  return worker ? recent.filter((r) => r.worker === worker).length : recent.length;
+}
+function count(worker, n) {
+  for (let i = 0; i < Math.max(1, n || 0); i++) recent.push({ at: clock(), worker });
+}
+
+const recentHelpers = () => [...askedAt].filter(([, at]) => clock() - at < ACTIVE_MS).map(([w]) => w);
+/** Connections sharing the work now (not paused): this server and helpers that asked lately. */
+function activeWorkers(st) {
+  const ids = recentHelpers();
+  if (serverWorks()) ids.unshift(SERVER);
+  return [...new Set(ids)].filter((w) => !isBlocked(st, w));
+}
+/** How long each connection waits between pages, so together they keep to the limit. */
+function gapMs(st) {
+  return (Math.max(1, activeWorkers(st).length) * 3600 * 1000) / rate();
+}
+const leaseMs = (st) => 20 * 60 * 1000 + 3 * gapMs(st);
+const leaseFree = (st, holder, touchedAt) => !holder || clock() - Date.parse(touchedAt || 0) > leaseMs(st);
 
 const queries = []; // searches waiting: { q }
 const queried = new Map(); // search → when it was last fetched
 
-// ---------------------------------------------------------------- talking to Coles
-
-let session = null; // { client, buildId, cats }
-let makeClient = () => createClient({ origin: ORIGIN, delayMs: 0, softBlockWaits: [] });
-/** Tests: a stand-in for the website. */
+let local = null;
+let makeClient = null;
+const localPages = () => (local ||= colesPages(makeClient || undefined));
+/** Tests: a stand-in for the website (for this server's own requests). */
 export function setClientFactory(fn) {
   makeClient = fn;
-  session = null;
+  local = null;
 }
 
-function count() {
-  recent.push(clock());
-  lastRequestAt = clock();
-}
+// ---------------------------------------------------------------- handing out work
 
-async function getSession() {
-  if (session) return session;
-  const client = makeClient();
-  if (client.constructor.name === 'BrowserClient') await client.init(); // SCRAPE_MODE=browser
-  count();
-  const html = await client.request(`${ORIGIN}/`, { accept: 'text/html' });
-  const buildId = html.match(/"buildId":"([^"]+)"/)?.[1];
-  if (!buildId) throw new BlockedError(isBotCheck(html) ? 'Coles is showing a bot check' : 'Coles: could not find the site version');
-  session = { client, buildId, cats: null };
-  return session;
-}
+const specialsDue = (st) => fullEveryMs() > 86400000 // a daily whole-shop pass sees every special anyway
+  && !(st.specials?.day === today() && st.specials.page > st.specials.pages);
 
-/** One of Coles' data pages (one request). */
-async function data(path) {
-  const s = await getSession();
-  count();
-  let text;
-  try {
-    text = await s.client.request(`${ORIGIN}/_next/data/${s.buildId}/en/${path}`);
-  } catch (e) {
-    // A new version of the site moves the data pages: start a new session next time.
-    if (e.status === 404) session = null;
-    if (e.status === 403) throw new BlockedError('Coles refused the request (HTTP 403)');
-    throw e;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw isBotCheck(text) ? new BlockedError('Coles is showing a bot check') : new Error(`Coles sent something unexpected for ${path}`);
-  }
-}
-
-/** Save a page of Coles results. Returns how many products it had. */
-function savePage(json, category = null) {
-  const r = json?.pageProps?.searchResults;
-  if (!r) return { count: 0, pages: 0 };
-  const items = (r.results || []).filter((x) => x._type === 'PRODUCT').map((x) => mapProduct(x, category));
-  if (items.length) upsertProducts('coles', items, iso());
-  return { count: items.length, pages: Math.ceil((r.noOfResults || 0) / (r.pageSize || 48)) };
-}
-
-// ---------------------------------------------------------------- the jobs
-
-/** What to fetch next, most important first, or null for nothing. */
-function nextJob(st) {
-  if (queries.length) return { kind: 'query' };
-  if (st.listQueue.length) return { kind: 'list' };
-  // A daily whole-shop pass sees every special anyway.
-  const specialsDone = fullEveryMs() <= 86400000 || (st.specials?.day === today() && st.specials.page > st.specials.pages);
-  if (!specialsDone) return { kind: 'specials' };
-  // Counted from when the last pass started, so "every day" stays every day
-  // rather than a day plus however long the pass took.
+/** Is a whole-shop pass running or due? Counted from when the last one started. */
+function passDue(st) {
   const lastStart = st.lastPassStartedAt || st.lastPassAt;
-  if (st.pass || !lastStart || clock() - Date.parse(lastStart) >= fullEveryMs()) return { kind: 'pass' };
-  if (barcodeTodo(1).length) return { kind: 'barcode' };
+  return !!st.pass || !lastStart || clock() - Date.parse(lastStart) >= fullEveryMs();
+}
+
+/**
+ * The next page for worker `w`, or null. Takes (leases) a department or the
+ * specials for it if it hasn't one. Doesn't check the pace; see nextFor.
+ */
+function pick(st, w) {
+  if (w === SERVER && st.listQueue.length) return { kind: 'list', q: st.listQueue.shift() };
+  // Carry on with what it already has.
+  if (st.specials?.worker === w && st.specials.day === today() && st.specials.page <= st.specials.pages) {
+    st.specials.touchedAt = iso();
+    return { kind: 'specials', page: st.specials.page };
+  }
+  const mine = st.pass?.depts?.find((d) => !d.done && d.worker === w);
+  if (mine) {
+    mine.touchedAt = iso();
+    return { kind: 'browse', dept: mine.dept, name: mine.name, page: mine.page };
+  }
+  // Something new.
+  if (specialsDue(st) && (st.specials?.day !== today() || leaseFree(st, st.specials.worker, st.specials.touchedAt))) {
+    if (st.specials?.day !== today()) st.specials = { day: today(), page: 1, pages: 1 };
+    Object.assign(st.specials, { worker: w, touchedAt: iso() });
+    return { kind: 'specials', page: st.specials.page };
+  }
+  if (passDue(st)) {
+    st.pass ||= { startedAt: iso(), depts: null, done: [] };
+    if (!st.pass.depts) {
+      if (!leaseFree(st, st.pass.indexWorker, st.pass.indexAt)) return null;
+      Object.assign(st.pass, { indexWorker: w, indexAt: iso() });
+      return { kind: 'index' };
+    }
+    const free = st.pass.depts.find((d) => !d.done && leaseFree(st, d.worker, d.touchedAt));
+    if (free) {
+      Object.assign(free, { worker: w, touchedAt: iso() });
+      return { kind: 'browse', dept: free.dept, name: free.name, page: free.page };
+    }
+  }
+  if (w === SERVER) {
+    const [p] = barcodeTodo(1);
+    if (p) return { kind: 'barcode', id: p.id, url: p.product_url };
+  }
   return null;
 }
 
-async function runJob(job, st) {
-  if (job.kind === 'query') {
-    const { q } = queries.shift();
-    queried.set(q, clock());
-    savePage(await data(`search/products.json?q=${encodeURIComponent(q)}`));
-  } else if (job.kind === 'list') {
-    const q = st.listQueue.shift();
-    savePage(await data(`search/products.json?q=${encodeURIComponent(q)}`));
-  } else if (job.kind === 'specials') {
-    if (st.specials?.day !== today()) st.specials = { day: today(), page: 1, pages: 1 };
-    const { pages } = savePage(await data(`on-special.json?page=${st.specials.page}`));
-    st.specials.pages = pages;
-    st.specials.page++;
-  } else if (job.kind === 'pass') {
-    await passStep(st);
-  } else if (job.kind === 'barcode') {
-    const [p] = barcodeTodo(1);
-    try {
-      const path = new URL(p.product_url).pathname.replace(/^\//, ''); // product/<slug>-<id>
-      let json = await data(`${path}.json`);
-      let canonical = null;
-      const redirect = json?.pageProps?.__N_REDIRECT;
-      if (redirect) {
-        canonical = ORIGIN + redirect;
-        json = await data(`${redirect.replace(/^\//, '')}.json`);
-      }
-      saveBarcode(p.id, JSON.stringify(json).match(/"gtin":"(\d{8,14})"/)?.[1] || null, canonical);
-    } catch (e) {
-      if (e.blocked) throw e;
-      saveBarcode(p.id, null); // no page for it (gone, or moved): checked, try again in a few months
-    }
+/**
+ * What worker `w` should do now: { job } or { wait } (milliseconds until it's
+ * worth asking again). Saves the lease.
+ */
+function nextFor(w) {
+  const st = load();
+  if (st.listsDay !== today()) queueLists(st);
+  const ws = workerState(st, w);
+  if (isBlocked(st, w)) {
+    save(st);
+    return { wait: Date.parse(ws.blockedUntil) - clock() };
   }
+  const gap = gapMs(st);
+  const since = clock() - (lastAt.get(w) || 0);
+  if (since < gap) return { wait: gap - since };
+  if (usedLastHour() >= rate()) {
+    prune();
+    return { wait: Math.max(1000, (recent[0]?.at || clock()) + 3600 * 1000 - clock()) };
+  }
+  const job = pick(st, w);
+  save(st);
+  if (!job) return { wait: Math.min(gap, 15 * 60 * 1000) };
+  lastAt.set(w, clock());
+  return { job };
 }
 
-/** One page of the whole-shop pass; the last one finishes the pass. */
-async function passStep(st) {
-  const s = await getSession();
-  if (!s.cats) {
-    const browse = await data('browse.json');
-    s.cats = (browse.pageProps?.allProductCategories?.catalogGroupView || [])
-      .filter((c) => c.level === 1 && c.type === 'CATALOG' && c.productCount > 0 && !SKIP.has(c.seoToken));
-    return; // that was this turn's request
+/** Save what worker `w` fetched for `job`. */
+function complete(w, job, result) {
+  const st = load();
+  count(w, result.requests);
+  Object.assign(workerState(st, w), { backoffHours: 0, blockedUntil: null, blockReported: false });
+  const items = Array.isArray(result.items) ? result.items.slice(0, MAX_ITEMS) : [];
+  const pages = Math.max(0, Math.min(1000, Number(result.pages) || 0));
+  if (job.kind === 'search' || job.kind === 'list') {
+    if (items.length) upsertProducts('coles', items, iso());
+  } else if (job.kind === 'specials') {
+    const s = st.specials;
+    if (s?.worker === w && s.day === today() && s.page === job.page) { // still theirs
+      if (items.length) upsertProducts('coles', items, iso());
+      s.pages = pages;
+      s.page++;
+      s.touchedAt = iso();
+      if (s.page > s.pages) s.worker = null;
+    }
+  } else if (job.kind === 'index') {
+    if (st.pass && !st.pass.depts && st.pass.indexWorker === w) {
+      const cats = (Array.isArray(result.cats) ? result.cats : []).filter((c) => c && typeof c.dept === 'string' && !SKIP.has(c.dept));
+      const resume = st.pass.resume;
+      st.pass.depts = cats.slice(0, 100).map((c) => ({
+        dept: c.dept, name: String(c.name || c.dept).slice(0, 80), products: Number(c.products) || 0,
+        page: resume?.dept === c.dept ? resume.page : 1, pages: null, done: st.pass.done.includes(c.dept), worker: null, touchedAt: null,
+      }));
+      st.pass.indexWorker = null;
+      delete st.pass.resume;
+      if (!st.pass.depts.length) st.pass.depts = null; // nothing came back: ask again later
+    }
+  } else if (job.kind === 'browse') {
+    const d = st.pass?.depts?.find((x) => x.dept === job.dept);
+    if (d && d.worker === w && d.page === job.page && !d.done) {
+      if (items.length) upsertProducts('coles', items, iso());
+      d.pages = pages;
+      d.touchedAt = iso();
+      if (d.page >= pages) {
+        d.done = true;
+        d.worker = null;
+        st.pass.done.push(d.dept);
+      } else d.page++;
+      if (st.pass.depts.every((x) => x.done)) finishPass(st);
+    }
+  } else if (job.kind === 'barcode') {
+    saveBarcode(job.id, result.gtin || null, result.canonical || null);
   }
-  if (!st.pass) st.pass = { startedAt: iso(), done: [], cat: null, page: 1, total: s.cats.length };
-  const cat = s.cats.find((c) => !st.pass.done.includes(c.seoToken));
-  if (!cat) return finishPass(st);
-  const page = st.pass.cat === cat.seoToken ? st.pass.page : 1;
-  const { pages } = savePage(await data(`browse/${cat.seoToken}.json?slug=${cat.seoToken}&page=${page}`), cat.name);
-  st.pass.total = s.cats.length;
-  if (page >= pages) {
-    st.pass.done.push(cat.seoToken);
-    st.pass.cat = null;
-    st.pass.page = 1;
-    if (st.pass.done.length >= s.cats.length) finishPass(st);
-  } else {
-    st.pass.cat = cat.seoToken;
-    st.pass.page = page + 1;
-  }
+  save(st);
 }
 
 /** The whole shop has been seen: what wasn't is gone, and the pass counts as a refresh. */
@@ -213,30 +271,78 @@ function finishPass(st) {
   st.pass = null;
 }
 
-/** Coles is blocking us: stop for a while, longer each time. */
-function blocked(st, message) {
-  st.backoffHours = Math.min(24, (st.backoffHours || 1) * 2);
-  st.blockedUntil = new Date(clock() + st.backoffHours * 3600 * 1000).toISOString();
-  session = null;
-  if (!st.blockReported) {
-    st.blockReported = true;
-    const { runId } = startRun('coles');
-    finishRun(getRun(runId), { error: `${message}. Trying again ${st.backoffHours === 2 ? 'in 2 hours' : `in ${st.backoffHours} hours`}, carrying on where it stopped.` });
-  }
-  console.warn(`[coles] ${message} — pausing for ${st.backoffHours} hours`);
+/** Hand back whatever worker `w` was doing, keeping how far it got. */
+function release(st, w) {
+  if (st.specials?.worker === w) st.specials.worker = null;
+  for (const d of st.pass?.depts || []) if (d.worker === w) d.worker = null;
+  if (st.pass?.indexWorker === w) st.pass.indexWorker = null;
 }
 
-// ---------------------------------------------------------------- the pump
+/** Coles is blocking worker `w`: stop it for a while, longer each time; the others carry on. */
+function blocked(w, job, message, requests) {
+  const st = load();
+  count(w, requests);
+  const ws = workerState(st, w);
+  ws.backoffHours = Math.min(24, (ws.backoffHours || 1) * 2);
+  ws.blockedUntil = new Date(clock() + ws.backoffHours * 3600 * 1000).toISOString();
+  release(st, w);
+  if (job?.kind === 'list') st.listQueue.unshift(job.q);
+  if (!ws.blockReported) {
+    ws.blockReported = true;
+    const who = w === SERVER ? '' : ` (${helpers.nameOf(w)})`;
+    const { runId } = startRun('coles');
+    getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(w, runId);
+    finishRun(getRun(runId), { error: `${message}${who}. Trying again ${ws.backoffHours === 2 ? 'in 2 hours' : `in ${ws.backoffHours} hours`}, carrying on where it stopped.` });
+  }
+  console.warn(`[coles] ${helpers.nameOf(w)}: ${message} — pausing it for ${ws.backoffHours} hours`);
+  save(st);
+}
+
+// ---------------------------------------------------------------- helpers' collectors
+
+/** A helper asks for a Coles page: { job, wait } or { wait } (in seconds). */
+export function helperNext(worker) {
+  if (!enabled()) return { job: null, wait: 3600, off: true };
+  askedAt.set(worker.id, clock());
+  const r = nextFor(worker.id);
+  return { job: r.job || null, wait: Math.ceil((r.job ? gapMs(load()) : r.wait) / 1000) };
+}
+
+/** A helper sends back a page: { job, items, pages, cats, requests } or { job, blocked: message } / { job, error }. */
+export function helperResult(worker, body) {
+  const job = body?.job;
+  if (!job || typeof job.kind !== 'string' || ['list', 'barcode', 'search'].includes(job.kind)) {
+    throw Object.assign(new Error('Send back the job you were given'), { status: 400 });
+  }
+  askedAt.set(worker.id, clock());
+  if (body.blocked) blocked(worker.id, job, String(body.blocked).slice(0, 200), body.requests);
+  else if (body.error) {
+    console.warn(`[coles] ${worker.name}: ${String(body.error).slice(0, 200)}`);
+    const st = load();
+    count(worker.id, body.requests);
+    release(st, worker.id);
+    save(st);
+  } else complete(worker.id, job, body);
+  return { wait: Math.ceil(nextWaitMs(worker.id) / 1000) };
+}
+
+function nextWaitMs(w) {
+  const st = load();
+  if (isBlocked(st, w)) return Date.parse(st.workers[w].blockedUntil) - clock();
+  return Math.max(0, gapMs(st) - (clock() - (lastAt.get(w) || 0)));
+}
+
+// ---------------------------------------------------------------- this server
 
 let inflight = null;
 
 /**
- * Do whatever's next, if it's time. Searches go straight away (a few seconds
- * apart); everything else one request per 60/COLES_PAGES_PER_HOUR minutes.
+ * Do whatever's next for this server, if it's time. Searches go straight away
+ * (a few seconds apart); everything else at its share of the pace.
  * Called while it's already working, it waits for that.
  */
 export function pump() {
-  if (!enabled()) return Promise.resolve();
+  if (!serverWorks()) return Promise.resolve();
   inflight ||= work().finally(() => {
     inflight = null;
   });
@@ -245,33 +351,40 @@ export function pump() {
 
 async function work() {
   for (;;) {
-    const st = load();
-    if (st.blockedUntil && clock() < Date.parse(st.blockedUntil)) return;
-    if (st.listsDay !== today()) queueLists(st);
-    const job = nextJob(st);
-    if (!job || usedLastHour() >= rate()) return save(st);
-    const urgent = job.kind === 'query';
-    const wait = urgent ? QUERY_GAP_MS : (3600 * 1000) / rate();
-    if (clock() - lastRequestAt < wait) return save(st);
+    let job;
+    if (queries.length) {
+      const st = load();
+      if (isBlocked(st, SERVER)) return;
+      if (clock() - (lastAt.get(SERVER) || 0) < QUERY_GAP_MS || usedLastHour() >= rate()) return;
+      const { q } = queries.shift();
+      queried.set(q, clock());
+      lastAt.set(SERVER, clock());
+      job = { kind: 'search', q };
+    } else {
+      job = nextFor(SERVER).job;
+      if (!job) return;
+    }
     try {
-      await runJob(job, st);
-      st.backoffHours = 0;
-      st.blockedUntil = null;
-      st.blockReported = false;
+      complete(SERVER, job, await localPages().run(job));
     } catch (e) {
-      if (e.blocked) blocked(st, e.message);
-      else console.warn(`[coles] ${e.message}`);
-      save(st);
+      if (e.blocked) blocked(SERVER, job, e.message, e.requests);
+      else {
+        console.warn(`[coles] ${e.message}`);
+        const st = load();
+        count(SERVER, e.requests);
+        release(st, SERVER);
+        save(st);
+      }
       return;
     }
-    save(st);
-    if (!urgent) return; // paced jobs: one per turn
+    if (job.kind !== 'search') return; // paced jobs: one per turn
   }
 }
 
 /** Once a day: Coles products on lists and watches that haven't been refreshed lately. */
 function queueLists(st) {
   st.listsDay = today();
+  if (!serverWorks()) return;
   const since = new Date(clock() - LIST_REFRESH_MS).toISOString();
   st.listQueue = getDb().prepare(`
     SELECT DISTINCT p.name FROM products p
@@ -283,7 +396,7 @@ function queueLists(st) {
 let timer = null;
 /** Start the steady refresh (the server calls this). */
 export function start() {
-  if (!enabled() || timer) return;
+  if (timer) return;
   timer = setInterval(() => pump().catch((e) => console.warn(`[coles] ${e.message}`)), 30 * 1000);
   timer.unref?.();
   pump().catch(() => {});
@@ -297,13 +410,12 @@ export function start() {
  * fresher prices are on the way.
  */
 export function refreshForSearch(q, productIds) {
-  if (!enabled() || !productIds.length) return false;
+  if (!serverWorks() || !productIds.length) return false;
   const query = String(q || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 80);
   if (!query) return false;
   if (queries.some((x) => x.q === query)) return true;
   if (clock() - (queried.get(query) || 0) < QUERY_AGAIN_MS) return false;
-  const st = load();
-  if (st.blockedUntil && clock() < Date.parse(st.blockedUntil)) return false;
+  if (isBlocked(load(), SERVER)) return false;
   const stale = getDb().prepare(`SELECT COUNT(*) n FROM products WHERE store = 'coles' AND last_seen < ?
     AND id IN (SELECT value FROM json_each(?))`).get(new Date(clock() - STALE_MS).toISOString(), JSON.stringify(productIds)).n;
   if (!stale || queries.length >= MAX_QUEUE) return false;
@@ -318,7 +430,7 @@ export function restartPass() {
   st.pass = null;
   st.lastPassAt = null;
   st.lastPassStartedAt = null;
-  st.blockedUntil = null;
+  for (const ws of Object.values(st.workers)) Object.assign(ws, { blockedUntil: null, backoffHours: 0, blockReported: false });
   save(st);
   pump().catch(() => {});
 }
@@ -327,13 +439,31 @@ export function restartPass() {
 export function status() {
   if (!enabled()) return { enabled: false };
   const st = load();
+  const ids = new Set([...(serverWorks() ? [SERVER] : []), ...recentHelpers(), ...Object.keys(st.workers).filter((w) => isBlocked(st, w))]);
+  const doing = (w) => {
+    if (st.specials?.worker === w && st.specials.day === today()) return `specials, page ${st.specials.page} of ${st.specials.pages}`;
+    const d = st.pass?.depts?.find((x) => x.worker === w && !x.done);
+    if (d) return `${d.name}, page ${d.page}${d.pages ? ` of ${d.pages}` : ''}`;
+    return null;
+  };
+  const passPages = st.pass?.depts ? st.pass.depts.reduce((n, d) => n + (d.pages || Math.ceil(d.products / 48) || 1), 0) : null;
+  const passDone = st.pass?.depts ? st.pass.depts.reduce((n, d) => n + (d.done ? (d.pages || 1) : d.page - 1), 0) : 0;
   return {
     enabled: true,
     perHour: rate(),
     lastHour: usedLastHour(),
-    blockedUntil: st.blockedUntil && clock() < Date.parse(st.blockedUntil) ? st.blockedUntil : null,
-    specials: st.specials?.day === today() ? { done: Math.min(st.specials.page - 1, st.specials.pages), of: st.specials.pages } : null,
-    pass: st.pass ? { startedAt: st.pass.startedAt, done: st.pass.done.length, of: st.pass.total || null } : null,
+    blockedUntil: isBlocked(st, SERVER) ? st.workers[SERVER].blockedUntil : null,
+    workers: [...ids].map((w) => ({
+      id: w,
+      name: helpers.nameOf(w),
+      blockedUntil: isBlocked(st, w) ? st.workers[w].blockedUntil : null,
+      lastHour: usedLastHour(w),
+      doing: doing(w),
+    })),
+    specials: specialsDue(st) || st.specials?.day === today()
+      ? (st.specials?.day === today() ? { done: Math.min(st.specials.page - 1, st.specials.pages), of: st.specials.pages } : { done: 0, of: null })
+      : null,
+    pass: st.pass ? { startedAt: st.pass.startedAt, done: st.pass.done.length, of: st.pass.depts?.length || null, pagesDone: passDone, pages: passPages } : null,
     lastPassAt: st.lastPassAt,
     waiting: queries.length + st.listQueue.length,
   };
@@ -344,6 +474,7 @@ export function reset() {
   recent.length = 0;
   queries.length = 0;
   queried.clear();
-  lastRequestAt = 0;
-  session = null;
+  lastAt.clear();
+  askedAt.clear();
+  local = null;
 }

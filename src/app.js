@@ -22,6 +22,8 @@ import { getSetting } from './settings.js';
 import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
 import * as colesLive from './coles-live.js';
+import * as helpers from './helpers.js';
+import * as claims from './claims.js';
 import { previewPaste } from './paste.js';
 import { productInsight } from './insights.js';
 import { logTick, resetLayout } from './layouts.js';
@@ -107,7 +109,7 @@ export function createApp() {
   // Home collectors send product batches, which can be large; everything else is small.
   const smallJson = express.json({ limit: '50kb' });
   const bigJson = express.json({ limit: '5mb' });
-  app.use((req, res, next) => (req.path.startsWith('/api/ingest/') ? bigJson : smallJson)(req, res, next));
+  app.use((req, res, next) => (req.path.startsWith('/api/ingest/') || req.path.startsWith('/api/collector/') ? bigJson : smallJson)(req, res, next));
   // The page asks for app.js?v=<hash of its contents> (and styles.css the same way), so after an
   // update no cache anywhere — the browser's, a proxy's or the offline copy — can hand back old code.
   const indexHtml = versionedIndex();
@@ -490,12 +492,17 @@ export function createApp() {
   // Stores that block cloud servers (Woolworths, ALDI) can be crawled from a
   // home connection by `npm run collect`, which sends the products here.
 
+  // The site's own token (COLLECTOR_TOKEN) or an approved helper's (src/helpers.js).
   function requireCollector(req, res, next) {
-    const want = getSetting('COLLECTOR_TOKEN');
-    const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const ok = want && got.length === want.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want));
-    if (!ok) return res.status(401).json({ error: want ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
-    collectorBundle.recordCollector({ version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') });
+    const worker = helpers.identify(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
+    if (!worker) {
+      const any = getSetting('COLLECTOR_TOKEN') || helpers.list().length;
+      return res.status(401).json({ error: any ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
+    }
+    const seen = { version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') };
+    if (worker.id === 'home') collectorBundle.recordCollector(seen);
+    helpers.touch(worker, seen);
+    req.worker = worker;
     next();
   }
 
@@ -508,15 +515,25 @@ export function createApp() {
   })));
   const collectorRun = (req) => {
     const run = getRun(id(req.params.runId));
-    if (!run || run.source !== 'collector') throw bad('Unknown run', 404);
+    if (!run || run.source !== 'collector' || (run.worker && run.worker !== req.worker.id)) throw bad('Unknown run', 404);
     return run;
   };
 
   app.post('/api/ingest/runs', requireCollector, h((req) => {
     const { store, location } = req.body || {};
     if (!STORES.includes(store)) throw bad('Unknown store');
-    return startRun(store, { location: location ? String(location) : null, source: 'collector' });
+    const run = startRun(store, { location: location ? String(location) : null, source: 'collector' });
+    getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(req.worker.id, run.runId);
+    return run;
   }));
+  // Which shops to refresh now, out of the ones the collector can do: each comes with its run started.
+  app.post('/api/collector/claim', requireCollector, h((req) => {
+    const canDo = Array.isArray(req.body?.stores) ? req.body.stores.filter((x) => STORES.includes(x)) : [];
+    return { runs: claims.claim(req.worker, canDo), colesSteady: colesLive.enabled() };
+  }));
+  // Coles page by page, shared with this server (src/coles-live.js).
+  app.post('/api/collector/coles/next', requireCollector, h((req) => colesLive.helperNext(req.worker)));
+  app.post('/api/collector/coles/result', requireCollector, h((req) => colesLive.helperResult(req.worker, req.body)));
   app.post('/api/ingest/runs/:runId/items', requireCollector, h((req) => {
     const items = req.body?.items;
     if (!Array.isArray(items) || items.length > 2000) throw bad('Send { items: [...] } (up to 2000 per batch)');
@@ -588,6 +605,7 @@ export function createApp() {
     for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
       if (body[key] !== undefined) updates.push([key, body[key]]);
     }
+    if (body.COLES_PAGES_PER_HOUR !== undefined) updates.push(['COLES_PAGES_PER_HOUR', body.COLES_PAGES_PER_HOUR === '' ? null : String(body.COLES_PAGES_PER_HOUR)]);
     if (body.SERVER_SCRAPE_STORES !== undefined) {
       const list = Array.isArray(body.SERVER_SCRAPE_STORES) ? body.SERVER_SCRAPE_STORES : null;
       // Every store ticked = the default (crawl everything), so store nothing.
@@ -606,24 +624,31 @@ export function createApp() {
     settings.setSetting('COLLECTOR_TOKEN', token);
     return { token };
   }));
-  // What a downloaded collector is set up with: this site, its token (made now
-  // if there isn't one) and the stores this server doesn't crawl itself (if it
-  // crawls everything, the usual two).
+  // What a downloaded collector is set up with: this site and a token. For a
+  // helper (?helper=<id>) that's a new token for it, so an older download of
+  // theirs stops working; otherwise the site's own token (made now if there
+  // isn't one). Which shops it does is up to this server (src/claims.js).
   function collectorSetup(req) {
-    let token = getSetting('COLLECTOR_TOKEN');
+    const helper = req.query.helper ? helpers.list().find((x) => x.id === Number(req.query.helper)) : null;
+    if (req.query.helper && !helper) throw bad('No such helper', 404);
+    let token = helper ? helpers.newToken(helper.id) : getSetting('COLLECTOR_TOKEN');
     if (!token) {
       token = settings.newCollectorToken();
       settings.setSetting('COLLECTOR_TOKEN', token);
     }
-    const notCrawled = STORES.filter((x) => !serverStores().includes(x));
-    return { serverUrl: siteUrl(req), token, stores: notCrawled.length ? notCrawled : ['woolworths', 'aldi'], cron: '0 4 * * *' };
+    return { serverUrl: siteUrl(req), token, helper: helper?.name || null, cron: '0 4 * * *' };
   }
 
   // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
   app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
-    const setup = collectorSetup(req);
+    let setup;
+    try {
+      setup = collectorSetup(req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
     const files = {
-      ...collectorBundle.bundleFiles(setup.serverUrl),
+      ...collectorBundle.bundleFiles(setup.serverUrl, setup.helper),
       '.env': collectorBundle.envFile(setup),
     };
     res.set({
@@ -645,11 +670,15 @@ export function createApp() {
     const { target } = req.params;
     if (!collectorExe.TARGETS[target]) return res.status(404).json({ error: 'Unknown platform' });
     if (!collectorExe.exeStatus(target).ready) return res.status(409).json({ error: 'Not built yet — start the build first' });
-    const setup = collectorSetup(req);
+    let setup;
+    try {
+      setup = collectorSetup(req);
+    } catch (e) {
+      return res.status(e.status || 500).json({ error: e.message });
+    }
     collectorExe.sendExe(res, target, {
       COLLECTOR_SERVER: setup.serverUrl,
       COLLECTOR_TOKEN: setup.token,
-      COLLECT_STORES: setup.stores.join(','),
       COLLECT_CRON: setup.cron,
       TZ: 'Australia/Sydney',
       COLLECT_ON_START: 'true',
@@ -658,6 +687,31 @@ export function createApp() {
   });
 
   app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
+
+  // Helpers: collectors on other connections that share the work (src/helpers.js).
+  const latestRun = getDb().prepare("SELECT store, status, started_at, finished_at, products, error FROM scrape_runs WHERE worker = ? ORDER BY id DESC LIMIT 1");
+  app.get('/api/admin/helpers', requireAdmin, h(() => {
+    const latest = collectorBundle.latestCollectorVersion();
+    const coles = colesLive.status();
+    return {
+      helpers: helpers.list().map((x) => ({
+        ...x,
+        upToDate: x.version === latest,
+        lastRun: latestRun.get(x.worker) || null,
+        coles: coles.workers?.find((w) => w.id === x.worker) || null,
+      })),
+    };
+  }));
+  app.post('/api/admin/helpers', requireAdmin, h((req) => helpers.add(req.body?.name)));
+  app.post('/api/admin/helpers/:id/token', requireAdmin, h((req) => ({ token: helpers.newToken(id(req.params.id)) })));
+  app.patch('/api/admin/helpers/:id', requireAdmin, h((req) => {
+    helpers.setDisabled(id(req.params.id), !!req.body?.disabled);
+    return { ok: true };
+  }));
+  app.delete('/api/admin/helpers/:id', requireAdmin, h((req) => {
+    helpers.remove(id(req.params.id));
+    return { ok: true };
+  }));
 
   app.post('/api/admin/settings/test-email', requireAdmin, h(async (req) => {
     if (!mailConfigured()) throw bad('Set up a mail server first');

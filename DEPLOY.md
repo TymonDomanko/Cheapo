@@ -234,13 +234,13 @@ Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from
 
 **Easiest: download it from the Admin page.**
 
-1. Go to **Admin → Site settings → Home collector** and untick the blocked shops (usually Woolworths and ALDI) under "This server crawls". Save.
-2. Press the download button for the computer that will run it. Every download is already set up for your site: its address, a collector token, and the stores you unticked.
-   - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it collects once straight away, then every day at 4am Sydney time.
+1. Go to **Admin → Site settings → Home collector**. If the server is always blocked by some shops (usually Woolworths and ALDI), untick them under "This server crawls" and save. You don't have to: the collector also covers any shop the server gets blocked by on the day.
+2. Press the download button for the computer that will run it. Every download is already set up for your site: its address and a collector token.
+   - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it checks in with your site every 10 minutes and does what the site asks (see [Sharing the work](#sharing-the-work-helpers) below).
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
      - On Linux it comes as a `.tar.gz` (so it stays executable): `tar xzf grocery-collector-linux-x64.tar.gz && ./grocery-collector`.
      - To start it with the computer, run it once with `--autostart` (undo with `--no-autostart`). On Windows this adds it to the Startup folder; on a Linux desktop it adds a log-in entry. On a Linux server, use a systemd service instead (below).
-   - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside; `COLLECT_CRON` sets the time.
+   - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside: `COLLECT_STORES` limits which shops it will refresh, and `COLLECT_COLES=false` stops it fetching Coles pages.
 
 **It keeps itself up to date.**
 - Before each collection, it asks your site for the latest collector version. If there's a newer one, it downloads it, checks the code matches the version fingerprint, and restarts with it.
@@ -279,12 +279,27 @@ Then run `sudo systemctl enable --now grocery-collector`.
 
 The token inside the downloaded program (or the zip's `.env`) is what lets it send prices, so don't share the download. If it's ever exposed, press **Generate a new token** and download the collector again.
 
+### Sharing the work (helpers)
+
+The server and every collector share the refreshing, and the site decides who does what:
+
+- **Each shop's daily refresh** (Woolworths, ALDI, Harris Farm) goes to one connection. The server gets the first 90 minutes after `SCRAPE_CRON` for the shops it crawls. After that, or straight away if the server failed, the first collector to check in takes it. A connection whose refresh of a shop failed that day isn't given it again, so another one tries. IGA stays on the server.
+- **Coles** is shared page by page. Each connection takes a department, or the specials, and fetches its pages. **The page limit (Admin → Site settings → "Coles pages an hour, all connections together", or `COLES_PAGES_PER_HOUR`) is for everyone together.** With two connections, each fetches at half the rate. More connections make it more reliable, never heavier on Coles. A bot check pauses just the connection that got it, and its department goes to another. Searches, list items and barcodes stay on the server.
+
+**Helpers** are collectors run by other people you trust, on their own internet connection. Add one under **Admin → Site settings → Helpers**:
+- Give it a name, then download the collector for them with the buttons on its row, and send it to them.
+- Each helper has its own token. Downloading again makes a new one, and the copy they already have stops working.
+- The card shows when each helper last connected, what it last refreshed, and what it's doing for Coles. **Turn off** refuses it until you turn it back on; **Remove** deletes it.
+- A helper's prices go straight into everyone's comparisons, so only add people you trust.
+
+Collectors from before work sharing keep working. Once updated (they update themselves), they check in for work instead of collecting at a fixed time. If an older one's `.env` still has `COLLECT_STORES=woolworths,aldi`, it only takes those two shops but still helps with Coles.
+
 ## The daily refresh
 
 At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
-2. **Refreshes prices** for every supermarket (except the ones a home collector sends) and every followed IGA store.
+2. **Refreshes prices** for every supermarket it crawls and every followed IGA store, skipping any a collector has already done (see [Sharing the work](#sharing-the-work-helpers)).
 3. **Fills in Coles barcodes** (nightly mode only; steady mode fits them into its spare time), products on lists first. This lets Coles products match Woolworths ones exactly.
 4. **Sends price alerts** to people whose watched products got cheaper.
 
@@ -294,7 +309,7 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
+- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). Collectors share these pages (see [Sharing the work](#sharing-the-work-helpers)). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);

@@ -47,8 +47,8 @@ test('every day: no separate specials, and a new pass starts a day after the las
   asked.length = 0;
   minutes(24 * 60 - 10);
   await live.pump();
-  assert.ok(!asked.some((a) => a.startsWith('browse/')), 'not yet');
+  assert.ok(!asked.some((a) => a.startsWith('browse')), 'not yet');
   minutes(10); await live.pump();
-  assert.ok(asked.some((a) => a.startsWith('browse/')), 'new pass');
+  assert.ok(asked.some((a) => a.startsWith('browse')), 'new pass (it starts by reading the department list)');
   assert.ok(!asked.some((a) => a.startsWith('on-special')), 'no separate specials');
 });

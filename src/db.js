@@ -199,6 +199,21 @@ function migrate(d) {
       at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_tick_log ON tick_log (user_id, store, at);`);
+  // Helpers: collectors an admin has approved, each with its own token (only its hash is kept).
+  d.exec(`CREATE TABLE IF NOT EXISTS collectors (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      last_seen_at TEXT,
+      version TEXT,
+      mode TEXT
+    );`);
+  // Which connection did a refresh: 'server', 'home' (the site's collector token) or 'h<id>' (a helper).
+  if (!d.prepare('PRAGMA table_info(scrape_runs)').all().some((c) => c.name === 'worker')) {
+    d.exec('ALTER TABLE scrape_runs ADD COLUMN worker TEXT');
+  }
   // What a finished shop cost (estimated from the prices at the time).
   for (const [col, def] of [['spent', 'REAL'], ['spent_json', 'TEXT']]) {
     if (!d.prepare('PRAGMA table_info(list_snapshots)').all().some((c) => c.name === col)) d.exec(`ALTER TABLE list_snapshots ADD COLUMN ${col} ${def}`);

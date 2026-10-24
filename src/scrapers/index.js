@@ -126,9 +126,13 @@ function carryOnLater(storeName, progress) {
   const state = progress.load();
   if (!RETRY_HOURS || retryTimers[storeName] || (state?.runs || 0) > MAX_RETRIES) return;
   console.log(`${storeName}: blocked — trying again in ${RETRY_HOURS} hours`);
+  const armedAt = nowIso();
   retryTimers[storeName] = setTimeout(() => {
     delete retryTimers[storeName];
-    if (!running.has(storeName)) scrapeStore(storeName).catch(() => {});
+    // A collector may have done it meanwhile (see src/claims.js).
+    const covered = getDb().prepare(`SELECT COUNT(*) n FROM scrape_runs WHERE store = ? AND source = 'collector'
+      AND status IN ('ok', 'running') AND started_at >= ?`).get(storeName, armedAt).n;
+    if (!running.has(storeName) && !covered) scrapeStore(storeName).catch(() => {});
   }, RETRY_HOURS * 3600 * 1000);
   retryTimers[storeName].unref?.();
 }

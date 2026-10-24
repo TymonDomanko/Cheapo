@@ -14,7 +14,7 @@ None of the supermarkets has a public API. Each scraper reads the same data the 
 
 Every night (`SCRAPE_CRON`) the server:
 1. checks which IGAs publish prices online;
-2. refreshes every shop, except ones a home collector sends;
+2. refreshes every shop it crawls, unless a collector already has. Collectors check in every 10 minutes, and `src/claims.js` hands each one any shop that's due and that nobody else has done or is doing. The server gets the first 90 minutes for its own shops, and a connection that failed a shop that day isn't given it again;
 3. fills in some Coles barcodes;
 4. sends price alerts.
 
@@ -32,7 +32,9 @@ Coles' bot protection blocks bursts, home connections included, so instead of cr
 
 Coles has about 30,000 products on about 640 pages. At the default 30 pages an hour (720 a day), the whole shop takes about two days, with specials every day. For **every price within a day**, set `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`: a pass then starts every 24 hours and takes about 16 of them, and the separate specials run is skipped because the pass covers them. More requests an hour means a greater chance of a bot check.
 
-A bot check pauses all of it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
+A bot check pauses it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
+
+**Sharing it.** Collectors (the home collector and helpers) can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together, so each connection waits *connections × 60 / limit* minutes between pages. A department is held for its connection while it keeps sending pages, and is handed on if it goes quiet for 20 minutes or more. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
 
 ## Matching the same product across shops
 
@@ -67,6 +69,9 @@ src/
   match-index.js   in-memory size and word indexes, so matching takes milliseconds
   compare.js       search and cross-shop grouping
   bestprice.js     "the cheapest of it, any brand"
+  coles-live.js    Coles a page at a time, shared between this server and collectors
+  claims.js        which connection refreshes each shop today
+  helpers.js       approved helpers and their tokens
   lists.js         lists, sharing, per-shop choices, the cheapest split, what each shop saves or costs
   deals.js         regulars on sale, unusual deals
   insights.js      "is this a good price?"

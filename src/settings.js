@@ -61,6 +61,14 @@ const SETTINGS = {
       return v;
     },
   },
+  // Coles pages an hour, this server and every helper together.
+  COLES_PAGES_PER_HOUR: {
+    check(v) {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0 || n > 600) throw httpError(400, 'Coles pages an hour should be a whole number from 0 to 600');
+      return String(n);
+    },
+  },
   SERVER_SCRAPE_STORES: {
     check(v) {
       const list = [...new Set(String(v).split(',').map((s) => s.trim()).filter(Boolean))];
