@@ -65,7 +65,7 @@ export function emailHtml({ heading, paragraphs = [], button, footer, extraHtml 
     <h1 style="font-size:20px;margin:0 0 12px">${esc(heading)}</h1>
     ${paragraphs.map((p) => `<p style="font-size:15px;line-height:1.5;margin:0 0 12px">${esc(p)}</p>`).join('')}
     ${extraHtml}
-    ${button ? `<p style="margin:20px 0"><a href="${esc(button.url)}" style="background:#2a78d6;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:600;display:inline-block">${esc(button.label)}</a></p>
+    ${button ? `<p style="margin:20px 0"><a href="${esc(button.url)}" style="background:#d6232c;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:600;display:inline-block">${esc(button.label)}</a></p>
     <p style="font-size:12px;color:#7a7974;word-break:break-all">Or open: ${esc(button.url)}</p>` : ''}
     ${footer ? `<p style="font-size:12px;color:#7a7974;margin-top:20px">${footer}</p>` : ''}
   </div></body></html>`;

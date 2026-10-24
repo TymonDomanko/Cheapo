@@ -1,14 +1,18 @@
 :root {
   color-scheme: light;
-  --bg: #f6f6f4;
-  --surface: #fcfcfb;
-  --surface-2: #f0efec;
-  --border: #e2e1dc;
-  --text: #0b0b0b;
-  --text-2: #52514e;
-  --muted: #7a7974;
-  --accent: #2a78d6;
+  /* Cheapo's colours come from the logo: specials-sticker red and yellow on a warm, price-ticket white. */
+  --bg: #f8f6f0;
+  --surface: #fffefa;
+  --surface-2: #f2eee4;
+  --border: #e6e0d3;
+  --text: #17140f;
+  --text-2: #4f4a41;
+  --muted: #7f786b;
+  --accent: #d6232c;      /* buttons, active tab, badges */
   --accent-ink: #ffffff;
+  --link: #b8141d;
+  --highlight: #ffe11a;   /* the sticker yellow */
+  --highlight-ink: #17140f;
   --good: #0a7a3c;
   --bad: #c0392b;
   --special: #b25e00;
@@ -25,14 +29,18 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #121211;
-    --surface: #1a1a19;
-    --surface-2: #242422;
-    --border: #33332f;
-    --text: #f0efec;
-    --text-2: #c3c2b7;
-    --muted: #8f8e86;
-    --accent: #3987e5;
+    --bg: #13120f;
+    --surface: #1c1a16;
+    --surface-2: #27241e;
+    --border: #38342b;
+    --text: #f3efe6;
+    --text-2: #cbc4b4;
+    --muted: #948d7e;
+    --accent: #ffd21a;
+    --accent-ink: #17140f;
+    --link: #ffd84d;
+    --highlight: #ffd21a;
+    --highlight-ink: #17140f;
     --good: #4cc27a;
     --bad: #ef7a6c;
     --special: #f0a14a;
@@ -47,8 +55,9 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
-  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e86; --accent: #3987e5;
+  --bg: #13120f; --surface: #1c1a16; --surface-2: #27241e; --border: #38342b;
+  --text: #f3efe6; --text-2: #cbc4b4; --muted: #948d7e;
+  --accent: #ffd21a; --accent-ink: #17140f; --link: #ffd84d; --highlight: #ffd21a; --highlight-ink: #17140f;
   --good: #4cc27a; --bad: #ef7a6c; --special: #f0a14a;
   --store-aldi: #3987e5; --store-coles: #d95926; --store-woolworths: #199e70;
   --store-iga: #c98500; --store-harrisfarm: #d55181; --cost: #ef7a6c;
@@ -63,7 +72,7 @@ body {
   background: var(--bg);
   color: var(--text);
 }
-a { color: var(--accent); }
+a, .linkish { color: var(--link); }
 h1, h2 { margin: 0; }
 h2 { font-size: 18px; }
 code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
@@ -191,7 +200,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .pick-name { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pick-name b { color: var(--text); font-weight: 600; }
 .pick-price { font-weight: 600; font-variant-numeric: tabular-nums; flex: none; }
-select.pick-change { flex: none; width: auto; max-width: 84px; padding: 2px 4px; font-size: 12px; color: var(--accent); border-color: transparent; background-color: transparent; }
+select.pick-change { flex: none; width: auto; max-width: 84px; padding: 2px 4px; font-size: 12px; color: var(--link); border-color: transparent; background-color: transparent; }
 
 /* The list's total, always in view. */
 .total-bar {
@@ -324,7 +333,7 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 .state.pending { color: var(--special); }
 .iga-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin: -2px 0 6px 26px; }
 .iga-choice .state { font-size: 12px; }
-.linkish { border: none; background: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font-size: inherit; }
+.linkish { border: none; background: none; padding: 0; color: var(--link); text-decoration: underline; cursor: pointer; font-size: inherit; }
 .col-sub { display: block; text-transform: none; letter-spacing: 0; font-size: 11px; margin-top: 2px; }
 .notice { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--surface-2); font-size: 14px; }
 .iga-why { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; }
@@ -374,7 +383,7 @@ a.who { color: var(--text-2); font-size: 14px; text-decoration: none; }
 
 /* In the shop: one tab per shop, sections in walking order */
 .shop-progress { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin: 4px 0 12px; }
-.shop-progress span { display: block; height: 100%; background: var(--accent, #2a78d6); transition: width .2s; }
+.shop-progress span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
 .shop-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 8px; }
 .shop-tabs button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; border-radius: 999px; }
 .shop-tabs button[aria-selected="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
@@ -544,3 +553,4 @@ a.plain-link:hover { text-decoration: underline; }
   .row .cell > span:last-child { min-width: 0; flex: 1; }
   .row .cell .alt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 }
+.size-label .badge.cheap { background: var(--highlight); color: var(--highlight-ink); padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; transform: rotate(-2deg); }
