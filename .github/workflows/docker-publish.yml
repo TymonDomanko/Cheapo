@@ -50,6 +50,10 @@ jobs:
           # amd64 for servers/cloud, arm64 for Raspberry Pi and ARM VPSs
           platforms: linux/amd64,linux/arm64
           push: true
+          # A plain multi-platform image with no attestation entries: Unraid's update check
+          # (and some older Docker tools) misread images that have them and don't see updates.
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
