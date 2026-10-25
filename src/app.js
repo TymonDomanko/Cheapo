@@ -163,6 +163,7 @@ export function createApp() {
       contact: getSetting('CONTACT_EMAIL'),
       operator: getSetting('SITE_OPERATOR'),
       emailEnabled: mailConfigured(),
+      priceArea: getSetting('PRICE_AREA'), // where the prices are for, shown to shoppers
     },
     };
   }));
@@ -627,7 +628,7 @@ export function createApp() {
     // Apply everything or nothing: check each value first.
     const updates = [];
     if (body.smtp !== undefined) updates.push(['SMTP_URL', body.smtp === null ? null : settings.smtpUrlFrom(body.smtp)]);
-    for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
+    for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR', 'COLES_STORE_ID', 'LIQUOR_STATE', 'PRICE_AREA']) {
       if (body[key] !== undefined) updates.push([key, body[key]]);
     }
     for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) {

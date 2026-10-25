@@ -13,6 +13,7 @@ process.env.COLES_FULL_EVERY_DAYS = '2';
 process.env.ADMIN_ALERTS = 'false';
 process.env.SCRAPE_CRON = '15 4 * * *';
 process.env.TZ = 'Australia/Sydney';
+process.env.ONE_CONNECTION_SHOPS = ''; // the general tests share every shop; the one-connection rule has its own test
 
 const { getDb } = await import('../src/db.js');
 const live = await import('../src/coles-live.js');
@@ -314,4 +315,32 @@ test('other shops: with the schedule turned off, only a refresh started from the
   minutes(60);
   assert.equal(share('harrisfarm').finished, false, 'and it isn’t replaced by itself');
   process.env.SCRAPE_CRON = saved;
+});
+
+test('other shops: a one-connection shop (Woolworths) stays with one connection; others only step in for what it can’t do', async () => {
+  const settings = await import('../src/settings.js');
+  settings.setSetting('SERVER_SCRAPE_STORES', 'aldi,coles,iga');
+  sharing.ONE_CONNECTION.add('aldi');
+  const sam = samWorker.id;
+  const alex = `h${helpers.list().find((x) => x.name === 'Alex’s laptop').id}`;
+  now = Date.parse('2026-11-03T17:20:00Z'); // a new day, 04:20 in Sydney
+  process.env.SCRAPE_CRON = '15 4 * * *';
+
+  // This server crawls ALDI, so it's the server's: helpers wait.
+  assert.equal(sharing.take(sam, ['aldi']), null);
+  assert.equal(sharing.take('server', []).part.kind, 'index');
+  sharing.done('server', 'aldi', 'index', { cats: ['d1', 'd2', 'd3'].map((k) => ({ key: k, label: k, dept: { slug: k } })) });
+  const [a, b] = [sharing.take('server', []), sharing.take('server', [])];
+  assert.deepEqual([a.part.key, b?.part.key], ['d1', undefined], 'the server at its usual pace (one at a time for ALDI)');
+  assert.equal(sharing.take(sam, ['aldi']), null, 'still the server’s');
+  // A part the server fails is fair game for a helper…
+  sharing.done('server', 'aldi', 'd1', { error: 'HTTP 500' });
+  assert.equal(sharing.take(sam, ['aldi']).part.key, 'd1');
+  sharing.done(sam, 'aldi', 'd1', {});
+  // …and if the shop blocks the server, so is the rest.
+  const c = sharing.take('server', []);
+  sharing.done('server', 'aldi', c.part.key, { blocked: 'Access denied' });
+  assert.equal(sharing.take(alex, ['aldi']).part.key, c.part.key);
+  sharing.ONE_CONNECTION.delete('aldi');
+  settings.setSetting('SERVER_SCRAPE_STORES', null);
 });

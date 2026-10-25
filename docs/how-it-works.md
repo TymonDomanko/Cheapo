@@ -38,6 +38,8 @@ A bot check pauses it for 2 hours, then 4, 8… up to a day, and admins get one 
 
 **Sharing it.** Helpers can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together and is split evenly between the connections at work, except that none goes over its own cap (`COLES_MAX_PER_CONNECTION`, 40, or lower for a helper). What a capped connection can't use is shared among the others. Every answer tells a collector when to come back. Only connections that are part-way through something and on time are counted, so one that misses its turn by 3 minutes stops slowing the rest, and its department is handed on. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
 
+**Which store's prices.** Coles prices some things (fruit and veg especially) per store. The Admin page's **Prices for** card sets the store (`COLES_STORE_ID`); every Coles request, from this server or a helper, carries it as the `fulfillmentStoreId` cookie Coles' own site sets when you pick a store, so all connections get the same prices. Liquorland is per state (`LIQUOR_STATE`). Woolworths picks a store from where the connection is and can't be set yet, so each Woolworths refresh stays on one connection (`ONE_CONNECTION_SHOPS`). The area's name (`PRICE_AREA`) is shown to shoppers at the bottom of every page.
+
 ## Matching the same product across shops
 
 - **Sizes** are parsed into grams, millilitres or a count: "6 x 375mL" is 2250 ml, "Per Kg" is 1000 g per kg, and "Banana Each" is 1 item. They must match within 1%.

@@ -9,6 +9,9 @@
 //   { kind: 'browse', dept, name, page }  one page of a department
 //   { kind: 'barcode', url }              a product page, for its barcode
 // Each result says how many requests it took (a new session costs one more).
+// A job's `store` is the Coles store whose prices to get (the fulfillmentStoreId
+// cookie Coles' own site sets when you choose a store); without one, Coles'
+// default store.
 
 import { createClient, isBotCheck, BlockedError } from './http.js';
 import { mapProduct } from './coles.js';
@@ -17,24 +20,27 @@ export const ORIGIN = 'https://www.coles.com.au';
 
 /** A connection to Coles that fetches jobs. */
 export function colesPages(makeClient = () => createClient({ origin: ORIGIN, delayMs: 0, softBlockWaits: [] })) {
-  let session = null; // { client, buildId }
+  let session = null; // { client, buildId, store }
   let requests = 0;
 
-  async function getSession() {
-    if (session) return session;
+  async function getSession(store = null) {
+    if (session && session.store === store) return session;
     const client = makeClient();
+    if (store) client.pinCookie?.('fulfillmentStoreId', store);
     if (client.constructor.name === 'BrowserClient') await client.init(); // SCRAPE_MODE=browser
     requests++;
     const html = await client.request(`${ORIGIN}/`, { accept: 'text/html' });
     const buildId = html.match(/"buildId":"([^"]+)"/)?.[1];
     if (!buildId) throw new BlockedError(isBotCheck(html) ? 'Coles is showing a bot check' : 'Coles: could not find the site version');
-    session = { client, buildId };
+    session = { client, buildId, store };
     return session;
   }
 
+  let wanted = null; // this job's store
+
   /** One of Coles' data pages (one request). */
   async function data(path) {
-    const s = await getSession();
+    const s = await getSession(wanted);
     requests++;
     let text;
     try {
@@ -97,6 +103,7 @@ export function colesPages(makeClient = () => createClient({ origin: ORIGIN, del
     /** Fetch a job. Returns its result plus `requests`; throws (e.blocked) if Coles is blocking. */
     async run(job) {
       requests = 0;
+      wanted = job.store ? String(job.store) : null;
       try {
         return { ...(await fetchJob(job)), requests };
       } catch (e) {

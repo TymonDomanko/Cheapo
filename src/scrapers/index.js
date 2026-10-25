@@ -78,6 +78,13 @@ export function finishRun(run, { complete, error = null, seenSince = null }) {
   return done;
 }
 
+/** Where a shop's prices are collected for (Admin → Prices for), as scrape options. */
+export function priceArea(store) {
+  if (store === 'coles') return { storeId: getSetting('COLES_STORE_ID') || null };
+  if (store === 'liquorland') return { state: getSetting('LIQUOR_STATE') || null };
+  return {};
+}
+
 /**
  * Crawl one store and write everything to the database.
  * Stores are independent, so callers can run several of these in parallel.
@@ -107,7 +114,7 @@ export async function scrapeStore(storeName, opts = {}) {
   const progress = crawlProgress(storeName);
   const result = {};
   try {
-    for await (const batch of scraper.scrape({ ...opts, log, progress, result, startedAt })) {
+    for await (const batch of scraper.scrape({ ...opts, ...priceArea(storeName), log, progress, result, startedAt })) {
       const r = recordBatch(run, batch);
       products += r.upserted;
       priceChanges += r.priceChanges;

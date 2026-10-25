@@ -27,7 +27,8 @@ export function colesLiquor(cfg) {
     return CATEGORIES.map((c) => ({ ...c, slug: c.key }));
   }
 
-  async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories } = {}) {
+  /** state: whose prices (otherwise LIQUOR_STATE, or NSW). */
+  async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories, state: forState = null } = {}) {
     let cats = categories || await departments();
     if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.key));
     const client = createClient({ origin: cfg.origin, delayMs: delayMs() });
@@ -37,7 +38,7 @@ export function colesLiquor(cfg) {
         let n = 1;
         let pages = 1;
         do {
-          const json = await client.getJson(`${cfg.origin}/api/products/${cfg.site}/${state()}/${cat.key}?page=${n}`);
+          const json = await client.getJson(`${cfg.origin}/api/products/${cfg.site}/${String(forState || state()).toLowerCase()}/${cat.key}?page=${n}`);
           pages = json.meta?.page?.total || 0;
           const items = (json.products || []).map((p) => mapProduct(p, cat.name)).filter(Boolean);
           log(`${cfg.store}: ${cat.key} page ${n}/${pages} (${items.length})`);

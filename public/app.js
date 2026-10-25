@@ -51,6 +51,11 @@ async function loadConfig() {
     /* storage blocked */
   }
   state.allStores = shopsShown(!!state.config.user?.showAlcohol).map((s) => s.id);
+  // Where the prices are for (Admin → Prices for), on every page.
+  const area = state.config.site?.priceArea;
+  $('#footer-prices').textContent = area
+    ? `Prices are for ${area}, from the supermarkets’ own websites. Your local shop’s can differ, especially fruit and veg.`
+    : 'Prices come from the supermarkets’ own websites and can differ in store.';
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
@@ -2759,6 +2764,20 @@ async function loadAdminSettings(justMadeHelper = null) {
         <button class="primary" type="submit">Save</button>
       </form>
 
+      <form id="prices-for" class="card stack">
+        <h3>Prices for</h3>
+        <p class="hint">Fruit and veg, and some specials, cost different amounts in different areas. Choose the area whose prices to collect; this server and every helper use the same one.</p>
+        <label>Area, as shoppers see it${envTag('PRICE_AREA')}<input name="PRICE_AREA" maxlength="60" placeholder="e.g. Bondi Junction, NSW" value="${esc(st.PRICE_AREA.value || '')}" ${dis('PRICE_AREA')}></label>
+        <p class="hint">Shown at the bottom of every page: “Prices are for …”.</p>
+        <label>Coles store${envTag('COLES_STORE_ID')}<input name="COLES_STORE_ID" placeholder="Store number, or its page on coles.com.au" value="${esc(st.COLES_STORE_ID.value || '')}" ${dis('COLES_STORE_ID')}></label>
+        <p class="hint">Find your store at <a href="https://www.coles.com.au/find-stores" target="_blank" rel="noopener">coles.com.au/find-stores</a> and paste its page (it ends in the store number, e.g. …/bondi-junction-0381). ${st.COLES_STORE_ID.value ? `Using store ${esc(st.COLES_STORE_ID.value)}.` : '<strong>Not set:</strong> Coles’ default store is in Melbourne.'} Takes effect from the next Coles page fetched.</p>
+        <label>Liquorland state${envTag('LIQUOR_STATE')}<select name="LIQUOR_STATE" ${dis('LIQUOR_STATE')}>
+          ${['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'].map((x) => `<option value="${x}" ${(st.LIQUOR_STATE.value || 'nsw') === x ? 'selected' : ''}>${x.toUpperCase()}</option>`).join('')}</select></label>
+        <p class="hint"><strong>Woolworths</strong> picks a store from where each connection is, and can’t be set here yet, so each Woolworths refresh stays on one connection (this server, if it crawls Woolworths) and its prices don’t jump between areas. IGA is per store (shoppers pick theirs); ALDI and Harris Farm have one price.</p>
+        <p class="warn" data-form-error hidden></p>
+        ${['PRICE_AREA', 'COLES_STORE_ID', 'LIQUOR_STATE'].every(locked) ? '' : '<button class="primary" type="submit">Save</button>'}
+      </form>
+
       <form id="collector-settings" class="card stack">
         <h3>Sharing the work</h3>
         <p class="hint">This server and your helpers (below) share the refreshing: each shop’s departments are handed out, and so are Coles’ pages.</p>
@@ -2811,7 +2830,7 @@ $('#admin-root').addEventListener('submit', async (e) => {
     }
     return;
   }
-  if (!['email-settings', 'site-details', 'collector-settings'].includes(f.id)) return;
+  if (!['email-settings', 'site-details', 'prices-for', 'collector-settings'].includes(f.id)) return;
   e.preventDefault();
   const v = (name) => f.elements[name];
   let body = {};
@@ -2824,6 +2843,8 @@ $('#admin-root').addEventListener('submit', async (e) => {
     for (const k of ['MAIL_FROM', 'SITE_URL']) if (!v(k).disabled) body[k] = v(k).value;
   } else if (f.id === 'site-details') {
     for (const k of ['CONTACT_EMAIL', 'SITE_OPERATOR']) if (!v(k).disabled) body[k] = v(k).value;
+  } else if (f.id === 'prices-for') {
+    for (const k of ['PRICE_AREA', 'COLES_STORE_ID', 'LIQUOR_STATE']) if (!v(k).disabled) body[k] = v(k).value;
   } else {
     if (!f.querySelector('[name=crawl]').disabled) {
       body.SERVER_SCRAPE_STORES = [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value);
@@ -3056,7 +3077,8 @@ try {
 api('/api/stats').then((s) => {
   $('#demo-banner').hidden = !s.demo;
   const latest = s.stores.map((x) => x.updatedAt).filter(Boolean).sort().pop();
-  $('#updated-hint').textContent = latest ? `Prices last updated ${fmtDate(latest)}.` : '';
+  const area = state.config?.site?.priceArea;
+  $('#updated-hint').textContent = [latest ? `Prices last updated ${fmtDate(latest)}.` : '', area ? `Prices are for ${area}.` : ''].filter(Boolean).join(' ');
 }).catch(() => {});
 if (user()) refreshListCount().catch(() => {});
 await route();

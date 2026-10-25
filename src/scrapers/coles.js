@@ -21,9 +21,11 @@ export const store = 'coles';
 // and the next run carries on from there.
 const BLOCKED_MSG = 'Coles is showing a bot check instead of its website, so this connection is blocked for now. It usually lifts within a day if left alone.';
 
-export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, progress, result = {}, startedAt } = {}) {
+/** storeId: the Coles store whose prices to get (see coles-pages.js); otherwise Coles' default. */
+export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, progress, result = {}, startedAt, storeId = null } = {}) {
   // After a bot check: a fresh session, then a minute's wait and another. Past that it's a block.
   const client = createClient({ origin: ORIGIN, delayMs: Number(process.env.COLES_DELAY_MS ?? 2500), softBlockWaits: [Number(process.env.COLES_BLOCK_WAIT_MS ?? 60000)] });
+  if (storeId) client.pinCookie?.('fulfillmentStoreId', String(storeId));
   await client.init();
   try {
     const html = await client.getText(ORIGIN + '/');

@@ -106,9 +106,16 @@ class FetchClient {
     }
   }
 
-  /** Start a new session: forget cookies and collect fresh ones. */
+  /** A cookie every session keeps, e.g. the store whose prices to get. */
+  pinCookie(name, value) {
+    (this.pinned ||= new Map()).set(name, value);
+    this.cookies.set(name, value);
+  }
+
+  /** Start a new session: forget cookies (except pinned ones) and collect fresh ones. */
   async renew() {
     this.cookies.clear();
+    for (const [k, v] of this.pinned || []) this.cookies.set(k, v);
     await this.init();
   }
 

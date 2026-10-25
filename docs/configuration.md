@@ -34,7 +34,10 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | Variable | Default | What it does |
 |---|---|---|
 | `SCRAPE_CRON` | `15 4 * * *` | When prices refresh, in `TZ`. Empty turns the schedule off |
-| `LIQUOR_STATE` | `nsw` | The state whose Liquorland prices are collected (`nsw`, `vic`, `qld`, `wa`, `sa`, `tas`, `act`, `nt`) |
+| `PRICE_AREA` | — | Where the prices are for, in words (e.g. `Bondi Junction, NSW`). Shown to shoppers at the bottom of every page. **Admin page** |
+| `COLES_STORE_ID` | Coles' default (store 7674, Melbourne) | The Coles store whose prices are collected, by this server and every helper. The number, or the store's page on coles.com.au (`…/find-stores/coles/nsw/bondi-junction-0381`). **Admin page** |
+| `LIQUOR_STATE` | `nsw` | The state whose Liquorland prices are collected (`nsw`, `vic`, `qld`, `wa`, `sa`, `tas`, `act`, `nt`). **Admin page** |
+| `ONE_CONNECTION_SHOPS` | `woolworths` | Shops that pick prices from where the connection is, so each refresh of them stays on one connection (this server if it crawls them, otherwise the first helper to start), and only moves on if that connection fails or goes quiet |
 | `IGA_STORE_ID` | `32600` | The IGA shown to visitors who haven't picked one |
 | `IGA_MAX_STORES` | no limit | Cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the refresh and about 2 MB |
 | `BLOCKED_RETRY_HOURS` | `4` | When a shop blocks a crawl part-way (Coles), try again this much later, carrying on where it stopped (up to 4 times). `0` waits for the next scheduled refresh |

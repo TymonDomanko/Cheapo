@@ -19,7 +19,7 @@
 // refresh per store) stays on this server.
 
 import { getDb } from './db.js';
-import { SCRAPERS, startRun, getRun, recordBatch, finishRun, serverStores } from './scrapers/index.js';
+import { SCRAPERS, startRun, getRun, recordBatch, finishRun, serverStores, priceArea } from './scrapers/index.js';
 import { index as indexParts, fetchPart } from './scrapers/parts.js';
 import { nextRun } from './mini-cron.js';
 import * as helpers from './helpers.js';
@@ -123,6 +123,26 @@ const busy = (pass) => (pass.indexWorker && !idle(pass.indexAt) ? 1 : 0) + (pass
 
 // ---------------------------------------------------------------- handing out parts
 
+// Shops whose online prices depend on where you connect from (Woolworths picks a
+// store by location, and it can't be set yet): one refresh stays on one
+// connection, so prices don't flip between connections. Others only step in
+// for what it can't do.
+export const ONE_CONNECTION = new Set((process.env.ONE_CONNECTION_SHOPS ?? 'woolworths').split(',').map((s) => s.trim()).filter(Boolean));
+
+/** The connection a one-connection shop's refresh belongs to: this server if it crawls the shop, else whoever started it. */
+const ownerOf = (store, pass) => (!ONE_CONNECTION.has(store) ? null : serverStores().includes(store) ? SERVER : pass.owner || null);
+
+/** May worker `w` take this part (null: the department list)? */
+function allowed(store, pass, w, part) {
+  const owner = ownerOf(store, pass);
+  if (!owner || owner === w) return true;
+  // The owner can't: blocked by the shop, failed this part, or gone quiet.
+  return pass.barred.includes(owner) || (part ? part.failedBy.includes(owner) : pass.indexFailedBy.includes(owner)) || idle(pass.ownerAt || pass.since);
+}
+
+/** How many parts of a shop one connection fetches at once: this server its usual pace, helpers one. */
+const ownShare = (store, w) => (w === SERVER ? atOnce(store) : 1);
+
 /**
  * The next part for worker `w`, out of the shops it can do, or null.
  * Returns { store, runId, part }.
@@ -132,21 +152,28 @@ export function take(w, canDo = []) {
   for (const store of stores) {
     const pass = current(store);
     if (!pass || pass.finished || pass.barred.includes(w)) continue;
-    if ((pass.parts || []).some((p) => p.worker === w && !p.done && !idle(p.touchedAt)) || (pass.indexWorker === w && !idle(pass.indexAt))) continue; // one at a time each
+    const mine = (pass.parts || []).filter((p) => p.worker === w && !p.done && !idle(p.touchedAt)).length + (pass.indexWorker === w && !idle(pass.indexAt) ? 1 : 0);
+    if (mine >= ownShare(store, w)) continue;
     if (busy(pass) >= atOnce(store)) continue;
+    const claim = () => {
+      if (ONE_CONNECTION.has(store) && !pass.owner) pass.owner = w;
+      if (w === ownerOf(store, pass)) pass.ownerAt = iso();
+    };
     if (!pass.parts) {
       if (pass.indexWorker && !idle(pass.indexAt)) continue;
-      if (pass.indexFailedBy.includes(w)) continue;
+      if (pass.indexFailedBy.includes(w) || !allowed(store, pass, w, null)) continue;
       Object.assign(pass, { indexWorker: w, indexAt: iso() });
+      claim();
       save(store, pass);
       return { store, runId: pass.runId, part: { key: 'index', kind: 'index', label: 'departments' } };
     }
-    const part = pass.parts.find((p) => !p.done && (!p.worker || idle(p.touchedAt)) && !p.failedBy.includes(w));
+    const part = pass.parts.find((p) => !p.done && (!p.worker || idle(p.touchedAt)) && !p.failedBy.includes(w) && allowed(store, pass, w, p));
     if (!part) continue;
     Object.assign(part, { worker: w, touchedAt: iso() });
+    claim();
     save(store, pass);
-    const { done, worker, touchedAt, failedBy, ...send } = part;
-    return { store, runId: pass.runId, part: send };
+    const { done, worker, touchedAt, failedBy, error, ...send } = part;
+    return { store, runId: pass.runId, part: { ...send, options: priceArea(store) } };
   }
   return null;
 }
@@ -166,6 +193,7 @@ export function items(w, store, partKey, list) {
   const { pass, part } = mine(store, w, partKey);
   const r = recordBatch(getRun(pass.runId), list);
   part.touchedAt = iso();
+  if (w === ownerOf(store, pass)) pass.ownerAt = part.touchedAt;
   save(store, pass);
   return r;
 }
@@ -224,15 +252,15 @@ export function restart(store) {
 
 // ---------------------------------------------------------------- this server's share
 
-const running = new Set(); // shops this server is fetching a part of
+const running = new Map(); // shop → parts this server is fetching
 
-/** Take and fetch a part of each shop this server crawls, if there's one going (one part per shop at a time). */
+/** Take and fetch parts of the shops this server crawls, if there are any going (each shop at its usual pace). */
 export function pump({ log = () => {} } = {}) {
-  for (let i = 0; i < SHARED.length; i++) {
-    const job = take(SERVER, []); // skips shops it's already doing a part of
-    if (!job || running.has(job.store)) return;
-    running.add(job.store);
-    runLocal(job, log).finally(() => running.delete(job.store));
+  for (let i = 0; i < SHARED.length * 2; i++) {
+    const job = take(SERVER, []); // skips shops it's already doing its share of
+    if (!job) return;
+    running.set(job.store, (running.get(job.store) || 0) + 1);
+    runLocal(job, log).finally(() => running.set(job.store, running.get(job.store) - 1));
   }
 }
 

@@ -54,6 +54,31 @@ const SETTINGS = {
       return v;
     },
   },
+  // Prices for: which Coles store's prices to collect (fruit and veg, and some
+  // specials, differ by area). A number, or the store's page on coles.com.au
+  // (…/find-stores/coles/nsw/bondi-junction-0381). Unset: Coles' default (Melbourne).
+  COLES_STORE_ID: {
+    check(v) {
+      const id = String(v).trim().match(/(\d{3,5})\/?(?:[?#].*)?$/)?.[1];
+      if (!id) throw httpError(400, 'Enter the Coles store’s number, or paste its page from coles.com.au/find-stores');
+      return id;
+    },
+  },
+  // The state whose Liquorland prices are collected.
+  LIQUOR_STATE: {
+    check(v) {
+      const s = String(v).trim().toLowerCase();
+      if (!['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'].includes(s)) throw httpError(400, 'Choose a state: NSW, VIC, QLD, WA, SA, TAS, ACT or NT');
+      return s;
+    },
+  },
+  // Shown to shoppers: where the prices are for, e.g. "Bondi Junction, NSW".
+  PRICE_AREA: {
+    check(v) {
+      if (v.length > 60) throw httpError(400, 'Keep the area under 60 characters');
+      return v;
+    },
+  },
   // Coles pages an hour, this server and every helper together.
   COLES_PAGES_PER_HOUR: {
     check(v) {

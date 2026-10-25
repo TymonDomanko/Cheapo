@@ -13,10 +13,15 @@ export async function index(scraper) {
   return cats.map((dept) => ({ key: String(dept.slug ?? dept.key ?? dept.id), label: String(dept.name || dept.slug || ''), dept }));
 }
 
-/** Fetch a part's products, a batch at a time. `result.more`: a block of pages found more after it. */
+/**
+ * Fetch a part's products, a batch at a time. `result.more`: a block of pages
+ * found more after it. `part.options`: where to get prices for (the site's
+ * choice, e.g. Liquorland's state), the same for every connection.
+ */
 export async function* fetchPart(scraper, part, { log = console.log, result = {} } = {}) {
-  if (part.kind === 'dept') yield* scraper.scrape({ log, categories: [part.dept] });
-  else if (part.kind === 'pages') yield* scraper.scrape({ log, fromPage: part.from, toPage: part.to, result });
-  else if (part.kind === 'whole') yield* scraper.scrape({ log });
+  const opts = { ...(part.options || {}), log };
+  if (part.kind === 'dept') yield* scraper.scrape({ ...opts, categories: [part.dept] });
+  else if (part.kind === 'pages') yield* scraper.scrape({ ...opts, fromPage: part.from, toPage: part.to, result });
+  else if (part.kind === 'whole') yield* scraper.scrape(opts);
   else throw new Error(`Unknown part: ${part.kind}`);
 }
