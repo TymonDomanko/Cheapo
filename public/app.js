@@ -2086,12 +2086,18 @@ function totalBar(L) {
 
 function renderSummary(L) {
   const stores = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
+  const priced = L.items.filter((it) => it.note == null).length;
   const singles = state.allStores.map((s) => {
     const x = L.singleStore[s];
     const diff = x.total - L.plan.total;
+    // A shop with none of the items has no total to compare ($0.00 would read as free).
+    if (x.missing && x.missing >= priced) {
+      return `<div class="tile"><div class="label">Everything at ${chip(s)}</div><div class="value muted">—</div>
+        <div class="note"><span class="warn">Doesn’t have ${priced === 1 ? 'it' : 'any of these'}</span></div></div>`;
+    }
     return `<div class="tile"><div class="label">Everything at ${chip(s)}</div>
       <div class="value">${money(x.total)}</div>
-      <div class="note">${x.missing ? `<span class="warn">${plural(x.missing, 'item')} not available</span>` : diff > 0.004 ? `Your split saves <span class="saving">${money(diff)}</span>` : 'Same as your split'}</div></div>`;
+      <div class="note">${x.missing ? `<span class="warn">for ${priced - x.missing} of ${plural(priced, 'item')}; ${x.missing} not available</span>` : diff > 0.004 ? `Your split saves <span class="saving">${money(diff)}</span>` : 'Same as your split'}</div></div>`;
   });
   return `<h2 class="section">Total</h2>
     <div class="totals">
@@ -2572,7 +2578,7 @@ function sharedNote(x) {
   const doing = x.doing.map((d) => `<li>${esc(d.worker)}: ${esc(d.part)}</li>`).join('');
   return `<br><span class="hint">Shared refresh (started ${fmtDate(x.startedAt)}): ${what}</span>${doing ? `<ul class="worker-list hint">${doing}</ul>` : ''}`
     + (x.barred.length ? `<br><span class="warn">Blocked today: ${x.barred.map(esc).join(', ')}</span>` : '')
-    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed and waiting for another connection: ${x.stuck.map(esc).join(', ')}</span>` : '');
+    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed, waiting for another connection:</span><ul class="worker-list hint">${x.stuck.map((f) => `<li>${esc(f.part)}${f.why ? ` — ${esc(f.by || '')}: <span class="warn">${esc(f.why)}</span>` : ''}</li>`).join('')}</ul>` : '');
 }
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });

@@ -179,8 +179,10 @@ export function done(w, store, partKey, body = {}) {
   if (body.error || body.blocked) {
     const why = String(body.blocked || body.error).slice(0, 200);
     console.warn(`[${store}] ${helpers.nameOf(w)}: ${partKey} failed — ${why}`);
-    if (partKey === 'index') Object.assign(pass, { indexWorker: null, indexAt: null, indexFailedBy: [...pass.indexFailedBy, w] });
-    else Object.assign(part, { worker: null, touchedAt: null, failedBy: [...part.failedBy, w] });
+    // Kept so the admin page can say why.
+    const error = { by: helpers.nameOf(w), why, at: iso() };
+    if (partKey === 'index') Object.assign(pass, { indexWorker: null, indexAt: null, indexFailedBy: [...pass.indexFailedBy, w], indexError: error });
+    else Object.assign(part, { worker: null, touchedAt: null, failedBy: [...part.failedBy, w], error });
     if (body.blocked && !pass.barred.includes(w)) pass.barred.push(w); // blocked by the shop: none of it for this connection today
     save(store, pass);
     return { ok: false };
@@ -203,6 +205,11 @@ export function done(w, store, partKey, body = {}) {
   }
   save(store, pass);
   return { ok: true };
+}
+
+/** The runs of shared refreshes still in progress. */
+export function activeRunIds() {
+  return SHARED.map(load).filter((p) => p && !p.finished).map((p) => p.runId);
 }
 
 /** Start a shop's refresh again now (the admin page's Refresh button). */
@@ -276,7 +283,11 @@ export function status() {
         ...parts.filter((p) => !p.done && p.worker && !idle(p.touchedAt)).map((p) => ({ id: p.worker, worker: helpers.nameOf(p.worker), part: p.label })),
       ],
       barred: pass.barred.map(helpers.nameOf),
-      stuck: parts.filter((p) => !p.done && p.failedBy.length).map((p) => p.label),
+      // Parts that failed and haven't been done since, with the latest reason.
+      stuck: [
+        ...(!pass.parts && pass.indexError ? [{ part: 'the department list', ...pass.indexError }] : []),
+        ...parts.filter((p) => !p.done && p.failedBy.length).map((p) => ({ part: p.label, ...(p.error || {}) })),
+      ],
     };
   }
   return out;

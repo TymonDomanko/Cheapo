@@ -155,7 +155,8 @@ export function endeavour(cfg) {
       price: Number(p.Price) > 0 ? Number(p.Price) : null,
       was_price: was,
       on_special: !!was || !!p.IsOnSpecial,
-      available: p.IsAvailable !== false,
+      // IsAvailable is stock at BWS's default store (about two in three say no), not whether BWS sells it.
+      available: Number(p.Price) > 0,
     };
   }
 

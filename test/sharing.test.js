@@ -245,6 +245,8 @@ test('other shops: departments are shared out, at most as many at once as one co
   sharing.done(sam, 'woolworths', 'dairy', {});
   // Alex is blocked by Woolworths: pantry goes back, and Alex gets no more Woolworths today.
   sharing.done(alexWorker, 'woolworths', 'pantry', { blocked: 'Access denied' });
+  const failed = sharing.status().woolworths.stuck.find((f) => f.part === 'pantry');
+  assert.deepEqual([failed.by, failed.why], ['Alex’s laptop', 'Access denied'], 'the admin page can say why');
   assert.equal(sharing.take(alexWorker, ['woolworths']), null);
   const c = sharing.take('server', []);
   assert.equal(c.store, 'woolworths');

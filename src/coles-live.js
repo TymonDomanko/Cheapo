@@ -334,7 +334,7 @@ function blocked(w, job, message, requests) {
   if (!ws.blockReported) {
     ws.blockReported = true;
     const who = w === SERVER ? '' : ` (${helpers.nameOf(w)})`;
-    const { runId } = startRun('coles');
+    const { runId } = startRun('coles', { source: w === SERVER ? 'server' : 'collector' });
     getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(w, runId);
     finishRun(getRun(runId), { error: `${message}${who}. Trying again ${ws.backoffHours === 2 ? 'in 2 hours' : `in ${ws.backoffHours} hours`}, carrying on where it stopped.` });
   }
