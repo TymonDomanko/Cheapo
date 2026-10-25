@@ -38,9 +38,35 @@ export async function departments() {
   }
 }
 
+// Postcodes to search from for a store's name when the site doesn't say where
+// the connection is: each capital and some big regional centres.
+const CENTRES = ['2000', '3000', '4000', '5000', '6000', '7000', '0800', '2600', '2500', '2300', '2650', '3350', '4350', '4810'];
+const names = new Map(); // store number → name, once found
+
+/** A store's name ("Eastwood, NSW"), from Woolworths' store finder, which searches by postcode. */
+async function storeName(client, id, near = []) {
+  if (names.has(id)) return names.get(id);
+  for (const pc of [...new Set([...near, ...CENTRES])]) {
+    let found;
+    try {
+      const r = await client.getJson(`${ORIGIN}/apis/ui/StoreLocator/Stores?Max=${near.includes(pc) ? 50 : 1000}&Division=SUPERMARKETS&Facility=&postcode=${pc}`);
+      found = (r?.Stores || []).find((s) => String(s.StoreNo) === id);
+    } catch {
+      continue;
+    }
+    if (found) {
+      const name = [found.Name || found.Suburb, found.State].filter(Boolean).join(', ');
+      names.set(id, name);
+      return name;
+    }
+  }
+  return null;
+}
+
 /**
- * The Woolworths store whose prices this connection gets. Without a login the
- * store can't be chosen: Woolworths picks one from where the connection is.
+ * The Woolworths store whose prices this connection gets: { id, name }.
+ * Without a login the store can't be chosen: Woolworths picks one from where
+ * the connection is.
  */
 export async function area() {
   const client = createClient({ origin: ORIGIN, delayMs: 0 });
@@ -48,7 +74,10 @@ export async function area() {
   try {
     const boot = await client.getJson(`${ORIGIN}/api/ui/v2/bootstrap`);
     const id = boot?.GetDeliveryInfoRequest?.FulfilmentStoreId ?? boot?.ShopperRequest?.FulfilmentStoreId;
-    return id ? String(id) : null;
+    if (!id) return null;
+    // Any postcode the site has for this visitor: the store is usually near it.
+    const near = [...new Set(JSON.stringify(boot).match(/"Post(?:al)?[Cc]ode":"?(\d{4})/g)?.map((m) => m.slice(-4)) || [])];
+    return { id: String(id), name: await storeName(client, String(id), near) };
   } finally {
     await client.close();
   }

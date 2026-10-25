@@ -164,31 +164,37 @@ function areas() {
   const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(AREA_KEY);
   return row ? JSON.parse(row.value) : {};
 }
-/** Worker `w` says which store `store` gives it ({ woolworths: '1101' }). */
+/** Worker `w` says which store `store` gives it ({ woolworths: { id: '1101', name: 'Eastwood, NSW' } }, or just the id). */
 export function noteAreas(w, reported) {
   if (!reported || typeof reported !== 'object') return;
   const all = areas();
   let changed = false;
-  for (const [store, id] of Object.entries(reported)) {
+  for (const [store, value] of Object.entries(reported)) {
+    const id = value && typeof value === 'object' ? value.id : value;
     if (!SCRAPERS[store]?.area || id == null || !/^[\w-]{1,20}$/.test(String(id))) continue;
-    (all[store] ||= {})[w] = { id: String(id), at: iso() };
+    const name = typeof value?.name === 'string' ? value.name.replace(/[^\p{L}\p{N} ,.'’&()-]/gu, '').slice(0, 60) || null : null;
+    const before = all[store]?.[w];
+    (all[store] ||= {})[w] = { id: String(id), name: name || (before?.id === String(id) ? before.name : null), at: iso() };
     changed = true;
   }
   if (changed) getDb().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(AREA_KEY, JSON.stringify(all));
 }
 const AREA_FRESH_MS = 2 * 86400000;
 
-/** For the admin page: which store each connection is given, by shop: { store: [{ area, workers: [{ id, name }] }] }. */
+/** For the admin page: which store each connection is given, by shop: { store: [{ area, name, workers: [{ id, name }] }] }. */
 export function connectionsByArea() {
   const out = {};
   for (const [store, ws] of Object.entries(areas())) {
     if (!SHARED.includes(store)) continue;
     const by = {};
-    for (const w of Object.keys(ws)) {
+    const named = {};
+    for (const [w, a] of Object.entries(ws)) {
       const id = areaOf(store, w);
-      if (id && (w === SERVER || helpers.list().some((x) => `h${x.id}` === w))) (by[id] ||= []).push({ id: w, name: helpers.nameOf(w) });
+      if (!id || !(w === SERVER || helpers.list().some((x) => `h${x.id}` === w))) continue;
+      (by[id] ||= []).push({ id: w, name: helpers.nameOf(w) });
+      if (a.name) named[id] = a.name;
     }
-    out[store] = Object.entries(by).map(([area, workers]) => ({ area, workers }));
+    out[store] = Object.entries(by).map(([area, workers]) => ({ area, name: named[area] || null, workers }));
   }
   return out;
 }
@@ -348,7 +354,7 @@ function checkOwnAreas() {
   if (Date.now() - areasCheckedAt < 6 * 3600 * 1000) return;
   areasCheckedAt = Date.now();
   for (const store of SHARED.filter((s) => SCRAPERS[s].area && serverStores().includes(s))) {
-    SCRAPERS[store].area().then((id) => id && noteAreas(SERVER, { [store]: id }), () => {});
+    SCRAPERS[store].area().then((a) => a && noteAreas(SERVER, { [store]: a }), () => {});
   }
 }
 
@@ -414,7 +420,7 @@ export function status() {
       ],
       preferred: !preferred()[store] ? null : preferred()[store].startsWith('@') ? `whichever connection gets store ${preferred()[store].slice(1)}` : helpers.nameOf(preferred()[store]),
       // The store each connection is given (shops that pick one by location).
-      areas: Object.entries(areas()[store] || {}).filter(([w]) => areaOf(store, w)).map(([w, a]) => ({ id: w, worker: helpers.nameOf(w), area: a.id })),
+      areas: Object.entries(areas()[store] || {}).filter(([w]) => areaOf(store, w)).map(([w, a]) => ({ id: w, worker: helpers.nameOf(w), area: a.id, name: a.name || null })),
       // Connections paused for this shop after a bot check, and until when.
       paused: [
         ...Object.entries(pass.paused || {}).filter(([w]) => paused(pass, w)).map(([w, p]) => ({ id: w, worker: helpers.nameOf(w), until: p.until })),
