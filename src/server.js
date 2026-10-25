@@ -7,6 +7,7 @@ import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
 import * as colesLive from './coles-live.js';
 import * as sharing from './sharing.js';
+import { adoptSiteToken } from './helpers.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
 import { checkCollector, resumeSummary } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
@@ -17,6 +18,7 @@ const PORT = Number(process.env.PORT || 3000);
 const SCRAPE_CRON = process.env.SCRAPE_CRON ?? '15 4 * * *'; // daily at 04:15 server time
 
 getDb();
+adoptSiteToken(); // the old single collector token becomes a helper
 ensureDefaultTracked();
 if (checkIsDue() && !process.env.DISABLE_BACKGROUND_SCRAPES) {
   // Haven't checked which IGAs have online prices today (first start, or the server was off).
@@ -51,8 +53,8 @@ if (SCRAPE_CRON) {
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
-// Tell admins if the home collector has stopped sending prices (it collects around 4am).
-cron.schedule(process.env.COLLECTOR_CHECK_CRON || '0 11 * * *', () => checkCollector({ serverStores }), { timezone: process.env.TZ || undefined });
+// Tell admins if a helper has stopped connecting.
+cron.schedule(process.env.COLLECTOR_CHECK_CRON || '0 11 * * *', () => checkCollector(), { timezone: process.env.TZ || undefined });
 // Weekly "on special this week" email: Wednesday morning, when the big chains' specials change.
 cron.schedule(process.env.DIGEST_CRON || '0 8 * * 3', () => {
   sendWeeklyDigests().catch((e) => console.error(`weekly digest: ${e.message}`));

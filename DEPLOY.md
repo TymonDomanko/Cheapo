@@ -228,19 +228,21 @@ Litestream starts before the app, so it can restore the database onto a new serv
 
 **To restore onto a new server:** start the container with the same `LITESTREAM_*` settings and an empty `/data`.
 
-## Home collector (for shops that block your server)
+## Helpers (sharing the work, and shops that block your server)
 
-Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from a home connection and send the results to your site. If the site already runs at home (say on Unraid), you don't need this.
+A **helper** is the collector program running on another internet connection: your own PC, a Raspberry Pi, or a computer belonging to someone you trust. Helpers share the refreshing with your server and cover any shop that blocks it (Woolworths and ALDI sometimes block cloud servers). If the site runs at home (say on Unraid) and nothing blocks it, you don't need one. A second connection still makes Coles faster and refreshes more reliable.
 
-**Easiest: download it from the Admin page.**
-
-1. Go to **Admin → Site settings → Home collector**. If the server is always blocked by some shops (usually Woolworths and ALDI), untick them under "This server crawls" and save. You don't have to: the collector also covers any shop the server gets blocked by on the day.
-2. Press the download button for the computer that will run it. Every download is already set up for your site: its address and a collector token.
-   - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it checks in with your site every 10 minutes and does what the site asks (see [Sharing the work](#sharing-the-work-helpers) below).
+**Adding one** (your own PC included): **Admin → Site settings → Helpers → Add a helper**.
+1. Give it a name, e.g. "My PC". Add an email if it's for someone else: with a mail server set up, they're sent a message saying what it is, how to set it up and an invite link to download it themselves (see below).
+2. Or download it straight away: open **Download it** on the helper's row and pick the computer it'll run on. Every download is already set up for your site, with a new token for that helper.
+   - **Windows** or **Linux (x64 / ARM, e.g. a Raspberry Pi):** a single program. Nothing to install. Run it and leave it running: it checks in with your site every 10 minutes and does what the site asks.
      - Windows may say it's from an unknown publisher, because it isn't code-signed. Choose **More info → Run anyway**.
      - On Linux it comes as a `.tar.gz` (so it stays executable): `tar xzf grocery-collector-linux-x64.tar.gz && ./grocery-collector`.
      - To start it with the computer, run it once with `--autostart` (undo with `--no-autostart`). On Windows this adds it to the Startup folder; on a Linux desktop it adds a log-in entry. On a Linux server, use a systemd service instead (below).
    - **Mac / zip:** for a Mac, or any computer with [Node.js 20+](https://nodejs.org). Unzip it and run `sh start.sh` (or `start.bat` on Windows). Its settings are in the `.env` file inside: `COLLECT_STORES` limits which shops it will refresh, and `COLLECT_COLES=false` stops it fetching Coles pages.
+3. If your server is always blocked by some shops, untick them under **Sharing the work → This server crawls** and save. You don't have to: helpers also cover any shop the server is blocked by on the day.
+
+**From before helpers?** A site that had the single collector token (`COLLECTOR_TOKEN`) turns it into a helper called "Home collector" when it starts, so the collector already running keeps working. It's an ordinary helper from then on: rename, cap, turn off or remove it like any other. Once it has been downloaded again, you can delete `COLLECTOR_TOKEN` from the server's `.env`.
 
 **It keeps itself up to date.**
 - Before each collection, it asks your site for the latest collector version. If there's a newer one, it downloads it, checks the code matches the version fingerprint, and restarts with it.
@@ -257,7 +259,7 @@ Woolworths and ALDI sometimes block cloud servers. The fix is to crawl them from
 
 ```ini
 [Unit]
-Description=Grocery home collector
+Description=Cheapo price collector (helper)
 After=network-online.target
 
 [Service]
@@ -273,15 +275,15 @@ WantedBy=multi-user.target
 
 Then run `sudo systemctl enable --now grocery-collector`.
 
-**Checking on it.** The Admin page shows when the collector last connected, how it's run, and whether it's up to date. It also warns if it hasn't connected for more than a day and a half.
+**Checking on them.** Each helper's row shows when it last connected, how it's run, whether it's up to date, and what it's fetching now. Admins are emailed if one that's turned on hasn't connected for a day and a half.
 
-**Docker instead.** Use [`deploy/collector/`](deploy/collector): copy `.env.example` to `.env` and fill in `COLLECTOR_SERVER` and the token from the Admin page's `.env`, then run `docker compose up -d`. A Docker collector can't replace its own code. The Admin page tells you when to run `docker compose pull && docker compose up -d`.
+**Docker instead.** Use [`deploy/collector/`](deploy/collector): add the helper, open **New invite link** (or copy the token shown when you add it), copy `.env.example` to `.env` and fill in `COLLECTOR_SERVER` and that token, then run `docker compose up -d`. A Docker collector can't replace its own code. The Admin page tells you when to run `docker compose pull && docker compose up -d`.
 
-The token inside the downloaded program (or the zip's `.env`) is what lets it send prices, so don't share the download. If it's ever exposed, press **Generate a new token** and download the collector again.
+The token inside a download is what lets it send prices, so don't share the file. If it's ever exposed, download it again (that makes a new token and the old one stops working), or **Turn off** the helper.
 
-### Sharing the work (helpers)
+### How the work is shared
 
-The server and every collector share the refreshing, and the site decides who does what:
+The server and the helpers share the refreshing, and the site decides who does what:
 
 - **Each shop's daily refresh** (Woolworths, ALDI, Harris Farm) is split into parts after `SCRAPE_CRON`: Woolworths and ALDI by department, Harris Farm by blocks of 3 pages. The server and collectors each take a part at a time, and all the parts make one refresh, finished when the last one is in.
   - A shop has at most as many parts on the go at once as one connection would fetch at once: two for Woolworths (`WOOLWORTHS_CONCURRENCY`), one for the others (`ALDI_CONCURRENCY`, `HARRISFARM_CONCURRENCY`). So sharing it out doesn't ask the shop for more at a time; it means a refresh carries on when one connection is blocked or switched off.
@@ -294,7 +296,7 @@ The server and every collector share the refreshing, and the site decides who do
   - A bot check pauses just the connection that got it.
   - Searches, list items and barcodes stay on the server.
 
-**Helpers** are collectors run by other people you trust, on their own internet connection. Add one under **Admin → Site settings → Helpers**:
+**Helpers for other people** (on their own internet connection):
 - **Name and email.** With an email (and a mail server set up), they're sent a message saying what the collector is, what it does on their computer, how to set it up, and a link.
 - **The invite link** opens a page with the same explanation and downloads for Windows, Linux, Raspberry Pi and Mac, each already set up for your site. It works for a week. Without email, copy the link and send it yourself. **New invite link** (or **Email a new link**) on the helper's row makes another, and the old one stops working.
 - **Or download it for them** from the helper's row and pass the file on.
@@ -309,7 +311,7 @@ Collectors from before work sharing keep working. Once updated (they update them
 At `SCRAPE_CRON` (04:15 by default, in `TZ`) the server:
 
 1. **Checks which IGAs have prices online.** It reloads IGA's store list and asks each of the ~540 stores for a product, which takes about 8 minutes. Stores that start publishing prices show up in the IGA picker. Stores that stop are hidden, and their prices stop being fetched.
-2. **Refreshes prices** for every supermarket it crawls and every followed IGA store, skipping any a collector has already done (see [Sharing the work](#sharing-the-work-helpers)).
+2. **Refreshes prices** for every supermarket it crawls and every followed IGA store, skipping any a collector has already done (see [Helpers](#helpers-sharing-the-work-and-shops-that-block-your-server)).
 3. **Fills in Coles barcodes** (nightly mode only; steady mode fits them into its spare time), products on lists first. This lets Coles products match Woolworths ones exactly.
 4. **Sends price alerts** to people whose watched products got cheaper.
 
@@ -319,11 +321,11 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **Woolworths:** about 15 minutes. Two departments at a time (`WOOLWORTHS_CONCURRENCY`), each in a fresh session.
 - **IGA:** about 3 minutes per store, three stores at a time (`IGA_CONCURRENCY`).
 - **ALDI and Harris Farm:** about a minute each.
-- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). Collectors share these pages (see [Sharing the work](#sharing-the-work-helpers)). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
+- **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). Helpers share these pages (see [Helpers](#helpers-sharing-the-work-and-shops-that-block-your-server)). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
 **When something goes wrong, admins hear about it.** Every admin is emailed when:
 - a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
-- the home collector hasn't sent prices for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).
+- a helper that's turned on hasn't connected for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).
 
 While prices are refreshing, nothing is sent straight away: problems (and fixes) are collected and emailed as **one summary** a couple of minutes after the last shop finishes, with a line on how each shop's refresh went. Each problem is reported once, then at most daily while it lasts, and again when it's fixed. Open problems also show at the top of **Admin → Data health**, alongside how fresh each shop's data is and how much of it can be compared. These emails need email set up (above). Turn them off with `ADMIN_ALERTS=false`.
 
@@ -342,7 +344,7 @@ IGA and Harris Farm work from anywhere. **Woolworths and ALDI sometimes block da
 
 The Admin page and the summary email say which shop failed and why. Things to try:
 - **Coles:** usually nothing. The crawl backs off and carries on later by itself. If even the first request is blocked, leave it alone for a day.
-- **Woolworths or ALDI from a cloud server:** run the home collector (above). This is the simplest dependable fix.
+- **Woolworths or ALDI from a cloud server:** add your own PC as a helper (above). This is the simplest dependable fix.
 - **Or use a residential proxy:** set `HTTPS_PROXY=http://user:pass@host:port`. Only the scrapers use it.
 
 ## Checklist before going public

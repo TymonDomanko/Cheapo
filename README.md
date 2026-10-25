@@ -21,7 +21,7 @@ A self-hosted price comparison site for Australian supermarkets. It collects eve
 - **In the shop.** A checklist per shop, sorted by section and learning your shop's layout. Tick as you go, scan barcodes, share it with your household, and use it offline.
 - **Is it a good price?** Price history for every product, "lowest in 6 months" and "goes on special about every 6 weeks" hints, deals that break the usual cycle, and alerts for things you watch.
 - **Counts the real deals.** Multi-buys ("2 for $5") and Everyday Rewards member prices are included in list totals.
-- **Runs itself.** Prices refresh every night. Admins get one summary email if a shop's refresh has problems, and a home collector handles shops that block cloud servers.
+- **Runs itself.** Prices refresh every night. Admins get one summary email if a shop's refresh has problems, and helpers (your own PC, or a friend's) share the work and cover shops that block cloud servers.
 
 The full list is in [docs/features.md](docs/features.md).
 
@@ -53,7 +53,7 @@ The image is published to `ghcr.io/tymondomanko/cheapo` on every push to `main`.
 
 | | |
 |---|---|
-| [DEPLOY.md](DEPLOY.md) | Installing and updating: Docker, Unraid, your own domain, cloud hosts, email, backups, the home collector |
+| [DEPLOY.md](DEPLOY.md) | Installing and updating: Docker, Unraid, your own domain, cloud hosts, email, backups, helpers |
 | [docs/features.md](docs/features.md) | Everything the site does |
 | [docs/configuration.md](docs/configuration.md) | Every setting |
 | [docs/how-it-works.md](docs/how-it-works.md) | Where the prices come from, how products are matched, the code layout and adding a supermarket |

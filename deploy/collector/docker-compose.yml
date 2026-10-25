@@ -1,8 +1,8 @@
-# Home collector in Docker. (No Docker? The Admin page has a "Download home
-# collector" button with a ready-to-run version that updates itself.)
-# Run this on any always-on machine at home (PC, NAS, Raspberry Pi). It crawls the stores that block cloud servers and sends the
-# prices to your public site every day.
-#   cp .env.example .env    # set COLLECTOR_SERVER and COLLECTOR_TOKEN (same token as the server)
+# A helper's collector in Docker. (No Docker? Each helper on the Admin page has a
+# "Download it" section with a ready-to-run version that updates itself.)
+# Run this on any always-on machine (PC, NAS, Raspberry Pi). It checks in with your site and fetches
+# what it's asked for, from this connection.
+#   cp .env.example .env    # set COLLECTOR_SERVER and COLLECTOR_TOKEN (the helper's token)
 #   docker compose up -d
 services:
   collector:

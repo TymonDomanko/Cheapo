@@ -321,9 +321,9 @@ test('admin backups: snapshot, list, download; non-admins refused', async () => 
   assert.equal((await admin('GET', '/api/admin/backups/..%2F..%2Fetc%2Fpasswd')).status, 404);
 });
 
-test('home collector: token-protected ingest with complete runs', async () => {
-  process.env.COLLECTOR_TOKEN = 'collector-secret-123';
-  const post = (path, body, token = 'collector-secret-123') => fetch(base + path, {
+test('collectors: token-protected ingest with complete runs', async () => {
+  const { token: helperToken } = (await import('../src/helpers.js')).add('Ingest test');
+  const post = (path, body, token = helperToken) => fetch(base + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
@@ -507,22 +507,10 @@ test('admin settings: saved in the database, .env wins, secrets never shown', as
   assert.equal((await client()('GET', '/api/config')).body.site.emailEnabled, false);
 });
 
-test('admin settings: collector token and which stores the server crawls', async () => {
+test('admin settings: which stores the server crawls', async () => {
   const admin = client();
   await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
-  const saved = process.env.COLLECTOR_TOKEN;
-  delete process.env.COLLECTOR_TOKEN; // as if not in .env
-  const { token } = (await admin('POST', '/api/admin/settings/collector-token')).body;
-  assert.ok(token.length >= 24);
-  const post = (t) => fetch(base + '/api/ingest/runs', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` }, body: JSON.stringify({ store: 'aldi' }),
-  });
-  assert.equal((await post(token)).status, 200, 'generated token works for the collector');
-  const s = (await admin('GET', '/api/admin/settings')).body.settings;
-  assert.equal(s.COLLECTOR_TOKEN.value, null, 'token not shown again');
-  assert.equal(s.COLLECTOR_TOKEN.set, true);
-  await admin('DELETE', '/api/admin/settings/collector-token');
-  assert.equal((await post(token)).status, 401, 'revoked');
+  assert.equal((await admin('GET', '/api/admin/settings')).body.settings.COLLECTOR_TOKEN, undefined, 'no site-wide collector token any more: helpers have their own');
 
   await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['coles', 'iga', 'harrisfarm'] });
   const { serverStores } = await import('../src/scrapers/index.js');
@@ -531,10 +519,9 @@ test('admin settings: collector token and which stores the server crawls', async
   assert.equal(o.stores.find((x) => x.store === 'woolworths').fedByCollector, true);
   await admin('PUT', '/api/admin/settings', { SERVER_SCRAPE_STORES: ['woolworths', 'coles', 'aldi', 'iga', 'harrisfarm'] });
   assert.equal(serverStores().length, 5);
-  if (saved) process.env.COLLECTOR_TOKEN = saved;
 });
 
-test('home collector download, version check and self-update bundle', async () => {
+test('collector download for a helper, version check and self-update bundle', async () => {
   const zlib = await import('node:zlib');
   const fs = await import('node:fs');
   const { collectorVersion } = await import('../src/collector-files.js');
@@ -545,9 +532,9 @@ test('home collector download, version check and self-update bundle', async () =
     return r.headers.get('set-cookie').split(';')[0];
   })();
   assert.equal((await fetch(base + '/api/admin/collector/download')).status, 401, 'admins only');
-  const saved = process.env.COLLECTOR_TOKEN;
-  delete process.env.COLLECTOR_TOKEN;
-  const res = await fetch(base + '/api/admin/collector/download', { headers: { Cookie: cookie } });
+  assert.equal((await fetch(base + '/api/admin/collector/download', { headers: { Cookie: cookie } })).status, 400, 'always for a helper');
+  const pc = (await admin('POST', '/api/admin/helpers', { name: 'My PC' })).body;
+  const res = await fetch(`${base}/api/admin/collector/download?helper=${pc.id}`, { headers: { Cookie: cookie } });
   assert.equal(res.headers.get('content-type'), 'application/zip');
   const buf = Buffer.from(await res.arrayBuffer());
 
@@ -580,15 +567,14 @@ test('home collector download, version check and self-update bundle', async () =
   assert.ok(!('.env' in bundle.files), 'updates never touch the collector’s settings');
   assert.equal((await fetch(base + '/api/collector/latest')).status, 401, 'needs the token');
 
-  // The admin page sees which version last connected.
-  const st = (await admin('GET', '/api/admin/settings')).body.collector;
-  assert.equal(st.last.version, 'old123');
-  assert.equal(st.last.upToDate, false);
-  assert.equal(st.latest, zipVersion);
+  // The admin page sees which version each helper last connected with.
+  const mine = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === pc.id);
+  assert.equal(mine.version, 'old123');
+  assert.equal(mine.upToDate, false);
+  assert.equal((await admin('GET', '/api/admin/settings')).body.collector.latest, zipVersion);
   // Repo files and served files fingerprint the same.
   assert.equal(collectorVersion((p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')), zipVersion);
-  await admin('DELETE', '/api/admin/settings/collector-token');
-  if (saved) process.env.COLLECTOR_TOKEN = saved;
+  await admin('DELETE', `/api/admin/helpers/${pc.id}`);
 });
 
 test('helpers: approved by an admin, each with its own token, handed shops to refresh', async () => {
@@ -709,10 +695,10 @@ test('helpers: approved by an admin, each with its own token, handed shops to re
   assert.equal((await samApi('GET', '/api/collector/latest')).status, 401);
   await admin('DELETE', `/api/admin/helpers/${sam.id}`);
   await admin('DELETE', `/api/admin/helpers/${alex.id}`);
-  assert.deepEqual((await admin('GET', '/api/admin/helpers')).body.helpers, []);
+  assert.ok(!(await admin('GET', '/api/admin/helpers')).body.helpers.some((x) => [sam.id, alex.id].includes(x.id)), 'gone');
 });
 
-test('home collector as a single program: download with settings appended, and the launcher fetching its code', async () => {
+test('collector as a single program: download with settings appended, and the launcher fetching its code', async () => {
   const zlib = await import('node:zlib');
   const { spawn } = await import('node:child_process');
   const { programName } = await import('../src/collector-exe-targets.js');
@@ -733,9 +719,9 @@ test('home collector as a single program: download with settings appended, and t
   assert.equal((await get('/api/admin/collector/programs/windows-x64')).status, 409, 'not built yet');
   assert.equal((await fetch(base + '/api/admin/collector/programs/linux-x64')).status, 401, 'admins only');
 
-  const saved = process.env.COLLECTOR_TOKEN;
-  delete process.env.COLLECTOR_TOKEN;
-  const res = await get('/api/admin/collector/programs/linux-x64');
+  const { add, remove } = await import('../src/helpers.js');
+  const pc = add('Exe PC');
+  const res = await get(`/api/admin/collector/programs/linux-x64?helper=${pc.id}`);
   assert.match(res.headers.get('content-disposition'), /filename="grocery-collector-linux-x64\.tar\.gz"/);
   // Unpack it with the real tar: one executable file.
   const unpack = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-tar-'));
@@ -773,11 +759,10 @@ test('home collector as a single program: download with settings appended, and t
   fs.rmSync(pre, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
   delete process.env.COLLECTOR_EXE_PREBUILT;
-  if (saved) process.env.COLLECTOR_TOKEN = saved;
-  else delete process.env.COLLECTOR_TOKEN;
+  remove(pc.id);
 });
 
-test('home collector code needs no npm packages (so it can run as a single program)', async () => {
+test('collector code needs no npm packages (so it can run as a single program)', async () => {
   const { COLLECTOR_CODE } = await import('../src/collector-files.js');
   for (const p of COLLECTOR_CODE) {
     const text = fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -866,9 +851,9 @@ test('older databases are migrated to allow notes', async () => {
 test('admins are emailed when a refresh fails or shrinks, and when it recovers', async () => {
   const { capturedMail } = await import('../src/mailer.js');
   const { checkCollector, sendSummary } = await import('../src/admin-alerts.js');
-  const saved = process.env.COLLECTOR_TOKEN;
-  process.env.COLLECTOR_TOKEN = 'collector-secret-alerts';
-  const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer collector-secret-alerts' }, body: JSON.stringify(body) }).then((r) => r.json());
+  const helpersMod = await import('../src/helpers.js');
+  const alertsHelper = helpersMod.add('Alerts PC');
+  const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alertsHelper.token}` }, body: JSON.stringify(body) }).then((r) => r.json());
   const items = (n) => Array.from({ length: n }, (_, i) => ({ store_product_id: `al${i}`, name: `Alert Test Product ${i}`, size_text: '1kg', price: 2 + i / 100 }));
   const run = async ({ n = 0, error } = {}) => {
     const { runId } = await post('/api/ingest/runs', { store: 'harrisfarm' });
@@ -898,16 +883,16 @@ test('admins are emailed when a refresh fails or shrinks, and when it recovers',
   assert.match(alerts().at(-1).text, /found 5 products; the one before found 20/);
   await run({ n: 20 });
 
-  // The collector check: Harris Farm is collected from home here, and it's been sending.
-  const stores = () => ['woolworths', 'coles', 'aldi', 'iga'];
-  assert.equal(await checkCollector({ serverStores: stores }), false, 'nothing to report');
-  getDb().prepare("UPDATE scrape_runs SET finished_at = '2020-01-01T00:00:00Z' WHERE source = 'collector'").run();
-  assert.equal(await checkCollector({ serverStores: stores }), true);
+  // The helper check: every helper that's turned on has connected lately.
+  assert.equal(await checkCollector(), false, 'nothing to report');
+  getDb().prepare("UPDATE collectors SET last_seen_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(alertsHelper.id);
+  assert.equal(await checkCollector(), true);
   await sendSummary();
-  assert.match(alerts().at(-1).subject, /home collector has gone quiet/);
+  assert.match(alerts().at(-1).subject, /Alerts PC has gone quiet/);
+  helpersMod.setDisabled(alertsHelper.id, true);
+  assert.equal(await checkCollector(), true, 'a helper that’s turned off doesn’t count: all clear again');
   getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
-  if (saved) process.env.COLLECTOR_TOKEN = saved;
-  else delete process.env.COLLECTOR_TOKEN;
+  helpersMod.remove(alertsHelper.id);
 });
 
 test('during a refresh, admin emails wait for the end and come as one summary', async () => {

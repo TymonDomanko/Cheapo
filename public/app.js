@@ -2484,11 +2484,10 @@ async function loadAdmin() {
     <div id="admin-live-barcodes">${adminBarcodes(o)}</div>
     <p class="hint">Coles only shows barcodes on product pages, so they’re filled in a batch at a time each day (products on lists first). Woolworths barcodes come with every refresh. Same barcode = same product.</p>
 
-    <h2 class="section">Home collector</h2>
-    <p class="hint">${o.collectorEnabled
-      ? 'This server accepts prices from a home collector. Stores marked “Collected from home” above come from it, and it covers any shop this server is blocked by.'
-      : 'Not set up. If Woolworths or ALDI refreshes fail from this server, set up the home collector in <a href="#site-settings">Site settings</a> below.'}
-      Helpers (other people’s collectors) can share the work too — see Site settings.</p>
+    <h2 class="section">Helpers</h2>
+    <p class="hint">${o.helpers
+      ? `${plural(o.helpers, 'helper')} share the refreshing with this server, and cover any shop this server is blocked by. Manage them in <a href="#site-settings">Site settings</a> below.`
+      : 'None yet. If a shop blocks this server (Woolworths and ALDI can), add your own PC as a helper in <a href="#site-settings">Site settings</a> below.'}</p>
 
     <h2 class="section">Backups</h2>
     <div id="admin-backups">${prev.backups}</div>
@@ -2561,8 +2560,8 @@ function adminStoreTiles(o) {
       const steady = s.store === 'coles' && o.colesLive?.enabled ? colesSteadyNote(o.colesLive) : o.shared?.[s.store] ? sharedNote(o.shared[s.store]) : '';
       return `<div class="tile"><div class="label">${chip(s.store)}</div>
         <div class="value">${s.products.toLocaleString()}</div>
-        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by home collector</span>' : ''}${steady}</div>
-        <p>${s.fedByCollector ? `<span class="hint">${s.store === 'coles' && o.colesLive?.enabled ? 'Fetched page by page by collectors (not this server)' : o.shared?.[s.store] ? 'Shared out to collectors (not crawled by this server)' : 'Collected from home (not crawled by this server)'}</span>`
+        <div class="note">products · ${status}${r?.source === 'collector' ? ' · <span class="hint">sent by a helper</span>' : ''}${steady}</div>
+        <p>${s.fedByCollector ? `<span class="hint">${s.store === 'coles' && o.colesLive?.enabled ? 'Fetched page by page by helpers (not this server)' : o.shared?.[s.store] ? 'Shared out to helpers (not crawled by this server)' : 'Collected by helpers (not crawled by this server)'}</span>`
           : `<button class="small" data-scrape="${s.store}" ${s.status.running ? 'disabled' : ''}>Refresh</button>`}</p></div>`;
     }).join('')}</div>`;
 }
@@ -2629,47 +2628,6 @@ function ago(iso) {
   return hours < 36 ? `${hours} hours ago` : `${Math.round(hours / 24)} days ago`;
 }
 
-/** "Last connected 2 hours ago · up to date" for the home collector. */
-function collectorStatusLine(c) {
-  if (!c.last) return '<span class="hint">No collector has connected yet.</span>';
-  const how = { exe: 'program', bundle: 'downloaded copy', docker: 'Docker', source: 'from the code' }[c.last.mode] || c.last.mode;
-  const stale = Date.now() - Date.parse(c.last.at) > 36 * 3600000;
-  const version = c.last.upToDate
-    ? '<span class="state ready">✓ up to date</span>'
-    : `<span class="state pending">older version</span> — ${c.last.mode === 'bundle' || c.last.mode === 'exe'
-      ? 'it updates itself before its next collection'
-      : c.last.mode === 'docker' ? 'run <code>docker compose pull && docker compose up -d</code> on that machine' : 'pull the latest code on that machine'}`;
-  return `Last connected <strong>${ago(c.last.at)}</strong>${stale ? ' <span class="warn">(it should connect daily — is that computer on?)</span>' : ''}
-    · ${esc(how)}, version ${esc(c.last.version)} · ${version}`;
-}
-
-// Which download to offer first, from the browser's platform.
-function likelyPlatform() {
-  const ua = navigator.userAgent;
-  if (/Windows/.test(ua)) return 'windows-x64';
-  if (/Mac OS X|Macintosh/.test(ua)) return 'mac';
-  if (/Linux/.test(ua)) return /aarch64|arm/i.test(ua) ? 'linux-arm64' : 'linux-x64';
-  return null;
-}
-
-/** Download buttons: a single program per platform (built on first request), or the zip. */
-function collectorDownloads(programs) {
-  const mine = likelyPlatform();
-  const ordered = [...programs].sort((a, b) => (b.id === mine) - (a.id === mine));
-  const button = (p, i) => `<button type="button" class="${i === 0 && mine !== 'mac' ? 'primary' : 'small'}" data-program="${p.id}">⬇ ${esc(p.label)}</button>`;
-  const errors = programs.filter((p) => p.error).map((p) => `<p class="warn">${esc(p.label)} couldn’t be prepared: ${esc(p.error)}</p>`).join('');
-  return `<div class="actions download-row">${ordered.map(button).join('')}
-      <a class="button ${mine === 'mac' ? 'primary' : 'small'}" href="/api/admin/collector/download" download>⬇ Mac / zip</a></div>
-    <p class="hint" id="program-progress" hidden></p>${errors}
-    <p class="hint"><strong>Windows / Linux:</strong> one program — run it and leave it running. Nothing to install; it’s already set up for this site and keeps itself up to date.
-      Windows may warn that it’s from an unknown publisher (choose <em>More info → Run anyway</em>). On Linux, extract it first: <code>tar xzf grocery-collector-linux-*.tar.gz && ./grocery-collector</code>.
-      To start it with the computer, run it once with <code>--autostart</code>.<br>
-      <strong>Mac, or anywhere with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>:</strong> unzip and run <code>start.sh</code> (or <code>start.bat</code>).
-      Prefer Docker? Use <code>deploy/collector</code>.<br>
-      It does what this site asks: shops this server doesn’t crawl or is blocked by, and its share of Coles pages.</p>
-`;
-}
-
 /** Fetch a program, asking the server to prepare it first if needed. */
 async function downloadProgram(btn) {
   const id = btn.dataset.program;
@@ -2723,10 +2681,12 @@ function helpersCard(list, programs, justMade, canEmail, siteCap) {
         <br><span class="hint">${x.inviteUntil ? `Invite link works until ${dayMonth(x.inviteUntil)}` : 'No invite link open'}</span></p>
       ${justMade?.id === x.id && justMade.invite ? inviteNotice(x.name, justMade.invite, justMade.token) : ''}
       <form class="copy-row helper-cap" data-helper-cap="${x.id}"><label>Coles: at most <input name="colesMax" type="number" min="1" max="600" value="${x.coles_max ?? ''}" placeholder="${esc(siteCap)}"> pages an hour</label><button class="small" type="submit">Set</button></form>
-      <details class="helper-downloads"><summary>Download it for them</summary><div class="actions">
+      <details class="helper-downloads"><summary>Download it</summary><div class="actions">
         ${programs.map((p) => `<button type="button" class="small" data-program="${p.id}" data-helper="${x.id}">⬇ ${esc(p.label)}</button>`).join('')}
         <a class="button small" href="/api/admin/collector/download?helper=${x.id}" data-helper-zip="${x.id}" download>⬇ Mac / zip</a>
-      </div></details>
+      </div>
+      <p class="hint"><strong>Windows / Linux:</strong> one program, already set up for this site: run it and leave it running (on Linux, <code>tar xzf grocery-collector-linux-*.tar.gz && ./grocery-collector</code>). Windows may warn it’s from an unknown publisher: <em>More info → Run anyway</em>. Run it once with <code>--autostart</code> to start it with the computer.
+        <strong>Mac, or anywhere with <a href="https://nodejs.org" target="_blank" rel="noopener">Node.js 20+</a>:</strong> unzip and run <code>start.sh</code> (or <code>start.bat</code>). It keeps itself up to date.</p></details>
       <div class="actions">
         <button type="button" class="small" data-helper-invite="${x.id}" data-email="${esc(x.email || '')}" data-can-email="${canEmail ? '1' : ''}">${x.email && canEmail ? '✉ Email a new link' : '🔗 New invite link'}</button>
         <button type="button" class="small ghost" data-helper-toggle="${x.id}" data-off="${x.disabled ? '' : '1'}">${x.disabled ? 'Turn on' : 'Turn off'}</button>
@@ -2734,7 +2694,7 @@ function helpersCard(list, programs, justMade, canEmail, siteCap) {
       </div></div>`).join('');
   return `<div class="card stack" id="helpers-card">
       <h3>Helpers</h3>
-      <p class="hint">People you trust can run the collector on their own internet connection to share the work. Each shop is refreshed by whichever connection isn’t blocked, and Coles pages are shared out. They split the one pace above between them, so helpers make refreshes more reliable without asking the shops for more. A helper’s prices go straight into everyone’s comparisons, so only add people you trust.</p>
+      <p class="hint">A helper is the collector program running on another internet connection: your own PC, or someone you trust. Each shop is refreshed by whichever connection isn’t blocked, and Coles pages are shared out within the limits above, so helpers make refreshes more reliable without asking the shops for more. A helper’s prices go straight into everyone’s comparisons, so only add people you trust.</p>
       ${rows || '<p class="hint">No helpers yet.</p>'}
       <form id="add-helper" class="stack">
         <h4>Add a helper</h4>
@@ -2750,7 +2710,7 @@ function helpersCard(list, programs, justMade, canEmail, siteCap) {
 
 const HELPER_NEW_KEY = 'Downloading makes this helper a new key. A copy they already have stops working until they run this one. Carry on?';
 
-async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
+async function loadAdminSettings(justMadeHelper = null) {
   const [{ settings: st, stores, currentAddress, litestream, collector }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
   const canEmail = st.SMTP_URL.set;
   const locked = (key) => st[key].source === 'env';
@@ -2794,22 +2754,15 @@ async function loadAdminSettings(justMadeToken = null, justMadeHelper = null) {
       </form>
 
       <form id="collector-settings" class="card stack">
-        <h3>Home collector</h3>
-        <p class="hint">For stores that block this server: a small program on a computer at home crawls them and sends the prices here.</p>
-        ${collectorDownloads(collector.programs)}
-        <p class="collector-status">${collectorStatusLine(collector)}</p>
-        <p><strong>Token:</strong>${envTag('COLLECTOR_TOKEN')} ${st.COLLECTOR_TOKEN.set ? 'set' : '<span class="hint">none — the collector can’t send prices</span>'}</p>
-        ${justMadeToken ? `<div class="notice">Copy this into the collector’s .env as COLLECTOR_TOKEN (or just download the collector again — the download includes it). It won’t be shown again here.
-          <div class="copy-row"><input readonly value="${esc(justMadeToken)}" id="new-token"><button type="button" class="small" id="copy-token">Copy</button></div></div>` : ''}
-        ${locked('COLLECTOR_TOKEN') ? '' : `<div class="actions"><button type="button" class="small" id="make-token">${st.COLLECTOR_TOKEN.set ? 'Generate a new token' : 'Generate token'}</button>
-          ${st.COLLECTOR_TOKEN.set ? '<button type="button" class="small ghost" id="revoke-token">Turn off</button>' : ''}</div>`}
+        <h3>Sharing the work</h3>
+        <p class="hint">This server and your helpers (below) share the refreshing: each shop’s departments are handed out, and so are Coles’ pages.</p>
         <label>Coles pages an hour, all connections together${envTag('COLES_PAGES_PER_HOUR')}
           <input name="COLES_PAGES_PER_HOUR" type="number" min="0" max="600" value="${esc(st.COLES_PAGES_PER_HOUR.value ?? 30)}" ${dis('COLES_PAGES_PER_HOUR')}></label>
         <label>Most Coles pages an hour for any one connection${envTag('COLES_MAX_PER_CONNECTION')}
           <input name="COLES_MAX_PER_CONNECTION" type="number" min="1" max="600" value="${esc(st.COLES_MAX_PER_CONNECTION.value ?? 40)}" ${dis('COLES_MAX_PER_CONNECTION')}></label>
-        <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day. This server, the home collector and helpers share the pages above rather than adding to them, and no one connection (this server included) fetches more than the second figure; a helper can be set lower below. More an hour means a greater chance of a bot check. 0 pages an hour goes back to one big crawl each night.</p>
+        <p class="hint">Coles is about 640 pages. At 30 an hour the whole shop takes about a day. This server and the helpers share the pages above rather than adding to them, and no one connection (this server included) fetches more than the second figure; a helper can be set lower below. More an hour means a greater chance of a bot check. 0 pages an hour goes back to one big crawl each night.</p>
         <fieldset class="shop-picker"><legend>This server crawls${envTag('SERVER_SCRAPE_STORES')}</legend>
-          <p class="hint">Untick the stores the home collector sends instead. If this server is blocked by a shop it does crawl, a collector covers it.</p>
+          <p class="hint">Untick a shop to leave it to the helpers. If this server is blocked by a shop it does crawl, a helper covers it.</p>
           ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
         <p class="warn" data-form-error hidden></p>
@@ -2846,7 +2799,7 @@ $('#admin-root').addEventListener('submit', async (e) => {
       const made = await api('/api/admin/helpers', {
         method: 'POST', body: { name: f.elements.name.value, email: f.elements.email.value || null, send: !!f.elements.send?.checked && !!f.elements.email.value },
       });
-      await loadAdminSettings(null, made);
+      await loadAdminSettings(made);
     } catch (err) {
       formError(f.closest('.card'), err);
     }
@@ -2896,16 +2849,6 @@ $('#admin-root').addEventListener('click', async (e) => {
       if (!confirm('Stop sending email? Emails will go to the outbox on this page instead.')) return;
       await api('/api/admin/settings', { method: 'PUT', body: { smtp: null } });
       loadAdmin();
-    } else if (t.id === 'make-token') {
-      if (t.textContent.includes('new') && !confirm('Make a new token? The home collector stops working until you give it the new one.')) return;
-      const { token } = await api('/api/admin/settings/collector-token', { method: 'POST' });
-      loadAdminSettings(token);
-    } else if (t.id === 'revoke-token') {
-      if (!confirm('Turn off the home collector? It will be refused until you generate a new token.')) return;
-      await api('/api/admin/settings/collector-token', { method: 'DELETE' });
-      loadAdmin();
-    } else if (t.id === 'copy-token') {
-      copyText($('#new-token').value);
     } else if (t.dataset.copyInput !== undefined) {
       copyText(t.parentElement.querySelector('[data-copy-source]').value);
     } else if (t.dataset.helperInvite) {
@@ -2919,7 +2862,7 @@ $('#admin-root').addEventListener('click', async (e) => {
       }
       if (!confirm('Make a new invite link? Any older link for this helper stops working.')) return;
       const inv = await api(`/api/admin/helpers/${t.dataset.helperInvite}/invite`, { method: 'POST', body: { email: email || null, send } });
-      await loadAdminSettings(null, { id: Number(t.dataset.helperInvite), invite: inv });
+      await loadAdminSettings({ id: Number(t.dataset.helperInvite), invite: inv });
     } else if (t.dataset.program) {
       if (t.dataset.helper && !confirm(HELPER_NEW_KEY)) return;
       await downloadProgram(t);

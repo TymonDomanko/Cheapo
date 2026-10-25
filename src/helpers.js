@@ -1,8 +1,8 @@
-// Who is collecting prices: this server, the site's own home collector (the
-// COLLECTOR_TOKEN in Site settings), and helpers — collectors an admin has
-// approved, each with its own token, so they can be named, seen and turned off
-// one by one. They share the work; they don't add to how much is asked of a
-// shop (see src/coles-live.js and src/sharing.js).
+// Who is collecting prices: this server and helpers — collectors an admin has
+// approved (your own PC, or someone else's), each with its own token, so they
+// can be named, seen, capped and turned off one by one. They share the work;
+// they don't add to how much is asked of a shop (see src/coles-live.js and
+// src/sharing.js).
 
 import crypto from 'node:crypto';
 import { getDb, nowIso } from './db.js';
@@ -12,16 +12,32 @@ const hash = (token) => crypto.createHash('sha256').update(token).digest('hex');
 const httpError = (status, msg) => Object.assign(new Error(msg), { status });
 
 export const SERVER = { id: 'server', name: 'This server' };
-const HOME = { id: 'home', name: 'Home collector' };
 
-/** The worker a collector token belongs to, or null. */
+/** The helper a collector token belongs to, or null. */
 export function identify(token) {
   token = String(token || '');
   if (!token) return null;
-  const site = getSetting('COLLECTOR_TOKEN');
-  if (site && token.length === site.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(site))) return HOME;
+  adoptSiteToken();
   const row = getDb().prepare('SELECT id, name FROM collectors WHERE token_hash = ? AND disabled = 0').get(hash(token));
   return row ? { id: `h${row.id}`, name: row.name, helperId: row.id } : null;
+}
+
+/**
+ * Before helpers, the site had one collector token (COLLECTOR_TOKEN, in .env
+ * or Site settings). It becomes a helper called "Home collector", with that
+ * token, so a collector already running keeps working. Done once.
+ */
+export function adoptSiteToken() {
+  const d = getDb();
+  if (d.prepare("SELECT 1 FROM app_settings WHERE key = 'helpers:adopted'").get()) return;
+  const token = getSetting('COLLECTOR_TOKEN');
+  if (token && !d.prepare('SELECT 1 FROM collectors WHERE token_hash = ?').get(hash(token))) {
+    const last = JSON.parse(d.prepare("SELECT value FROM app_settings WHERE key = 'collector:last'").get()?.value || 'null');
+    d.prepare('INSERT INTO collectors (name, token_hash, created_at, last_seen_at, version, mode) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('Home collector', hash(token), nowIso(), last?.at || null, last?.version || null, last?.mode || null);
+  }
+  d.prepare("DELETE FROM app_settings WHERE key IN ('cfg:COLLECTOR_TOKEN', 'collector:last')").run();
+  d.prepare("INSERT INTO app_settings (key, value) VALUES ('helpers:adopted', ?)").run(nowIso());
 }
 
 /** A collector talked to us. */
@@ -35,7 +51,7 @@ export function touch(worker, { version, mode } = {}) {
 /** A worker's display name. */
 export function nameOf(id) {
   if (id === SERVER.id) return SERVER.name;
-  if (id === HOME.id) return HOME.name;
+  if (id === 'home') return 'Home collector'; // runs from before helpers
   const row = /^h\d+$/.test(id || '') && getDb().prepare('SELECT name FROM collectors WHERE id = ?').get(Number(id.slice(1)));
   return row ? row.name : 'A helper that was removed';
 }

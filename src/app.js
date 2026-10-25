@@ -505,19 +505,17 @@ export function createApp() {
   }));
   app.delete('/api/admin/match-rules/:a/:b', requireAdmin, h((req) => matchfix.removeRule(id(req.params.a), id(req.params.b))));
 
-  // ------------------------------------------------------------ home collector
-  // Stores that block cloud servers (Woolworths, ALDI) can be crawled from a
-  // home connection by `npm run collect`, which sends the products here.
+  // ------------------------------------------------------------ helpers' collectors
+  // Collectors (`npm run collect`, or the downloaded program) on other
+  // connections share the work and send the products here. Each is a helper
+  // with its own token (src/helpers.js).
 
-  // The site's own token (COLLECTOR_TOKEN) or an approved helper's (src/helpers.js).
   function requireCollector(req, res, next) {
     const worker = helpers.identify(String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (!worker) {
-      const any = getSetting('COLLECTOR_TOKEN') || helpers.list().length;
-      return res.status(401).json({ error: any ? 'Bad collector token' : 'This server isn’t accepting collectors (set COLLECTOR_TOKEN)' });
+      return res.status(401).json({ error: helpers.list().length ? 'Bad collector token' : 'This server has no helpers yet (Admin → Site settings → Helpers)' });
     }
     const seen = { version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') };
-    if (worker.id === 'home') collectorBundle.recordCollector(seen);
     helpers.touch(worker, seen);
     req.worker = worker;
     next();
@@ -593,7 +591,7 @@ export function createApp() {
       users: d.prepare('SELECT COUNT(*) n FROM users').get().n,
       lists: d.prepare('SELECT COUNT(*) n FROM lists').get().n,
       scrapeCron: process.env.SCRAPE_CRON ?? '15 4 * * *',
-      collectorEnabled: !!getSetting('COLLECTOR_TOKEN'),
+      helpers: helpers.list().filter((x) => !x.disabled).length,
       barcodes: { ...colesBarcodeProgress(), status: barcodeStatus },
       openMatchReports: getDb().prepare("SELECT COUNT(*) n FROM match_reports WHERE status = 'open'").get().n,
     };
@@ -615,13 +613,13 @@ export function createApp() {
     return { started: [...stores, ...shared], colesSteady: steady };
   }));
 
-  // Site settings (email, site details, home collector). .env values win and can't be changed here.
+  // Site settings (email, site details, sharing the work). .env values win and can't be changed here.
   app.get('/api/admin/settings', requireAdmin, h((req) => ({
     settings: settings.describeSettings(),
     stores: STORES,
     currentAddress: `${req.protocol}://${req.get('host')}`,
     litestream: backup.litestreamInfo(),
-    collector: { ...collectorBundle.collectorStatus(), programs: collectorExe.exeStatuses() },
+    collector: { latest: collectorBundle.latestCollectorVersion(), programs: collectorExe.exeStatuses() },
   })));
 
   app.put('/api/admin/settings', requireAdmin, h((req) => {
@@ -647,28 +645,16 @@ export function createApp() {
     return { settings: settings.describeSettings() };
   }));
 
-  // A new collector token, shown in full once so it can be copied to the home collector.
-  app.post('/api/admin/settings/collector-token', requireAdmin, h(() => {
-    const token = settings.newCollectorToken();
-    settings.setSetting('COLLECTOR_TOKEN', token);
-    return { token };
-  }));
-  // What a downloaded collector is set up with: this site and a token. For a
-  // helper (?helper=<id>) that's a new token for it, so an older download of
-  // theirs stops working; otherwise the site's own token (made now if there
-  // isn't one). Which shops it does is up to this server (src/sharing.js).
+  // What a downloaded collector is set up with: this site and a new token for
+  // the helper it's for (?helper=<id>), so an older download of theirs stops
+  // working. Which shops it does is up to this server (src/sharing.js).
   function collectorSetup(req) {
-    const helper = req.query.helper ? helpers.list().find((x) => x.id === Number(req.query.helper)) : null;
-    if (req.query.helper && !helper) throw bad('No such helper', 404);
-    let token = helper ? helpers.newToken(helper.id) : getSetting('COLLECTOR_TOKEN');
-    if (!token) {
-      token = settings.newCollectorToken();
-      settings.setSetting('COLLECTOR_TOKEN', token);
-    }
-    return { serverUrl: siteUrl(req), token, helper: helper?.name || null, cron: '0 4 * * *' };
+    const helper = helpers.list().find((x) => x.id === Number(req.query.helper));
+    if (!helper) throw bad(req.query.helper ? 'No such helper' : 'Say which helper it’s for (?helper=<id>)', req.query.helper ? 404 : 400);
+    return { serverUrl: siteUrl(req), token: helpers.newToken(helper.id), helper: helper.name, cron: '0 4 * * *' };
   }
 
-  // The home collector as a zip, ready to run: code, start scripts and a filled-in .env.
+  // The collector as a zip, ready to run: code, start scripts and a filled-in .env.
   app.get('/api/admin/collector/download', requireAdmin, (req, res) => {
     let setup;
     try {
@@ -701,7 +687,7 @@ export function createApp() {
     });
   }
 
-  // The home collector as a single program per platform. Built in the
+  // The collector as a single program per platform. Built in the
   // background the first time (it takes a minute), then served from a cache.
   app.get('/api/admin/collector/programs', requireAdmin, h(() => ({ programs: collectorExe.exeStatuses() })));
   app.post('/api/admin/collector/programs/:target/build', requireAdmin, h((req) => {
@@ -746,7 +732,6 @@ export function createApp() {
     else sendProgram(res, target, setup);
   });
 
-  app.delete('/api/admin/settings/collector-token', requireAdmin, h(() => settings.setSetting('COLLECTOR_TOKEN', null)));
 
   // Helpers: collectors on other connections that share the work (src/helpers.js).
   app.get('/api/admin/helpers', requireAdmin, h(() => {
