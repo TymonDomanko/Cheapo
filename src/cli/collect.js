@@ -178,13 +178,34 @@ async function run() {
 
 // ---------------------------------------------------------------- sharing the work
 
+// Shops that pick a store by where the connection is (Woolworths): which one
+// they give this connection, checked every 6 hours and told to the site, so
+// connections given the same store can share the shop.
+const areas = {};
+let areasAt = 0;
+async function myAreas(canDo) {
+  if (Date.now() - areasAt < 6 * 3600 * 1000) return areas;
+  areasAt = Date.now();
+  for (const [store, scraper] of Object.entries(SCRAPERS)) {
+    if (!scraper.area || (canDo.length && !canDo.includes(store))) continue;
+    try {
+      const id = await scraper.area();
+      if (id && id !== areas[store]) console.log(`${store}: this connection gets store ${id}`);
+      if (id) areas[store] = id;
+    } catch (e) {
+      console.warn(`${store}: couldn't tell which store this connection gets (${e.message})`);
+    }
+  }
+  return areas;
+}
+
 /** Parts of shops' daily refreshes, one at a time, for as long as the site has them. */
 async function partsLoop() {
   const canDo = named.length ? named : listed;
   for (;;) {
     let wait = 300;
     try {
-      const r = await post('/api/collector/parts/next', { stores: canDo });
+      const r = await post('/api/collector/parts/next', { stores: canDo, areas: await myAreas(canDo) });
       wait = r.wait;
       if (r.part) await doPart(r);
     } catch (e) {

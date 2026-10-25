@@ -38,6 +38,22 @@ export async function departments() {
   }
 }
 
+/**
+ * The Woolworths store whose prices this connection gets. Without a login the
+ * store can't be chosen: Woolworths picks one from where the connection is.
+ */
+export async function area() {
+  const client = createClient({ origin: ORIGIN, delayMs: 0 });
+  await client.init();
+  try {
+    const boot = await client.getJson(`${ORIGIN}/api/ui/v2/bootstrap`);
+    const id = boot?.GetDeliveryInfoRequest?.FulfilmentStoreId ?? boot?.ShopperRequest?.FulfilmentStoreId;
+    return id ? String(id) : null;
+  } finally {
+    await client.close();
+  }
+}
+
 /** `categories`: departments already fetched with departments() (when the crawl is shared out). */
 export async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories } = {}) {
   let cats = categories || await departments();

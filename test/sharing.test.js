@@ -381,3 +381,44 @@ test('a shop refusing a part (403, 429 or a bot check page) counts as blocked', 
   assert.equal(await run(new Error('Expected JSON from https://x but got an HTML page (likely a bot check)')), true);
   assert.equal(await run(Object.assign(new Error('HTTP 500 for https://x'), { status: 500 })), false);
 });
+
+test('a shop kept with a connection, or with the store a shop gives by location', async () => {
+  const settings = await import('../src/settings.js');
+  const sam = samWorker.id;
+  const alex = `h${helpers.list().find((x) => x.name === 'Alex’s laptop').id}`;
+  const fresh = helpers.add('Jo’s PC');
+  const jo = `h${fresh.id}`;
+  now = Date.parse('2026-11-05T17:20:00Z'); // a new day, 04:20 in Sydney
+
+  // Kept with Alex: Sam waits while Alex is at work.
+  settings.setSetting('PREFERRED_CONNECTIONS', `bws=${alex}`);
+  assert.equal(sharing.take(sam, ['bws']), null);
+  assert.equal(sharing.take(alex, ['bws']).part.kind, 'index');
+  sharing.done(alex, 'bws', 'index', { cats: ['beer', 'wine'].map((k) => ({ key: k, label: k, dept: { slug: k } })) });
+  assert.equal(sharing.take(sam, ['bws']), null, 'still Alex’s');
+  assert.equal(sharing.status().bws.preferred, 'Alex’s laptop');
+  // Alex goes quiet: after 10 minutes the others step in.
+  minutes(11);
+  assert.equal(sharing.take(sam, ['bws']).part.key, 'beer');
+
+  // Kept with a store: connections report the store Woolworths gives them, and only those given it fetch.
+  sharing.noteAreas(sam, { woolworths: '1101' });
+  sharing.noteAreas(alex, { woolworths: '1200' });
+  sharing.noteAreas(jo, { woolworths: '1200' });
+  sharing.noteAreas(jo, { woolworths: '<script>' }); // nonsense is ignored
+  assert.deepEqual(sharing.connectionsByArea().woolworths.map((g) => [g.area, g.workers.map((x) => x.name)]), [['1101', ['Sam’s PC']], ['1200', ['Alex’s laptop', 'Jo’s PC']]]);
+  settings.setSetting('PREFERRED_CONNECTIONS', 'woolworths=@1200');
+  settings.setSetting('SERVER_SCRAPE_STORES', 'coles,iga');
+  assert.equal(sharing.take(alex, ['woolworths']).part.kind, 'index');
+  sharing.done(alex, 'woolworths', 'index', { cats: ['d1', 'd2', 'd3'].map((k) => ({ key: k, label: k, dept: { slug: k } })) });
+  assert.equal(sharing.take(alex, ['woolworths']).part.key, 'd1');
+  assert.equal(sharing.take(sam, ['woolworths']), null, 'room for another, but Sam is given another store');
+  assert.equal(sharing.take(jo, ['woolworths']).part.key, 'd2', 'both connections given store 1200 share it');
+  // Both of them blocked: Sam steps in rather than leave it undone.
+  sharing.done(alex, 'woolworths', 'd1', { blocked: 'bot check' });
+  sharing.done(jo, 'woolworths', 'd2', { blocked: 'bot check' });
+  assert.ok(sharing.take(sam, ['woolworths']));
+  assert.throws(() => settings.setSetting('PREFERRED_CONNECTIONS', 'woolworths=everyone'), /Choose a connection or a store/);
+  settings.setSetting('PREFERRED_CONNECTIONS', null);
+  settings.setSetting('SERVER_SCRAPE_STORES', null);
+});

@@ -95,6 +95,19 @@ const SETTINGS = {
       return String(n);
     },
   },
+  // What to keep a shop's refresh with ("woolworths=h3,aldi=server", or
+  // "woolworths=@1200": whichever connections Woolworths gives store 1200), so
+  // its prices come from one place. Others step in only for what it can't do.
+  PREFERRED_CONNECTIONS: {
+    check(v) {
+      const pairs = String(v).split(',').map((s) => s.trim()).filter(Boolean).map((p) => p.split('=').map((s) => s.trim()));
+      for (const [store, w] of pairs) {
+        if (!STORES.includes(store)) throw httpError(400, `Unknown store: ${store}`);
+        if (!/^(server|h\d+|@[\w-]{1,20})$/.test(w || '')) throw httpError(400, `Choose a connection or a store for ${store}`);
+      }
+      return pairs.map((p) => p.join('=')).join(',');
+    },
+  },
   SERVER_SCRAPE_STORES: {
     check(v) {
       const list = [...new Set(String(v).split(',').map((s) => s.trim()).filter(Boolean))];

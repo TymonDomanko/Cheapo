@@ -2722,13 +2722,27 @@ function helpersCard(list, programs, justMade, canEmail, siteCap) {
 const HELPER_NEW_KEY = 'Downloading makes this helper a new key. A copy they already have stops working until they run this one. Carry on?';
 
 async function loadAdminSettings(justMadeHelper = null) {
-  const [{ settings: st, stores, currentAddress, litestream, collector }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
+  const [{ settings: st, stores, currentAddress, litestream, collector, sharing }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
   const canEmail = st.SMTP_URL.set;
   const locked = (key) => st[key].source === 'env';
   const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
   const smtp = st.SMTP_URL.parts || { host: '', port: 465, secure: true, user: '', passwordSet: false };
   const crawled = (st.SERVER_SCRAPE_STORES.value || stores.join(',')).split(',');
+  const kept = Object.fromEntries(String(st.PREFERRED_CONNECTIONS.value || '').split(',').filter(Boolean).map((p) => p.split('=')));
+  // Per shared shop: keep it with a connection, or with a store (shops that pick one by location).
+  const keepWith = (shop) => {
+    const groups = sharing.areas[shop] || [];
+    const storeOf = (id) => groups.find((g) => g.workers.some((x) => x.id === id))?.area;
+    const conns = [...(crawled.includes(shop) ? [{ id: 'server', name: 'This server' }] : []), ...helpers.filter((x) => !x.disabled).map((x) => ({ id: `h${x.id}`, name: x.name }))];
+    const opt = (value, label) => `<option value="${esc(value)}" ${(kept[shop] || '') === value ? 'selected' : ''}>${esc(label)}</option>`;
+    return `<label>${chip(shop)}${envTag('PREFERRED_CONNECTIONS')}<select name="keep" data-shop="${shop}" ${dis('PREFERRED_CONNECTIONS')}>
+      ${opt('', 'Any connection')}
+      ${groups.map((g) => opt(`@${g.area}`, `Store ${g.area} (${g.workers.map((x) => x.name).join(', ')})`)).join('')}
+      ${conns.map((c) => opt(c.id, `${c.name}${storeOf(c.id) ? ` — store ${storeOf(c.id)}` : ''}`)).join('')}
+      ${kept[shop]?.startsWith('@') && !groups.some((g) => `@${g.area}` === kept[shop]) ? opt(kept[shop], `Store ${kept[shop].slice(1)} (no connection gets it at the moment)`) : ''}
+    </select></label>`;
+  };
   $('#admin-settings').innerHTML = `
     <div class="settings-grid">
       <form id="email-settings" class="card stack">
@@ -2773,7 +2787,7 @@ async function loadAdminSettings(justMadeHelper = null) {
         <p class="hint">Find your store at <a href="https://www.coles.com.au/find-stores" target="_blank" rel="noopener">coles.com.au/find-stores</a> and paste its page (it ends in the store number, e.g. …/bondi-junction-0381). ${st.COLES_STORE_ID.value ? `Using store ${esc(st.COLES_STORE_ID.value)}.` : '<strong>Not set:</strong> Coles’ default store is in Melbourne.'} Takes effect from the next Coles page fetched.</p>
         <label>Liquorland state${envTag('LIQUOR_STATE')}<select name="LIQUOR_STATE" ${dis('LIQUOR_STATE')}>
           ${['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'].map((x) => `<option value="${x}" ${(st.LIQUOR_STATE.value || 'nsw') === x ? 'selected' : ''}>${x.toUpperCase()}</option>`).join('')}</select></label>
-        <p class="hint"><strong>Woolworths</strong> picks a store from where each connection is, and can’t be set here yet, so each Woolworths refresh stays on one connection (this server, if it crawls Woolworths) and its prices don’t jump between areas. IGA is per store (shoppers pick theirs); ALDI and Harris Farm have one price.</p>
+        <p class="hint"><strong>Woolworths</strong> only lets a logged-in shopper choose a store, so it picks one from where each connection is. Choose which store’s prices to use under <em>Sharing the work → Keep a shop’s refresh with</em>. IGA is per store (shoppers pick theirs); ALDI and Harris Farm have one price.</p>
         <p class="warn" data-form-error hidden></p>
         ${['PRICE_AREA', 'COLES_STORE_ID', 'LIQUOR_STATE'].every(locked) ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
@@ -2790,8 +2804,12 @@ async function loadAdminSettings(justMadeHelper = null) {
           <p class="hint">Untick a shop to leave it to the helpers. If this server is blocked by a shop it does crawl, a helper covers it.</p>
           ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
+        <fieldset class="stack"><legend>Keep a shop’s refresh with</legend>
+          <p class="hint">Woolworths can’t be told which store to use without a login, so it picks one from where each connection is (each connection checks which, every few hours). Choose a store here and only connections given that store fetch Woolworths, so its prices are that store’s. Or keep a shop with one connection. If none of them can (blocked, failed or offline for 10 minutes), the others step in.</p>
+          ${sharing.shops.map(keepWith).join('')}
+        </fieldset>
         <p class="warn" data-form-error hidden></p>
-        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') ? '' : '<button class="primary" type="submit">Save</button>'}
+        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') && locked('PREFERRED_CONNECTIONS') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
 
       ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 40)}
@@ -2851,6 +2869,8 @@ $('#admin-root').addEventListener('submit', async (e) => {
       if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
     }
     for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) if (!v(k).disabled) body[k] = v(k).value;
+    const keep = [...f.querySelectorAll('[name=keep]')];
+    if (keep.length && !keep[0].disabled) body.PREFERRED_CONNECTIONS = Object.fromEntries(keep.map((s) => [s.dataset.shop, s.value]));
   }
   try {
     await api('/api/admin/settings', { method: 'PUT', body });

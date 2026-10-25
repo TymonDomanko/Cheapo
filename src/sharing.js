@@ -20,6 +20,7 @@
 // refresh per store) stays on this server.
 
 import { getDb } from './db.js';
+import { getSetting } from './settings.js';
 import { SCRAPERS, startRun, getRun, recordBatch, finishRun, serverStores, priceArea } from './scrapers/index.js';
 import { index as indexParts, fetchPart } from './scrapers/parts.js';
 import { nextRun } from './mini-cron.js';
@@ -134,14 +135,88 @@ const busy = (pass) => (pass.indexWorker && !idle(pass.indexAt) ? 1 : 0) + (pass
 // for what it can't do.
 export const ONE_CONNECTION = new Set((process.env.ONE_CONNECTION_SHOPS ?? 'woolworths').split(',').map((s) => s.trim()).filter(Boolean));
 
-/** The connection a one-connection shop's refresh belongs to: this server if it crawls the shop, else whoever started it. */
-const ownerOf = (store, pass) => (!ONE_CONNECTION.has(store) ? null : serverStores().includes(store) ? SERVER : pass.owner || null);
+/**
+ * What the admin page keeps each shop's refresh with: { store: worker }, where
+ * the worker is a connection, or '@<id>' for whichever connections the shop
+ * gives that store (Woolworths picks one by location).
+ */
+export function preferred() {
+  const ok = new Set(['server', ...helpers.list().filter((x) => !x.disabled).map((x) => `h${x.id}`)]);
+  return Object.fromEntries(String(getSetting('PREFERRED_CONNECTIONS') || '').split(',').map((p) => p.split('='))
+    .filter(([store, w]) => SHARED.includes(store) && (w?.startsWith('@') || (ok.has(w) && (w !== SERVER || serverStores().includes(store))))));
+}
+
+/**
+ * The connection a shop's refresh belongs to: the one chosen on the admin page;
+ * else for a one-connection shop this server if it crawls it, or whoever started it.
+ */
+function ownerOf(store, pass) {
+  const chosen = preferred()[store];
+  if (chosen) return chosen;
+  return !ONE_CONNECTION.has(store) ? null : serverStores().includes(store) ? SERVER : pass.owner || null;
+}
+
+// The store each connection is given by a shop that picks one by location
+// (Woolworths), as the connections report it: { store: { worker: { id, at } } }.
+// Connections given the same store as the owner share its refresh.
+const AREA_KEY = 'share:areas';
+function areas() {
+  const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(AREA_KEY);
+  return row ? JSON.parse(row.value) : {};
+}
+/** Worker `w` says which store `store` gives it ({ woolworths: '1101' }). */
+export function noteAreas(w, reported) {
+  if (!reported || typeof reported !== 'object') return;
+  const all = areas();
+  let changed = false;
+  for (const [store, id] of Object.entries(reported)) {
+    if (!SCRAPERS[store]?.area || id == null || !/^[\w-]{1,20}$/.test(String(id))) continue;
+    (all[store] ||= {})[w] = { id: String(id), at: iso() };
+    changed = true;
+  }
+  if (changed) getDb().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(AREA_KEY, JSON.stringify(all));
+}
+const AREA_FRESH_MS = 2 * 86400000;
+
+/** For the admin page: which store each connection is given, by shop: { store: [{ area, workers: [{ id, name }] }] }. */
+export function connectionsByArea() {
+  const out = {};
+  for (const [store, ws] of Object.entries(areas())) {
+    if (!SHARED.includes(store)) continue;
+    const by = {};
+    for (const w of Object.keys(ws)) {
+      const id = areaOf(store, w);
+      if (id && (w === SERVER || helpers.list().some((x) => `h${x.id}` === w))) (by[id] ||= []).push({ id: w, name: helpers.nameOf(w) });
+    }
+    out[store] = Object.entries(by).map(([area, workers]) => ({ area, workers }));
+  }
+  return out;
+}
+const areaOf = (store, w) => {
+  const a = areas()[store]?.[w];
+  return a && clock() - Date.parse(a.at) < AREA_FRESH_MS ? a.id : null;
+};
+const sameArea = (store, owner, w) => {
+  const want = owner.startsWith('@') ? owner.slice(1) : areaOf(store, owner);
+  return !!want && areaOf(store, w) === want;
+};
+/** Is `w` the shop's owner, or given the same store as it? */
+const owns = (store, pass, w) => {
+  const owner = ownerOf(store, pass);
+  return !!owner && (owner === w || sameArea(store, owner, w));
+};
 
 /** May worker `w` take this part (null: the department list)? */
 function allowed(store, pass, w, part) {
   const owner = ownerOf(store, pass);
-  if (!owner || owner === w) return true;
+  if (!owner || owner === w || sameArea(store, owner, w)) return true;
   // The owner can't: blocked by the shop, failed this part, or gone quiet.
+  if (owner.startsWith('@')) {
+    // A store: nobody given it has been at work for a while, or they've all failed this or been blocked.
+    const given = Object.keys(areas()[store] || {}).filter((x) => sameArea(store, owner, x));
+    const failed = part ? part.failedBy : pass.indexFailedBy;
+    return idle(pass.ownerAt || pass.since) || (given.length > 0 && given.every((x) => failed.includes(x) || paused(pass, x)));
+  }
   return paused(pass, owner) || (part ? part.failedBy.includes(owner) : pass.indexFailedBy.includes(owner)) || idle(pass.ownerAt || pass.since);
 }
 
@@ -162,7 +237,7 @@ export function take(w, canDo = []) {
     if (busy(pass) >= atOnce(store)) continue;
     const claim = () => {
       if (ONE_CONNECTION.has(store) && !pass.owner) pass.owner = w;
-      if (w === ownerOf(store, pass)) pass.ownerAt = iso();
+      if (owns(store, pass, w)) pass.ownerAt = iso();
     };
     if (!pass.parts) {
       if (pass.indexWorker && !idle(pass.indexAt)) continue;
@@ -198,7 +273,7 @@ export function items(w, store, partKey, list) {
   const { pass, part } = mine(store, w, partKey);
   const r = recordBatch(getRun(pass.runId), list);
   part.touchedAt = iso();
-  if (w === ownerOf(store, pass)) pass.ownerAt = part.touchedAt;
+  if (owns(store, pass, w)) pass.ownerAt = part.touchedAt;
   save(store, pass);
   return r;
 }
@@ -266,6 +341,16 @@ export function restart(store) {
 // ---------------------------------------------------------------- this server's share
 
 const running = new Map(); // shop → parts this server is fetching
+let areasCheckedAt = 0;
+
+/** Find out which store each location-priced shop gives this server (every 6 hours). */
+function checkOwnAreas() {
+  if (Date.now() - areasCheckedAt < 6 * 3600 * 1000) return;
+  areasCheckedAt = Date.now();
+  for (const store of SHARED.filter((s) => SCRAPERS[s].area && serverStores().includes(s))) {
+    SCRAPERS[store].area().then((id) => id && noteAreas(SERVER, { [store]: id }), () => {});
+  }
+}
 
 /** Take and fetch parts of the shops this server crawls, if there are any going (each shop at its usual pace). */
 export function pump({ log = () => {} } = {}) {
@@ -302,7 +387,11 @@ let timer = null;
 /** Check every 30 seconds for parts this server could do (the server calls this). */
 export function start() {
   if (timer) return;
-  timer = setInterval(() => pump(), 30 * 1000);
+  checkOwnAreas();
+  timer = setInterval(() => {
+    checkOwnAreas();
+    pump();
+  }, 30 * 1000);
   timer.unref?.();
 }
 
@@ -323,6 +412,9 @@ export function status() {
         ...(pass.indexWorker && !idle(pass.indexAt) ? [{ id: pass.indexWorker, worker: helpers.nameOf(pass.indexWorker), part: 'the department list' }] : []),
         ...parts.filter((p) => !p.done && p.worker && !idle(p.touchedAt)).map((p) => ({ id: p.worker, worker: helpers.nameOf(p.worker), part: p.label })),
       ],
+      preferred: !preferred()[store] ? null : preferred()[store].startsWith('@') ? `whichever connection gets store ${preferred()[store].slice(1)}` : helpers.nameOf(preferred()[store]),
+      // The store each connection is given (shops that pick one by location).
+      areas: Object.entries(areas()[store] || {}).filter(([w]) => areaOf(store, w)).map(([w, a]) => ({ id: w, worker: helpers.nameOf(w), area: a.id })),
       // Connections paused for this shop after a bot check, and until when.
       paused: [
         ...Object.entries(pass.paused || {}).filter(([w]) => paused(pass, w)).map(([w, p]) => ({ id: w, worker: helpers.nameOf(w), until: p.until })),
