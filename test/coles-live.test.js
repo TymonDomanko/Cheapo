@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-live-')), 'test.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-live-')), 'test.db');
 process.env.COLES_PAGES_PER_HOUR = '30'; // one paced request every 2 minutes
 process.env.COLES_FULL_EVERY_DAYS = '2';
 process.env.ADMIN_ALERTS = 'false';

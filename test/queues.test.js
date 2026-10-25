@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-q-')), 'q.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-q-')), 'q.db');
 delete process.env.DISABLE_BACKGROUND_SCRAPES;
 process.env.IGA_CONCURRENCY = '3';
 
