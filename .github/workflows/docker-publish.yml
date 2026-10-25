@@ -1,7 +1,5 @@
 # Tests the app, then builds the Docker image and publishes it to GitHub
 # Container Registry as ghcr.io/tymondomanko/cheapo:latest (and :vX.Y.Z for tags).
-# It's also published under the project's old name, supermarket-tools, so
-# installs set up before the rename keep getting updates.
 name: Publish Docker image
 
 on:
@@ -41,9 +39,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ghcr.io/tymondomanko/cheapo
-            ghcr.io/tymondomanko/supermarket-tools
+          images: ghcr.io/tymondomanko/cheapo
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}

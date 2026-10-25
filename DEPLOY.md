@@ -27,7 +27,7 @@ Before using the published image the first time:
 1. **Merge to `main`** (or run the workflow from the Actions tab) so the image gets built.
 2. **Make the package public.** GitHub makes new packages private. On GitHub, go to your profile, then **Packages**, then **cheapo**, then **Package settings**, then **Change visibility** to **Public**. If you'd rather keep it private, run `docker login ghcr.io` on each machine that pulls it.
 
-The project used to be called *supermarket-tools*. The image is still published as `ghcr.io/tymondomanko/supermarket-tools` too, so older installs keep updating. To move one over, change its image to `ghcr.io/tymondomanko/cheapo:latest`; the data stays where it is.
+The project used to be called *supermarket-tools*, and its image `ghcr.io/tymondomanko/supermarket-tools` no longer gets updates. To move an older install over, change its image to `ghcr.io/tymondomanko/cheapo:latest`; the data stays where it is.
 
 You can also skip the registry and build from a checkout: uncomment `build: .` in `docker-compose.yml` and run `docker compose up -d --build`. Pulling won't update it after that, because it runs whatever is checked out.
 
