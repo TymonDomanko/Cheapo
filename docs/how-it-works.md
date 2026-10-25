@@ -11,7 +11,7 @@ None of the supermarkets has a public API. Each scraper reads the same data the 
 | ALDI | api.aldi.com.au | In-store only, so there's no online ordering |
 | IGA | igashop.com.au storefront API | Each IGA has its own prices; only stores someone has picked are collected |
 | Harris Farm | Shopify `/products.json` | NSW, QLD and ACT |
-| Dan Murphy's, BWS | Endeavour Group's website API (`src/scrapers/endeavour.js`) | Liquor; shown only with **Show alcohol** on. Each way of buying (bottle, pack, case) is its own product, sized "24 x 375mL". Beer, wine, spirits, cider and premixes (Dan Murphy's premixes come from a product group, not a department) |
+| Dan Murphy's, BWS | Endeavour Group's website API (`src/scrapers/endeavour.js`) | Liquor; shown only with **Show alcohol** on. Each way of buying (bottle, pack, case) is its own product, sized "24 x 375mL". Beer, wine, spirits, cider and premixes (Dan Murphy's premixes come from a product group, not a department). Dan Murphy's refuses Node's own HTTP client (HTTP 403) but not curl, so it's fetched with the `curl` program, which the Docker image, Windows 10+, macOS and most Linux have; without it, Node's is used |
 | Liquorland | Coles' liquor website API (`src/scrapers/coles-liquor.js`) | Liquor, as above; prices per state (`LIQUOR_STATE`). First Choice and Vintage Cellars now redirect to Liquorland, so it covers them. Coles' own Liquorland department is left out so nothing's listed twice |
 
 Every night (`SCRAPE_CRON`) the server:

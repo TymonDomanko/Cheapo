@@ -6,9 +6,11 @@ const shop = endeavour({
   origin: 'https://www.danmurphys.com.au',
   api: 'https://api.danmurphys.com.au/apis/ui',
   method: 'POST',
-  // Its bot protection refuses API requests carrying the cookies its home page
-  // gives a non-browser (HTTP 403), but answers the same request without them.
+  // Its bot protection refuses (HTTP 403) requests made by Node's own HTTP
+  // client, whatever the headers, but answers the same request from curl
+  // (checked from a home connection). No cookies either: it needs none.
   cookies: false,
+  curl: true,
   departments: [
     ['beer', 'Beer', 'beer'],
     ['red-wine', 'Red Wine', 'red wine'],
