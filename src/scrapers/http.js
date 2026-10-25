@@ -79,24 +79,30 @@ export async function requestJson(client, url, opts) {
   }
 }
 
-/** @param {{softBlockWaits?: number[]}} opts softBlockWaits: how long to wait between tries after a bot check */
-export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits }) {
+/**
+ * @param {{softBlockWaits?: number[], cookies?: boolean}} opts softBlockWaits: how long to wait between
+ * tries after a bot check. cookies: false sends none (and skips the home-page visit), for a shop whose
+ * bot protection refuses requests carrying the cookies it gives a non-browser (Dan Murphy's).
+ */
+export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits, cookies = true }) {
   const client = mode === 'browser'
     ? new BrowserClient(origin, delayMs, extraHeaders)
-    : new FetchClient(origin, delayMs, extraHeaders);
+    : new FetchClient(origin, delayMs, extraHeaders, cookies);
   client.softBlockWaits = softBlockWaits;
   return client;
 }
 
 class FetchClient {
-  constructor(origin, delayMs, extraHeaders) {
+  constructor(origin, delayMs, extraHeaders, keepCookies = true) {
     this.origin = origin;
     this.delayMs = delayMs;
     this.extraHeaders = extraHeaders;
+    this.keepCookies = keepCookies;
     this.cookies = new Map();
   }
 
   async init() {
+    if (!this.keepCookies) return;
     // Visiting the home page first collects the session/bot-manager cookies
     // that the stores' JSON APIs expect.
     try {
@@ -124,6 +130,7 @@ class FetchClient {
   }
 
   storeCookies(res) {
+    if (!this.keepCookies) return;
     const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
     for (const c of list) {
       const [pair] = c.split(';');
