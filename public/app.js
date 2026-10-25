@@ -2733,13 +2733,17 @@ async function loadAdminSettings(justMadeHelper = null) {
   // Per shared shop: keep it with a connection, or with a store (shops that pick one by location).
   const keepWith = (shop) => {
     const groups = sharing.areas[shop] || [];
-    const storeOf = (id) => groups.find((g) => g.workers.some((x) => x.id === id))?.area;
+    const label = (g) => `store ${g.area}${g.name ? ` ${g.name}` : ''}`;
+    const storeOf = (id) => {
+      const g = groups.find((x) => x.workers.some((y) => y.id === id));
+      return g && label(g);
+    };
     const conns = [...(crawled.includes(shop) ? [{ id: 'server', name: 'This server' }] : []), ...helpers.filter((x) => !x.disabled).map((x) => ({ id: `h${x.id}`, name: x.name }))];
     const opt = (value, label) => `<option value="${esc(value)}" ${(kept[shop] || '') === value ? 'selected' : ''}>${esc(label)}</option>`;
     return `<label>${chip(shop)}${envTag('PREFERRED_CONNECTIONS')}<select name="keep" data-shop="${shop}" ${dis('PREFERRED_CONNECTIONS')}>
       ${opt('', 'Any connection')}
-      ${groups.map((g) => opt(`@${g.area}`, `Store ${g.area} (${g.workers.map((x) => x.name).join(', ')})`)).join('')}
-      ${conns.map((c) => opt(c.id, `${c.name}${storeOf(c.id) ? ` — store ${storeOf(c.id)}` : ''}`)).join('')}
+      ${groups.map((g) => opt(`@${g.area}`, `${g.name || `Store ${g.area}`} (${g.workers.map((x) => x.name).join(', ')})`)).join('')}
+      ${conns.map((c) => opt(c.id, `${c.name}${storeOf(c.id) ? ` — ${storeOf(c.id)}` : ''}`)).join('')}
       ${kept[shop]?.startsWith('@') && !groups.some((g) => `@${g.area}` === kept[shop]) ? opt(kept[shop], `Store ${kept[shop].slice(1)} (no connection gets it at the moment)`) : ''}
     </select></label>`;
   };

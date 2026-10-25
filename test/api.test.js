@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-'));
 process.env.DB_PATH = path.join(dir, 'test.db');
 process.env.ADMIN_EMAILS = 'admin@example.com';
 process.env.DISABLE_BACKGROUND_SCRAPES = 'true';
@@ -724,7 +724,7 @@ test('collector as a single program: download with settings appended, and the la
   const get = (p) => fetch(base + p, { headers: { Cookie: cookie } });
 
   // A stand-in "prebuilt" program, as the Docker image would have.
-  const pre = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-exe-'));
+  const pre = fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-exe-'));
   process.env.COLLECTOR_EXE_PREBUILT = pre;
   const fake = Buffer.from('pretend program '.repeat(1000));
   fs.writeFileSync(path.join(pre, programName('linux-x64', true)), zlib.gzipSync(fake));
@@ -740,7 +740,7 @@ test('collector as a single program: download with settings appended, and the la
   const res = await get(`/api/admin/collector/programs/linux-x64?helper=${pc.id}`);
   assert.match(res.headers.get('content-disposition'), /filename="grocery-collector-linux-x64\.tar\.gz"/);
   // Unpack it with the real tar: one executable file.
-  const unpack = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-tar-'));
+  const unpack = fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-tar-'));
   fs.writeFileSync(path.join(unpack, 'c.tar.gz'), Buffer.from(await res.arrayBuffer()));
   const { execFileSync } = await import('node:child_process');
   execFileSync('tar', ['xzf', 'c.tar.gz'], { cwd: unpack });
@@ -756,7 +756,7 @@ test('collector as a single program: download with settings appended, and the la
   assert.ok(config.COLLECTOR_SERVER.startsWith('http'));
 
   // The launcher (run here by plain Node) downloads the code, checks it, caches it and starts the collector.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'smt-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-home-'));
   const child = spawn(process.execPath, [new URL('../src/collector-launcher.cjs', import.meta.url).pathname, 'aldi'], {
     env: {
       ...process.env, GROCERY_COLLECTOR_CHILD: '1', GROCERY_COLLECTOR_HOME: home,

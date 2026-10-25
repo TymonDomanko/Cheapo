@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-share-')), 'test.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-share-')), 'test.db');
 process.env.COLES_PAGES_PER_HOUR = '30';
 process.env.COLES_FULL_EVERY_DAYS = '2';
 process.env.ADMIN_ALERTS = 'false';
@@ -403,10 +403,11 @@ test('a shop kept with a connection, or with the store a shop gives by location'
 
   // Kept with a store: connections report the store Woolworths gives them, and only those given it fetch.
   sharing.noteAreas(sam, { woolworths: '1101' });
-  sharing.noteAreas(alex, { woolworths: '1200' });
+  sharing.noteAreas(alex, { woolworths: { id: '1200', name: 'Eastwood, NSW' } });
   sharing.noteAreas(jo, { woolworths: '1200' });
   sharing.noteAreas(jo, { woolworths: '<script>' }); // nonsense is ignored
   assert.deepEqual(sharing.connectionsByArea().woolworths.map((g) => [g.area, g.workers.map((x) => x.name)]), [['1101', ['Sam’s PC']], ['1200', ['Alex’s laptop', 'Jo’s PC']]]);
+  assert.deepEqual(sharing.connectionsByArea().woolworths.map((g) => g.name), [null, 'Eastwood, NSW'], 'named once any connection has found the name');
   settings.setSetting('PREFERRED_CONNECTIONS', 'woolworths=@1200');
   settings.setSetting('SERVER_SCRAPE_STORES', 'coles,iga');
   assert.equal(sharing.take(alex, ['woolworths']).part.kind, 'index');

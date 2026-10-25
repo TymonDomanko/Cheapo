@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-daily-')), 'test.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-daily-')), 'test.db');
 process.env.COLES_PAGES_PER_HOUR = '30';
 process.env.COLES_FULL_EVERY_DAYS = '1';
 process.env.ADMIN_ALERTS = 'false';

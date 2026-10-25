@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-adopt-')), 'test.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-adopt-')), 'test.db');
 
 const { getDb } = await import('../src/db.js');
 const helpers = await import('../src/helpers.js');

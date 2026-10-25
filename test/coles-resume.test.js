@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'smt-coles-')), 'test.db');
+process.env.DB_PATH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cheapo-coles-')), 'test.db');
 process.env.COLES_DELAY_MS = '0';
 process.env.COLES_BLOCK_WAIT_MS = '0';
 process.env.BLOCKED_RETRY_HOURS = '0';

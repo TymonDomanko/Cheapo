@@ -189,9 +189,9 @@ async function myAreas(canDo) {
   for (const [store, scraper] of Object.entries(SCRAPERS)) {
     if (!scraper.area || (canDo.length && !canDo.includes(store))) continue;
     try {
-      const id = await scraper.area();
-      if (id && id !== areas[store]) console.log(`${store}: this connection gets store ${id}`);
-      if (id) areas[store] = id;
+      const a = await scraper.area();
+      if (a && a.id !== areas[store]?.id) console.log(`${store}: this connection gets store ${a.id}${a.name ? ` (${a.name})` : ''}`);
+      if (a) areas[store] = a;
     } catch (e) {
       console.warn(`${store}: couldn't tell which store this connection gets (${e.message})`);
     }
