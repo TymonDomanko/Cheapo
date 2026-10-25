@@ -31,7 +31,8 @@ const LIQUOR_WORDS = /beer|wine|cider|spirits|vodka|whisk|\bgin\b|\brum\b|bourbo
 
 /**
  * A liquor chain on the Endeavour platform.
- * @param {{store: string, origin: string, api: string, departments: {key: string, name: string, department?: string, subDepartment?: string, group?: string}[], method: 'GET'|'POST', productUrl: (p) => string}} cfg
+ * @param {{store: string, origin: string, api: string, departments: {key: string, name: string, department?: string, subDepartment?: string, group?: string}[], method: 'GET'|'POST', productUrl: (p) => string, cookies?: boolean}} cfg
+ *   cookies: false asks without any (see createClient).
  */
 export function endeavour(cfg) {
   const delayMs = () => Number(process.env[`${cfg.store.toUpperCase()}_DELAY_MS`] ?? 800);
@@ -65,7 +66,7 @@ export function endeavour(cfg) {
   async function* scrape({ log = console.log, maxPagesPerCategory = Infinity, onlyCategories, categories } = {}) {
     let cats = categories || await departments();
     if (onlyCategories?.length) cats = cats.filter((c) => onlyCategories.includes(c.key));
-    const client = createClient({ origin: cfg.origin, delayMs: delayMs() });
+    const client = createClient({ origin: cfg.origin, delayMs: delayMs(), cookies: cfg.cookies !== false });
     await client.init();
     try {
       for (const dept of cats) {
