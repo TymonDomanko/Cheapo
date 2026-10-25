@@ -80,25 +80,70 @@ export async function requestJson(client, url, opts) {
 }
 
 /**
- * @param {{softBlockWaits?: number[], cookies?: boolean}} opts softBlockWaits: how long to wait between
- * tries after a bot check. cookies: false sends none (and skips the home-page visit), for a shop whose
- * bot protection refuses requests carrying the cookies it gives a non-browser (Dan Murphy's).
+ * @param {{softBlockWaits?: number[], cookies?: boolean, curl?: boolean}} opts softBlockWaits: how long
+ * to wait between tries after a bot check. cookies: false sends none (and skips the home-page visit).
+ * curl: true makes the requests with the curl program instead of Node's own, for a shop whose bot
+ * protection refuses Node's (Dan Murphy's); without curl installed, Node's is used.
  */
-export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits, cookies = true }) {
+export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits, cookies = true, curl = false }) {
   const client = mode === 'browser'
     ? new BrowserClient(origin, delayMs, extraHeaders)
-    : new FetchClient(origin, delayMs, extraHeaders, cookies);
+    : new FetchClient(origin, delayMs, extraHeaders, cookies, curl);
   client.softBlockWaits = softBlockWaits;
   return client;
 }
 
+let curlMissing = false;
+
+/** One request with the curl program, answered like fetch's (status, text; no cookies). */
+async function curlFetch(url, { method, headers, body }) {
+  const { spawn } = await import('node:child_process');
+  const args = ['-sS', '--compressed', '--max-time', '60', '-X', method, '-w', '\n%{http_code}', '-o', '-'];
+  for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
+  if (body != null) args.push('--data-binary', '@-');
+  args.push(url);
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.platform === 'win32' ? 'curl.exe' : 'curl', args, { windowsHide: true });
+    const out = [];
+    const err = [];
+    child.stdout.on('data', (d) => out.push(d));
+    child.stderr.on('data', (d) => err.push(d));
+    child.on('error', reject); // ENOENT: no curl
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`curl: ${Buffer.concat(err).toString().trim() || `exit ${code}`}`));
+      const all = Buffer.concat(out).toString();
+      const cut = all.lastIndexOf('\n');
+      const status = Number(all.slice(cut + 1));
+      const text = all.slice(0, cut);
+      resolve({ ok: status >= 200 && status < 300, status, text: async () => text, headers: { getSetCookie: () => [] } });
+    });
+    if (body != null) child.stdin.end(body);
+    else child.stdin.end();
+  });
+}
+
 class FetchClient {
-  constructor(origin, delayMs, extraHeaders, keepCookies = true) {
+  constructor(origin, delayMs, extraHeaders, keepCookies = true, useCurl = false) {
     this.origin = origin;
     this.delayMs = delayMs;
     this.extraHeaders = extraHeaders;
     this.keepCookies = keepCookies;
+    this.useCurl = useCurl;
     this.cookies = new Map();
+  }
+
+  /** fetch, or curl when this client uses it (and it's installed). */
+  async send(url, opts) {
+    if (this.useCurl && !curlMissing) {
+      try {
+        return await curlFetch(url, opts);
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+        curlMissing = true;
+        console.warn('curl isn’t installed, so this shop is fetched the usual way (it may refuse that)');
+      }
+    }
+    return fetch(url, { ...opts, redirect: 'follow', dispatcher });
   }
 
   async init() {
@@ -144,7 +189,7 @@ class FetchClient {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (attempt) await sleep(1000 * 2 ** attempt);
       try {
-        const res = await fetch(url, {
+        const res = await this.send(url, {
           method,
           headers: {
             'User-Agent': UA,
@@ -158,8 +203,6 @@ class FetchClient {
             ...headers,
           },
           body: body ? JSON.stringify(body) : undefined,
-          redirect: 'follow',
-          dispatcher,
         });
         this.storeCookies(res);
         const text = await res.text();

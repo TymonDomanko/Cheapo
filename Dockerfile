@@ -22,16 +22,17 @@ ENV NODE_ENV=production \
     PORT=3000
 
 # Build tools only in case better-sqlite3 has no prebuilt binary for this platform.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+# curl: Dan Murphy's refuses Node's own HTTP client (src/scrapers/danmurphys.js).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Litestream: optional continuous backup to S3-compatible storage (enabled by LITESTREAM_BUCKET).
+# (curl, installed above, stays: see there.)
 ARG LITESTREAM_VERSION=0.3.13
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-    && curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz" \
+RUN curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz" \
        | tar -xz -C /usr/local/bin litestream \
-    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
 # Playwright (trolley filling / browser scraping) is optional and not useful on a server.
