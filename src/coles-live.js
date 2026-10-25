@@ -161,6 +161,9 @@ function capWait(w) {
 }
 const leaseFree = (st, holder, touchedAt) => !holder || (holder !== SERVER && overdue(holder)) || clock() - Date.parse(touchedAt || 0) > LEASE_MAX_MS;
 
+/** Every connection fetches the same Coles store's prices (Admin → Prices for). */
+const withStore = (job) => (getSetting('COLES_STORE_ID') ? { ...job, store: getSetting('COLES_STORE_ID') } : job);
+
 const queries = []; // searches waiting: { q }
 const queried = new Map(); // search → when it was last fetched
 
@@ -250,7 +253,7 @@ function nextFor(w) {
   save(st);
   if (!job) return { wait: Math.min(gap, 15 * 60 * 1000) };
   lastAt.set(w, clock());
-  return { job };
+  return { job: withStore(job) };
 }
 
 /** Save what worker `w` fetched for `job`. */
@@ -334,7 +337,7 @@ function blocked(w, job, message, requests) {
   if (!ws.blockReported) {
     ws.blockReported = true;
     const who = w === SERVER ? '' : ` (${helpers.nameOf(w)})`;
-    const { runId } = startRun('coles');
+    const { runId } = startRun('coles', { source: w === SERVER ? 'server' : 'collector' });
     getDb().prepare('UPDATE scrape_runs SET worker = ? WHERE id = ?').run(w, runId);
     finishRun(getRun(runId), { error: `${message}${who}. Trying again ${ws.backoffHours === 2 ? 'in 2 hours' : `in ${ws.backoffHours} hours`}, carrying on where it stopped.` });
   }
@@ -407,7 +410,7 @@ async function work() {
       const { q } = queries.shift();
       queried.set(q, clock());
       lastAt.set(SERVER, clock());
-      job = { kind: 'search', q };
+      job = withStore({ kind: 'search', q });
     } else {
       job = nextFor(SERVER).job;
       if (!job) return;

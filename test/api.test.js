@@ -521,6 +521,22 @@ test('admin settings: which stores the server crawls', async () => {
   assert.equal(serverStores().length, 5);
 });
 
+test('admin settings: the area prices are for', async () => {
+  const admin = client();
+  await admin('POST', '/api/auth/login', { email: 'admin@example.com', password: 'password123' });
+  let r = await admin('PUT', '/api/admin/settings', { COLES_STORE_ID: 'https://www.coles.com.au/find-stores/coles/nsw/bondi-junction-0381', LIQUOR_STATE: 'nsw', PRICE_AREA: 'Bondi Junction, NSW' });
+  assert.equal(r.status, 200);
+  const { getSetting } = await import('../src/settings.js');
+  assert.equal(getSetting('COLES_STORE_ID'), '0381', 'the store number, from its page on coles.com.au');
+  assert.equal((await client()('GET', '/api/config')).body.site.priceArea, 'Bondi Junction, NSW', 'shoppers are told');
+  const { priceArea } = await import('../src/scrapers/index.js');
+  assert.deepEqual(priceArea('coles'), { storeId: '0381' });
+  assert.deepEqual(priceArea('liquorland'), { state: 'nsw' });
+  assert.equal((await admin('PUT', '/api/admin/settings', { LIQUOR_STATE: 'mars' })).status, 400);
+  await admin('PUT', '/api/admin/settings', { COLES_STORE_ID: '', PRICE_AREA: '' });
+  assert.equal((await client()('GET', '/api/config')).body.site.priceArea, null);
+});
+
 test('collector download for a helper, version check and self-update bundle', async () => {
   const zlib = await import('node:zlib');
   const fs = await import('node:fs');

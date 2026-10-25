@@ -27,6 +27,18 @@ export function startRun(storeName, { location = null, source = 'server' } = {})
   return { runId, startedAt };
 }
 
+/**
+ * At start-up: refreshes this server was running when it stopped (or crashed)
+ * can't still be going, so they're closed as failed. Shared refreshes still in
+ * progress (`keep`) and helpers' recent runs carry on.
+ */
+export function closeInterruptedRuns(keep = []) {
+  const recent = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+  return getDb().prepare(`UPDATE scrape_runs SET status = 'error', finished_at = ?, error = 'Interrupted: the server stopped while it was running'
+    WHERE status = 'running' AND id NOT IN (SELECT value FROM json_each(?))
+      AND NOT (source = 'collector' AND started_at > ?)`).run(nowIso(), JSON.stringify(keep), recent).changes;
+}
+
 export function getRun(runId) {
   return getDb().prepare('SELECT * FROM scrape_runs WHERE id = ?').get(runId);
 }
@@ -66,6 +78,13 @@ export function finishRun(run, { complete, error = null, seenSince = null }) {
   return done;
 }
 
+/** Where a shop's prices are collected for (Admin → Prices for), as scrape options. */
+export function priceArea(store) {
+  if (store === 'coles') return { storeId: getSetting('COLES_STORE_ID') || null };
+  if (store === 'liquorland') return { state: getSetting('LIQUOR_STATE') || null };
+  return {};
+}
+
 /**
  * Crawl one store and write everything to the database.
  * Stores are independent, so callers can run several of these in parallel.
@@ -95,7 +114,7 @@ export async function scrapeStore(storeName, opts = {}) {
   const progress = crawlProgress(storeName);
   const result = {};
   try {
-    for await (const batch of scraper.scrape({ ...opts, log, progress, result, startedAt })) {
+    for await (const batch of scraper.scrape({ ...opts, ...priceArea(storeName), log, progress, result, startedAt })) {
       const r = recordBatch(run, batch);
       products += r.upserted;
       priceChanges += r.priceChanges;

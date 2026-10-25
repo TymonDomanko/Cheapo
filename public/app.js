@@ -51,6 +51,11 @@ async function loadConfig() {
     /* storage blocked */
   }
   state.allStores = shopsShown(!!state.config.user?.showAlcohol).map((s) => s.id);
+  // Where the prices are for (Admin → Prices for), on every page.
+  const area = state.config.site?.priceArea;
+  $('#footer-prices').textContent = area
+    ? `Prices are for ${area}, from the supermarkets’ own websites. Your local shop’s can differ, especially fruit and veg.`
+    : 'Prices come from the supermarkets’ own websites and can differ in store.';
   const pref = state.config.user?.preferredStores;
   state.stores = pref?.length ? state.allStores.filter((s) => pref.includes(s)) : state.allStores;
   state.names = Object.fromEntries(state.config.stores.map((s) => [s.id, s.name]));
@@ -2086,12 +2091,18 @@ function totalBar(L) {
 
 function renderSummary(L) {
   const stores = state.allStores.filter((s) => L.plan.byStore[s]?.items.length);
+  const priced = L.items.filter((it) => it.note == null).length;
   const singles = state.allStores.map((s) => {
     const x = L.singleStore[s];
     const diff = x.total - L.plan.total;
+    // A shop with none of the items has no total to compare ($0.00 would read as free).
+    if (x.missing && x.missing >= priced) {
+      return `<div class="tile"><div class="label">Everything at ${chip(s)}</div><div class="value muted">—</div>
+        <div class="note"><span class="warn">Doesn’t have ${priced === 1 ? 'it' : 'any of these'}</span></div></div>`;
+    }
     return `<div class="tile"><div class="label">Everything at ${chip(s)}</div>
       <div class="value">${money(x.total)}</div>
-      <div class="note">${x.missing ? `<span class="warn">${plural(x.missing, 'item')} not available</span>` : diff > 0.004 ? `Your split saves <span class="saving">${money(diff)}</span>` : 'Same as your split'}</div></div>`;
+      <div class="note">${x.missing ? `<span class="warn">for ${priced - x.missing} of ${plural(priced, 'item')}; ${x.missing} not available</span>` : diff > 0.004 ? `Your split saves <span class="saving">${money(diff)}</span>` : 'Same as your split'}</div></div>`;
   });
   return `<h2 class="section">Total</h2>
     <div class="totals">
@@ -2571,8 +2582,8 @@ function sharedNote(x) {
   const what = x.of == null ? 'reading its departments' : x.finished ? `all ${x.of} parts done` : `${x.done} of ${x.of} parts done`;
   const doing = x.doing.map((d) => `<li>${esc(d.worker)}: ${esc(d.part)}</li>`).join('');
   return `<br><span class="hint">Shared refresh (started ${fmtDate(x.startedAt)}): ${what}</span>${doing ? `<ul class="worker-list hint">${doing}</ul>` : ''}`
-    + (x.barred.length ? `<br><span class="warn">Blocked today: ${x.barred.map(esc).join(', ')}</span>` : '')
-    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed and waiting for another connection: ${x.stuck.map(esc).join(', ')}</span>` : '');
+    + (x.paused.length ? `<br><span class="warn">Paused after a bot check: ${x.paused.map((p) => `${esc(p.worker)}${p.until ? ` (until ${timeOf(p.until)})` : ' (today)'}`).join(', ')}</span>` : '')
+    + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed, waiting for another connection:</span><ul class="worker-list hint">${x.stuck.map((f) => `<li>${esc(f.part)}${f.why ? ` — ${esc(f.by || '')}: <span class="warn">${esc(f.why)}</span>` : ''}</li>`).join('')}</ul>` : '');
 }
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
@@ -2658,7 +2669,7 @@ function helperStatus(x, latest) {
   const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
   if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
   for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
-  for (const s of x.blockedBy || []) parts.push(`<span class="warn">blocked by ${esc(storeName(s))} today</span>`);
+  for (const b of x.blockedBy || []) parts.push(`<span class="warn">paused for ${esc(storeName(b.store))}${b.until ? ` until ${timeOf(b.until)}` : ' today'} (bot check)</span>`);
   if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
   else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);
   return parts.join(' · ');
@@ -2711,13 +2722,27 @@ function helpersCard(list, programs, justMade, canEmail, siteCap) {
 const HELPER_NEW_KEY = 'Downloading makes this helper a new key. A copy they already have stops working until they run this one. Carry on?';
 
 async function loadAdminSettings(justMadeHelper = null) {
-  const [{ settings: st, stores, currentAddress, litestream, collector }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
+  const [{ settings: st, stores, currentAddress, litestream, collector, sharing }, { helpers }] = await Promise.all([api('/api/admin/settings'), api('/api/admin/helpers')]);
   const canEmail = st.SMTP_URL.set;
   const locked = (key) => st[key].source === 'env';
   const envTag = (key) => (locked(key) ? ' <span class="env-tag" title="Set in the server’s .env file — change it there">set in .env</span>' : '');
   const dis = (key) => (locked(key) ? 'disabled' : '');
   const smtp = st.SMTP_URL.parts || { host: '', port: 465, secure: true, user: '', passwordSet: false };
   const crawled = (st.SERVER_SCRAPE_STORES.value || stores.join(',')).split(',');
+  const kept = Object.fromEntries(String(st.PREFERRED_CONNECTIONS.value || '').split(',').filter(Boolean).map((p) => p.split('=')));
+  // Per shared shop: keep it with a connection, or with a store (shops that pick one by location).
+  const keepWith = (shop) => {
+    const groups = sharing.areas[shop] || [];
+    const storeOf = (id) => groups.find((g) => g.workers.some((x) => x.id === id))?.area;
+    const conns = [...(crawled.includes(shop) ? [{ id: 'server', name: 'This server' }] : []), ...helpers.filter((x) => !x.disabled).map((x) => ({ id: `h${x.id}`, name: x.name }))];
+    const opt = (value, label) => `<option value="${esc(value)}" ${(kept[shop] || '') === value ? 'selected' : ''}>${esc(label)}</option>`;
+    return `<label>${chip(shop)}${envTag('PREFERRED_CONNECTIONS')}<select name="keep" data-shop="${shop}" ${dis('PREFERRED_CONNECTIONS')}>
+      ${opt('', 'Any connection')}
+      ${groups.map((g) => opt(`@${g.area}`, `Store ${g.area} (${g.workers.map((x) => x.name).join(', ')})`)).join('')}
+      ${conns.map((c) => opt(c.id, `${c.name}${storeOf(c.id) ? ` — store ${storeOf(c.id)}` : ''}`)).join('')}
+      ${kept[shop]?.startsWith('@') && !groups.some((g) => `@${g.area}` === kept[shop]) ? opt(kept[shop], `Store ${kept[shop].slice(1)} (no connection gets it at the moment)`) : ''}
+    </select></label>`;
+  };
   $('#admin-settings').innerHTML = `
     <div class="settings-grid">
       <form id="email-settings" class="card stack">
@@ -2753,6 +2778,20 @@ async function loadAdminSettings(justMadeHelper = null) {
         <button class="primary" type="submit">Save</button>
       </form>
 
+      <form id="prices-for" class="card stack">
+        <h3>Prices for</h3>
+        <p class="hint">Fruit and veg, and some specials, cost different amounts in different areas. Choose the area whose prices to collect; this server and every helper use the same one.</p>
+        <label>Area, as shoppers see it${envTag('PRICE_AREA')}<input name="PRICE_AREA" maxlength="60" placeholder="e.g. Bondi Junction, NSW" value="${esc(st.PRICE_AREA.value || '')}" ${dis('PRICE_AREA')}></label>
+        <p class="hint">Shown at the bottom of every page: “Prices are for …”.</p>
+        <label>Coles store${envTag('COLES_STORE_ID')}<input name="COLES_STORE_ID" placeholder="Store number, or its page on coles.com.au" value="${esc(st.COLES_STORE_ID.value || '')}" ${dis('COLES_STORE_ID')}></label>
+        <p class="hint">Find your store at <a href="https://www.coles.com.au/find-stores" target="_blank" rel="noopener">coles.com.au/find-stores</a> and paste its page (it ends in the store number, e.g. …/bondi-junction-0381). ${st.COLES_STORE_ID.value ? `Using store ${esc(st.COLES_STORE_ID.value)}.` : '<strong>Not set:</strong> Coles’ default store is in Melbourne.'} Takes effect from the next Coles page fetched.</p>
+        <label>Liquorland state${envTag('LIQUOR_STATE')}<select name="LIQUOR_STATE" ${dis('LIQUOR_STATE')}>
+          ${['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'].map((x) => `<option value="${x}" ${(st.LIQUOR_STATE.value || 'nsw') === x ? 'selected' : ''}>${x.toUpperCase()}</option>`).join('')}</select></label>
+        <p class="hint"><strong>Woolworths</strong> only lets a logged-in shopper choose a store, so it picks one from where each connection is. Choose which store’s prices to use under <em>Sharing the work → Keep a shop’s refresh with</em>. IGA is per store (shoppers pick theirs); ALDI and Harris Farm have one price.</p>
+        <p class="warn" data-form-error hidden></p>
+        ${['PRICE_AREA', 'COLES_STORE_ID', 'LIQUOR_STATE'].every(locked) ? '' : '<button class="primary" type="submit">Save</button>'}
+      </form>
+
       <form id="collector-settings" class="card stack">
         <h3>Sharing the work</h3>
         <p class="hint">This server and your helpers (below) share the refreshing: each shop’s departments are handed out, and so are Coles’ pages.</p>
@@ -2765,8 +2804,12 @@ async function loadAdminSettings(justMadeHelper = null) {
           <p class="hint">Untick a shop to leave it to the helpers. If this server is blocked by a shop it does crawl, a helper covers it.</p>
           ${stores.map((x) => `<label class="check"><input type="checkbox" name="crawl" value="${x}" ${crawled.includes(x) ? 'checked' : ''} ${dis('SERVER_SCRAPE_STORES')}> ${chip(x)}</label>`).join('')}
         </fieldset>
+        <fieldset class="stack"><legend>Keep a shop’s refresh with</legend>
+          <p class="hint">Woolworths can’t be told which store to use without a login, so it picks one from where each connection is (each connection checks which, every few hours). Choose a store here and only connections given that store fetch Woolworths, so its prices are that store’s. Or keep a shop with one connection. If none of them can (blocked, failed or offline for 10 minutes), the others step in.</p>
+          ${sharing.shops.map(keepWith).join('')}
+        </fieldset>
         <p class="warn" data-form-error hidden></p>
-        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') ? '' : '<button class="primary" type="submit">Save</button>'}
+        ${locked('SERVER_SCRAPE_STORES') && locked('COLES_PAGES_PER_HOUR') && locked('COLES_MAX_PER_CONNECTION') && locked('PREFERRED_CONNECTIONS') ? '' : '<button class="primary" type="submit">Save</button>'}
       </form>
 
       ${helpersCard(helpers, collector.programs, justMadeHelper, canEmail, st.COLES_MAX_PER_CONNECTION.value ?? 40)}
@@ -2805,7 +2848,7 @@ $('#admin-root').addEventListener('submit', async (e) => {
     }
     return;
   }
-  if (!['email-settings', 'site-details', 'collector-settings'].includes(f.id)) return;
+  if (!['email-settings', 'site-details', 'prices-for', 'collector-settings'].includes(f.id)) return;
   e.preventDefault();
   const v = (name) => f.elements[name];
   let body = {};
@@ -2818,12 +2861,16 @@ $('#admin-root').addEventListener('submit', async (e) => {
     for (const k of ['MAIL_FROM', 'SITE_URL']) if (!v(k).disabled) body[k] = v(k).value;
   } else if (f.id === 'site-details') {
     for (const k of ['CONTACT_EMAIL', 'SITE_OPERATOR']) if (!v(k).disabled) body[k] = v(k).value;
+  } else if (f.id === 'prices-for') {
+    for (const k of ['PRICE_AREA', 'COLES_STORE_ID', 'LIQUOR_STATE']) if (!v(k).disabled) body[k] = v(k).value;
   } else {
     if (!f.querySelector('[name=crawl]').disabled) {
       body.SERVER_SCRAPE_STORES = [...f.querySelectorAll('[name=crawl]:checked')].map((c) => c.value);
       if (!body.SERVER_SCRAPE_STORES.length) return formError(f, new Error('Leave at least one store for this server'));
     }
     for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) if (!v(k).disabled) body[k] = v(k).value;
+    const keep = [...f.querySelectorAll('[name=keep]')];
+    if (keep.length && !keep[0].disabled) body.PREFERRED_CONNECTIONS = Object.fromEntries(keep.map((s) => [s.dataset.shop, s.value]));
   }
   try {
     await api('/api/admin/settings', { method: 'PUT', body });
@@ -3050,7 +3097,8 @@ try {
 api('/api/stats').then((s) => {
   $('#demo-banner').hidden = !s.demo;
   const latest = s.stores.map((x) => x.updatedAt).filter(Boolean).sort().pop();
-  $('#updated-hint').textContent = latest ? `Prices last updated ${fmtDate(latest)}.` : '';
+  const area = state.config?.site?.priceArea;
+  $('#updated-hint').textContent = [latest ? `Prices last updated ${fmtDate(latest)}.` : '', area ? `Prices are for ${area}.` : ''].filter(Boolean).join(' ');
 }).catch(() => {});
 if (user()) refreshListCount().catch(() => {});
 await route();

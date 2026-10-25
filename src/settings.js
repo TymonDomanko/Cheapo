@@ -54,6 +54,31 @@ const SETTINGS = {
       return v;
     },
   },
+  // Prices for: which Coles store's prices to collect (fruit and veg, and some
+  // specials, differ by area). A number, or the store's page on coles.com.au
+  // (…/find-stores/coles/nsw/bondi-junction-0381). Unset: Coles' default (Melbourne).
+  COLES_STORE_ID: {
+    check(v) {
+      const id = String(v).trim().match(/(\d{3,5})\/?(?:[?#].*)?$/)?.[1];
+      if (!id) throw httpError(400, 'Enter the Coles store’s number, or paste its page from coles.com.au/find-stores');
+      return id;
+    },
+  },
+  // The state whose Liquorland prices are collected.
+  LIQUOR_STATE: {
+    check(v) {
+      const s = String(v).trim().toLowerCase();
+      if (!['nsw', 'vic', 'qld', 'wa', 'sa', 'tas', 'act', 'nt'].includes(s)) throw httpError(400, 'Choose a state: NSW, VIC, QLD, WA, SA, TAS, ACT or NT');
+      return s;
+    },
+  },
+  // Shown to shoppers: where the prices are for, e.g. "Bondi Junction, NSW".
+  PRICE_AREA: {
+    check(v) {
+      if (v.length > 60) throw httpError(400, 'Keep the area under 60 characters');
+      return v;
+    },
+  },
   // Coles pages an hour, this server and every helper together.
   COLES_PAGES_PER_HOUR: {
     check(v) {
@@ -68,6 +93,19 @@ const SETTINGS = {
       const n = Number(v);
       if (!Number.isInteger(n) || n < 1 || n > 600) throw httpError(400, 'Coles pages an hour per connection should be a whole number from 1 to 600');
       return String(n);
+    },
+  },
+  // What to keep a shop's refresh with ("woolworths=h3,aldi=server", or
+  // "woolworths=@1200": whichever connections Woolworths gives store 1200), so
+  // its prices come from one place. Others step in only for what it can't do.
+  PREFERRED_CONNECTIONS: {
+    check(v) {
+      const pairs = String(v).split(',').map((s) => s.trim()).filter(Boolean).map((p) => p.split('=').map((s) => s.trim()));
+      for (const [store, w] of pairs) {
+        if (!STORES.includes(store)) throw httpError(400, `Unknown store: ${store}`);
+        if (!/^(server|h\d+|@[\w-]{1,20})$/.test(w || '')) throw httpError(400, `Choose a connection or a store for ${store}`);
+      }
+      return pairs.map((p) => p.join('=')).join(',');
     },
   },
   SERVER_SCRAPE_STORES: {

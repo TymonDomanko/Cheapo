@@ -95,3 +95,16 @@ test('every liquor product counts as alcohol, even when the shop calls it "RTD",
   assert.deepEqual([premix[0].category, spirit[0].category, bubbles.category, red.category], ['Premix Drinks', 'Spirits', 'Wine', 'Red Wine']);
   for (const p of [premix[0], spirit[0], bubbles, red]) assert.ok(isAlcohol(p), p.name);
 });
+
+test('BWS products are available when they have a price, whatever the default store has in stock', () => {
+  const [p] = bws.mapBundle({ Products: [{ Stockcode: 907464, Price: 10, WasPrice: 10, BrandName: 'Boatshed Bay', IsAvailable: false, AdditionalDetails: d({ producttitle: 'Sauvignon Blanc 750mL', productunitquantity: '1' }) }] }, 'Wine');
+  assert.equal(p.available, true);
+});
+
+test('wine and spirit types count as alcohol under the shops’ own names, and groceries don’t', async () => {
+  const { isAlcohol } = await import('../src/aisles.js');
+  const drinks = ['Cabernet Blends', 'Brandy & Cognac', 'Moscato', 'Red Blends', 'Cask Whites', 'Dessert White', 'Sweet Reds', 'Other Red Varietals', 'Sake', 'Tequila', 'RTD', 'Riesling', 'Liqour', 'Orange Muscat'];
+  const groceries = ['Flavoured Milk', 'Dessert', 'Red Onions', 'White Bread', 'Sports Drinks', 'Multipacks', 'Port Fairy Biscuits', 'Sweet Biscuits', 'Muscatel Raisins', 'Oils and Vinegar'];
+  assert.deepEqual(drinks.filter((category) => !isAlcohol({ category })), [], 'counted as alcohol');
+  assert.deepEqual(groceries.filter((category) => isAlcohol({ category })), [], 'not alcohol');
+});

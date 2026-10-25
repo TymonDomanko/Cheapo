@@ -34,7 +34,11 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | Variable | Default | What it does |
 |---|---|---|
 | `SCRAPE_CRON` | `15 4 * * *` | When prices refresh, in `TZ`. Empty turns the schedule off |
-| `LIQUOR_STATE` | `nsw` | The state whose Liquorland prices are collected (`nsw`, `vic`, `qld`, `wa`, `sa`, `tas`, `act`, `nt`) |
+| `PRICE_AREA` | — | Where the prices are for, in words (e.g. `Bondi Junction, NSW`). Shown to shoppers at the bottom of every page. **Admin page** |
+| `COLES_STORE_ID` | Coles' default (store 7674, Melbourne) | The Coles store whose prices are collected, by this server and every helper. The number, or the store's page on coles.com.au (`…/find-stores/coles/nsw/bondi-junction-0381`). **Admin page** |
+| `LIQUOR_STATE` | `nsw` | The state whose Liquorland prices are collected (`nsw`, `vic`, `qld`, `wa`, `sa`, `tas`, `act`, `nt`). **Admin page** |
+| `PREFERRED_CONNECTIONS` | — | What to keep a shop's refresh with, e.g. `woolworths=@1200` (whichever connections Woolworths gives store 1200) or `aldi=h3` (helper 3) or `bws=server`. Others step in only if those are blocked, fail a part or are offline for 10 minutes. **Admin page** (Sharing the work → Keep a shop's refresh with), which lists the store each connection is given |
+| `ONE_CONNECTION_SHOPS` | `woolworths` | Shops that pick prices from where the connection is, so each refresh of them stays on one connection (this server if it crawls them, otherwise the first helper to start), and only moves on if that connection fails or goes quiet |
 | `IGA_STORE_ID` | `32600` | The IGA shown to visitors who haven't picked one |
 | `IGA_MAX_STORES` | no limit | Cap on how many IGA stores' prices are collected. Each adds about 2 minutes to the refresh and about 2 MB |
 | `BLOCKED_RETRY_HOURS` | `4` | When a shop blocks a crawl part-way (Coles), try again this much later, carrying on where it stopped (up to 4 times). `0` waits for the next scheduled refresh |
@@ -42,6 +46,7 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | `COLES_MAX_PER_CONNECTION` | `40` | The most Coles pages an hour any one connection fetches, this server included. A helper can be set lower on the Admin page. The total stays within `COLES_PAGES_PER_HOUR`; what a capped connection can't use goes to the others. **Admin page** |
 | `COLES_FULL_EVERY_DAYS` | `2` | Steady mode: how often to go through the whole Coles shop, counted from when the last pass started (specials are done daily). For every Coles price within a day, set this to `1` and `COLES_PAGES_PER_HOUR` to `40` |
 | `COLES_BARCODE_BUDGET` | `300` | Nightly mode only: Coles product pages fetched per day to fill in barcodes (steady mode fits them into spare time) |
+| `BLOCKED_PAUSE_MINUTES` | `60` | When a shop blocks a connection part-way through a shared refresh, how long that connection leaves the shop alone (doubling each time, up to 8 hours). It does other shops meanwhile |
 | `WOOLWORTHS_CONCURRENCY` | `2` | Woolworths departments fetched at once, each in its own session. When the refresh is shared with collectors, this is for all of them together |
 | `ALDI_CONCURRENCY`, `HARRISFARM_CONCURRENCY`, `DANMURPHYS_CONCURRENCY`, `BWS_CONCURRENCY`, `LIQUORLAND_CONCURRENCY` | `1` | Shared refreshes: parts of that shop fetched at once, by all connections together |
 | `IGA_CONCURRENCY` | `3` | IGA stores fetched at once |

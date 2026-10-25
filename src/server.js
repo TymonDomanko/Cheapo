@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { getDb } from './db.js';
 import { createApp } from './app.js';
-import { scrapeAll, scrapeStatus, serverStores } from './scrapers/index.js';
+import { scrapeAll, scrapeStatus, serverStores, closeInterruptedRuns } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
 import { backfillColesBarcodes } from './barcodes.js';
@@ -19,6 +19,8 @@ const SCRAPE_CRON = process.env.SCRAPE_CRON ?? '15 4 * * *'; // daily at 04:15 s
 
 getDb();
 adoptSiteToken(); // the old single collector token becomes a helper
+const interrupted = closeInterruptedRuns(sharing.activeRunIds());
+if (interrupted) console.log(`Closed ${interrupted} refresh${interrupted === 1 ? '' : 'es'} interrupted when the server last stopped`);
 ensureDefaultTracked();
 if (checkIsDue() && !process.env.DISABLE_BACKGROUND_SCRAPES) {
   // Haven't checked which IGAs have online prices today (first start, or the server was off).

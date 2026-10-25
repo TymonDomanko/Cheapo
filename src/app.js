@@ -163,6 +163,7 @@ export function createApp() {
       contact: getSetting('CONTACT_EMAIL'),
       operator: getSetting('SITE_OPERATOR'),
       emailEnabled: mailConfigured(),
+      priceArea: getSetting('PRICE_AREA'), // where the prices are for, shown to shoppers
     },
     };
   }));
@@ -546,6 +547,7 @@ export function createApp() {
   // A part of a shop's daily refresh to fetch, out of the shops the collector can do (src/sharing.js).
   app.post('/api/collector/parts/next', requireCollector, h((req) => {
     const canDo = Array.isArray(req.body?.stores) ? req.body.stores.filter((x) => STORES.includes(x)) : [];
+    sharing.noteAreas(req.worker.id, req.body?.areas); // which store each location-priced shop gives it
     const job = sharing.take(req.worker.id, canDo);
     return job ? { ...job, wait: 0 } : { wait: 300 };
   }));
@@ -620,6 +622,7 @@ export function createApp() {
     currentAddress: `${req.protocol}://${req.get('host')}`,
     litestream: backup.litestreamInfo(),
     collector: { latest: collectorBundle.latestCollectorVersion(), programs: collectorExe.exeStatuses() },
+    sharing: { shops: sharing.SHARED, areas: sharing.connectionsByArea() },
   })));
 
   app.put('/api/admin/settings', requireAdmin, h((req) => {
@@ -627,11 +630,16 @@ export function createApp() {
     // Apply everything or nothing: check each value first.
     const updates = [];
     if (body.smtp !== undefined) updates.push(['SMTP_URL', body.smtp === null ? null : settings.smtpUrlFrom(body.smtp)]);
-    for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR']) {
+    for (const key of ['MAIL_FROM', 'SITE_URL', 'CONTACT_EMAIL', 'SITE_OPERATOR', 'COLES_STORE_ID', 'LIQUOR_STATE', 'PRICE_AREA']) {
       if (body[key] !== undefined) updates.push([key, body[key]]);
     }
     for (const k of ['COLES_PAGES_PER_HOUR', 'COLES_MAX_PER_CONNECTION']) {
       if (body[k] !== undefined) updates.push([k, body[k] === '' || body[k] === null ? null : String(body[k])]);
+    }
+    if (body.PREFERRED_CONNECTIONS !== undefined) {
+      const map = body.PREFERRED_CONNECTIONS && typeof body.PREFERRED_CONNECTIONS === 'object' ? body.PREFERRED_CONNECTIONS : {};
+      const list = Object.entries(map).filter(([, w]) => w).map(([store, w]) => `${store}=${w}`);
+      updates.push(['PREFERRED_CONNECTIONS', list.length ? list.join(',') : null]);
     }
     if (body.SERVER_SCRAPE_STORES !== undefined) {
       const list = Array.isArray(body.SERVER_SCRAPE_STORES) ? body.SERVER_SCRAPE_STORES : null;
@@ -743,7 +751,7 @@ export function createApp() {
         ...x,
         upToDate: x.version === latest,
         shops: shared.flatMap(([store, s]) => s.doing.filter((d) => d.id === x.worker).map((d) => ({ store, part: d.part }))),
-        blockedBy: shared.filter(([, s]) => s.barred.includes(x.name)).map(([store]) => store),
+        blockedBy: shared.flatMap(([store, s]) => s.paused.filter((p) => p.id === x.worker).map((p) => ({ store, until: p.until }))),
         coles: coles.workers?.find((w) => w.id === x.worker) || null,
       })),
     };
