@@ -744,7 +744,7 @@ export function createApp() {
         ...x,
         upToDate: x.version === latest,
         shops: shared.flatMap(([store, s]) => s.doing.filter((d) => d.id === x.worker).map((d) => ({ store, part: d.part }))),
-        blockedBy: shared.filter(([, s]) => s.barred.includes(x.name)).map(([store]) => store),
+        blockedBy: shared.flatMap(([store, s]) => s.paused.filter((p) => p.id === x.worker).map((p) => ({ store, until: p.until }))),
         coles: coles.workers?.find((w) => w.id === x.worker) || null,
       })),
     };

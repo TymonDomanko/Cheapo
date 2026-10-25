@@ -45,6 +45,7 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | `COLES_MAX_PER_CONNECTION` | `40` | The most Coles pages an hour any one connection fetches, this server included. A helper can be set lower on the Admin page. The total stays within `COLES_PAGES_PER_HOUR`; what a capped connection can't use goes to the others. **Admin page** |
 | `COLES_FULL_EVERY_DAYS` | `2` | Steady mode: how often to go through the whole Coles shop, counted from when the last pass started (specials are done daily). For every Coles price within a day, set this to `1` and `COLES_PAGES_PER_HOUR` to `40` |
 | `COLES_BARCODE_BUDGET` | `300` | Nightly mode only: Coles product pages fetched per day to fill in barcodes (steady mode fits them into spare time) |
+| `BLOCKED_PAUSE_MINUTES` | `60` | When a shop blocks a connection part-way through a shared refresh, how long that connection leaves the shop alone (doubling each time, up to 8 hours). It does other shops meanwhile |
 | `WOOLWORTHS_CONCURRENCY` | `2` | Woolworths departments fetched at once, each in its own session. When the refresh is shared with collectors, this is for all of them together |
 | `ALDI_CONCURRENCY`, `HARRISFARM_CONCURRENCY`, `DANMURPHYS_CONCURRENCY`, `BWS_CONCURRENCY`, `LIQUORLAND_CONCURRENCY` | `1` | Shared refreshes: parts of that shop fetched at once, by all connections together |
 | `IGA_CONCURRENCY` | `3` | IGA stores fetched at once |

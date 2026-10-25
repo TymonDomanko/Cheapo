@@ -2582,7 +2582,7 @@ function sharedNote(x) {
   const what = x.of == null ? 'reading its departments' : x.finished ? `all ${x.of} parts done` : `${x.done} of ${x.of} parts done`;
   const doing = x.doing.map((d) => `<li>${esc(d.worker)}: ${esc(d.part)}</li>`).join('');
   return `<br><span class="hint">Shared refresh (started ${fmtDate(x.startedAt)}): ${what}</span>${doing ? `<ul class="worker-list hint">${doing}</ul>` : ''}`
-    + (x.barred.length ? `<br><span class="warn">Blocked today: ${x.barred.map(esc).join(', ')}</span>` : '')
+    + (x.paused.length ? `<br><span class="warn">Paused after a bot check: ${x.paused.map((p) => `${esc(p.worker)}${p.until ? ` (until ${timeOf(p.until)})` : ' (today)'}`).join(', ')}</span>` : '')
     + (x.stuck.length && !x.finished ? `<br><span class="warn">Failed, waiting for another connection:</span><ul class="worker-list hint">${x.stuck.map((f) => `<li>${esc(f.part)}${f.why ? ` — ${esc(f.by || '')}: <span class="warn">${esc(f.why)}</span>` : ''}</li>`).join('')}</ul>` : '');
 }
 
@@ -2669,7 +2669,7 @@ function helperStatus(x, latest) {
   const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
   if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
   for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
-  for (const s of x.blockedBy || []) parts.push(`<span class="warn">blocked by ${esc(storeName(s))} today</span>`);
+  for (const b of x.blockedBy || []) parts.push(`<span class="warn">paused for ${esc(storeName(b.store))}${b.until ? ` until ${timeOf(b.until)}` : ' today'} (bot check)</span>`);
   if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
   else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);
   return parts.join(' · ');

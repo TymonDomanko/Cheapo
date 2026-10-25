@@ -244,7 +244,7 @@ test('other shops: departments are shared out, at most as many at once as one co
   sharing.items(sam, 'woolworths', 'dairy', [{ store_product_id: 'milk', name: 'Milk', size_text: '1L', price: 2 }]);
   assert.throws(() => sharing.items(alexWorker, 'woolworths', 'dairy', []), /handed on/, 'only the holder sends for a part');
   sharing.done(sam, 'woolworths', 'dairy', {});
-  // Alex is blocked by Woolworths: pantry goes back, and Alex gets no more Woolworths today.
+  // Alex is blocked by Woolworths: pantry goes back, and Alex is paused for Woolworths (not other shops).
   sharing.done(alexWorker, 'woolworths', 'pantry', { blocked: 'Access denied' });
   const failed = sharing.status().woolworths.stuck.find((f) => f.part === 'pantry');
   assert.deepEqual([failed.by, failed.why], ['Alex’s laptop', 'Access denied'], 'the admin page can say why');
@@ -264,7 +264,7 @@ test('other shops: departments are shared out, at most as many at once as one co
   assert.deepEqual(products('woolworths').map((p) => `${p.id}:${p.available}`), ['milk:1', 'old:0', 'peas:1', 'rice:1']);
   assert.equal(sharing.take(sam, ['woolworths']), null, 'done for today');
   const st = sharing.status().woolworths;
-  assert.deepEqual([st.done, st.of, st.finished, st.barred], [3, 3, true, ['Alex’s laptop']]);
+  assert.deepEqual([st.done, st.of, st.finished, st.paused.map((p) => p.worker)], [3, 3, true, ['Alex’s laptop']]);
   settings.setSetting('SERVER_SCRAPE_STORES', null);
 });
 
@@ -343,4 +343,41 @@ test('other shops: a one-connection shop (Woolworths) stays with one connection;
   assert.equal(sharing.take(alex, ['aldi']).part.key, c.part.key);
   sharing.ONE_CONNECTION.delete('aldi');
   settings.setSetting('SERVER_SCRAPE_STORES', null);
+});
+
+test('other shops: a connection blocked by one shop moves on to another, and tries the first again after a pause', async () => {
+  const sam = samWorker.id;
+  now = Date.parse('2026-11-04T17:20:00Z'); // a new day, 04:20 in Sydney
+  const first = sharing.take(sam, ['danmurphys', 'bws']);
+  assert.equal(first.store, 'danmurphys');
+  sharing.done(sam, 'danmurphys', 'index', { blocked: 'Dan Murphy’s is showing a bot check' });
+  assert.equal(sharing.take(sam, ['danmurphys', 'bws']).store, 'bws', 'straight on to the next shop');
+  assert.deepEqual(sharing.status().danmurphys.paused.map((p) => p.worker), ['Sam’s PC']);
+  sharing.done(sam, 'bws', 'index', { cats: [{ key: 'beer', label: 'Beer', dept: { slug: 'beer' } }] });
+  sharing.take(sam, ['bws']);
+  sharing.done(sam, 'bws', 'beer', {});
+  assert.equal(sharing.take(sam, ['danmurphys']), null, 'paused for Dan Murphy’s for an hour');
+  minutes(61);
+  assert.equal(sharing.take(sam, ['danmurphys']).part.kind, 'index', 'then tries again, the same part included');
+  sharing.done(sam, 'danmurphys', 'index', { blocked: 'again' });
+  minutes(61);
+  assert.equal(sharing.take(sam, ['danmurphys']), null, 'a second block pauses it for longer (2 hours)');
+  minutes(60);
+  assert.ok(sharing.take(sam, ['danmurphys']));
+});
+
+test('a shop refusing a part (403, 429 or a bot check page) counts as blocked', async () => {
+  const { fetchPart } = await import('../src/scrapers/parts.js');
+  const failing = (e) => ({ async *scrape() { throw e; } });
+  const run = async (e) => {
+    try {
+      for await (const _ of fetchPart(failing(e), { kind: 'whole' }, { log: () => {} }));
+    } catch (err) {
+      return !!err.blocked;
+    }
+  };
+  assert.equal(await run(Object.assign(new Error('HTTP 403 for https://x'), { status: 403 })), true);
+  assert.equal(await run(Object.assign(new Error('HTTP 429 for https://x'), { status: 429 })), true);
+  assert.equal(await run(new Error('Expected JSON from https://x but got an HTML page (likely a bot check)')), true);
+  assert.equal(await run(Object.assign(new Error('HTTP 500 for https://x'), { status: 500 })), false);
 });

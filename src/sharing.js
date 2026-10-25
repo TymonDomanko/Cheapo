@@ -11,8 +11,9 @@
 //     would fetch at once (WOOLWORTHS_CONCURRENCY, 2; others 1), so sharing
 //     it out doesn't ask the shop for more at a time;
 //   - a part whose connection goes quiet is handed on; a connection that fails
-//     a part isn't given it again, and one that's blocked by a shop isn't given
-//     any more of that shop that day;
+//     a part isn't given it again, and one that's blocked by a shop (a bot
+//     check) is paused for that shop for an hour (then 2, 4, up to 8), and
+//     meanwhile takes parts of other shops;
 //   - parts still missing when the next refresh is due are reported as a failed
 //     refresh (and products aren't marked gone).
 // Coles is shared page by page instead (src/coles-live.js), and IGA (one
@@ -28,6 +29,8 @@ const SERVER = helpers.SERVER.id;
 const IDLE_MS = 10 * 60 * 1000; // a part nothing has been sent for in this long is handed on
 const PAGE_BLOCK = 3; // pages in a block, for shops without departments
 const MAX_ITEMS = 2000;
+const PAUSE_MS = Number(process.env.BLOCKED_PAUSE_MINUTES ?? 60) * 60 * 1000; // first pause after a bot check; doubles each time
+const MAX_PAUSE_MS = 8 * 3600 * 1000;
 
 let clock = () => Date.now();
 /** Tests: pretend it's a different time. */
@@ -84,7 +87,7 @@ const newPart = (p) => ({ ...p, done: false, worker: null, touchedAt: null, fail
 function startPass(store, since) {
   const { runId, startedAt } = startRun(store, { source: 'shared' });
   getDb().prepare("UPDATE scrape_runs SET worker = 'shared' WHERE id = ?").run(runId);
-  return { since, runId, startedAt, parts: firstParts(store)?.map(newPart) ?? null, indexWorker: null, indexAt: null, indexFailedBy: [], barred: [], finished: false };
+  return { since, runId, startedAt, parts: firstParts(store)?.map(newPart) ?? null, indexWorker: null, indexAt: null, indexFailedBy: [], paused: {}, finished: false };
 }
 
 /** Finish a pass that didn't get everything (no products are marked gone). */
@@ -119,6 +122,8 @@ function current(store) {
 }
 
 const idle = (touchedAt) => clock() - Date.parse(touchedAt || 0) > IDLE_MS;
+/** Is worker `w` paused for this shop after a bot check? (`barred`: passes saved before pauses, blocked all day.) */
+const paused = (pass, w) => Date.parse(pass.paused?.[w]?.until || 0) > clock() || !!pass.barred?.includes(w);
 const busy = (pass) => (pass.indexWorker && !idle(pass.indexAt) ? 1 : 0) + (pass.parts || []).filter((p) => !p.done && p.worker && !idle(p.touchedAt)).length;
 
 // ---------------------------------------------------------------- handing out parts
@@ -137,7 +142,7 @@ function allowed(store, pass, w, part) {
   const owner = ownerOf(store, pass);
   if (!owner || owner === w) return true;
   // The owner can't: blocked by the shop, failed this part, or gone quiet.
-  return pass.barred.includes(owner) || (part ? part.failedBy.includes(owner) : pass.indexFailedBy.includes(owner)) || idle(pass.ownerAt || pass.since);
+  return paused(pass, owner) || (part ? part.failedBy.includes(owner) : pass.indexFailedBy.includes(owner)) || idle(pass.ownerAt || pass.since);
 }
 
 /** How many parts of a shop one connection fetches at once: this server its usual pace, helpers one. */
@@ -151,7 +156,7 @@ export function take(w, canDo = []) {
   const stores = SHARED.filter((s) => (w === SERVER ? serverStores().includes(s) : !canDo.length || canDo.includes(s)));
   for (const store of stores) {
     const pass = current(store);
-    if (!pass || pass.finished || pass.barred.includes(w)) continue;
+    if (!pass || pass.finished || paused(pass, w)) continue;
     const mine = (pass.parts || []).filter((p) => p.worker === w && !p.done && !idle(p.touchedAt)).length + (pass.indexWorker === w && !idle(pass.indexAt) ? 1 : 0);
     if (mine >= ownShare(store, w)) continue;
     if (busy(pass) >= atOnce(store)) continue;
@@ -209,9 +214,17 @@ export function done(w, store, partKey, body = {}) {
     console.warn(`[${store}] ${helpers.nameOf(w)}: ${partKey} failed — ${why}`);
     // Kept so the admin page can say why.
     const error = { by: helpers.nameOf(w), why, at: iso() };
-    if (partKey === 'index') Object.assign(pass, { indexWorker: null, indexAt: null, indexFailedBy: [...pass.indexFailedBy, w], indexError: error });
-    else Object.assign(part, { worker: null, touchedAt: null, failedBy: [...part.failedBy, w], error });
-    if (body.blocked && !pass.barred.includes(w)) pass.barred.push(w); // blocked by the shop: none of it for this connection today
+    // Blocked by the shop: pause this connection for the shop (it gets other
+    // shops' parts meanwhile), and let it try this part again afterwards.
+    const failedBy = (list) => (body.blocked ? list : [...list, w]);
+    if (partKey === 'index') Object.assign(pass, { indexWorker: null, indexAt: null, indexFailedBy: failedBy(pass.indexFailedBy), indexError: error });
+    else Object.assign(part, { worker: null, touchedAt: null, failedBy: failedBy(part.failedBy), error });
+    if (body.blocked) {
+      const times = (pass.paused?.[w]?.times || 0) + 1;
+      const until = new Date(clock() + Math.min(MAX_PAUSE_MS, PAUSE_MS * 2 ** (times - 1))).toISOString();
+      (pass.paused ||= {})[w] = { until, times };
+      console.warn(`[${store}] ${helpers.nameOf(w)}: paused for ${store} until ${until}; it can do other shops meanwhile`);
+    }
     save(store, pass);
     return { ok: false };
   }
@@ -310,11 +323,15 @@ export function status() {
         ...(pass.indexWorker && !idle(pass.indexAt) ? [{ id: pass.indexWorker, worker: helpers.nameOf(pass.indexWorker), part: 'the department list' }] : []),
         ...parts.filter((p) => !p.done && p.worker && !idle(p.touchedAt)).map((p) => ({ id: p.worker, worker: helpers.nameOf(p.worker), part: p.label })),
       ],
-      barred: pass.barred.map(helpers.nameOf),
+      // Connections paused for this shop after a bot check, and until when.
+      paused: [
+        ...Object.entries(pass.paused || {}).filter(([w]) => paused(pass, w)).map(([w, p]) => ({ id: w, worker: helpers.nameOf(w), until: p.until })),
+        ...(pass.barred || []).map((w) => ({ id: w, worker: helpers.nameOf(w), until: null })),
+      ],
       // Parts that failed and haven't been done since, with the latest reason.
       stuck: [
         ...(!pass.parts && pass.indexError ? [{ part: 'the department list', ...pass.indexError }] : []),
-        ...parts.filter((p) => !p.done && p.failedBy.length).map((p) => ({ part: p.label, ...(p.error || {}) })),
+        ...parts.filter((p) => !p.done && p.error).map((p) => ({ part: p.label, ...(p.error || {}) })),
       ],
     };
   }
