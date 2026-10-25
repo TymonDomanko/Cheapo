@@ -2,16 +2,16 @@
 // don't go unnoticed:
 //  - a refresh fails, or finds far fewer products than last time (a store
 //    changed its website, or started blocking us);
-//  - the home collector stops sending prices.
+//  - a helper stops connecting.
 // Each problem is reported once (then at most daily while it lasts), and
 // again when it's fixed. While prices are refreshing nothing is sent: what
 // the refresh turned up is collected and emailed as one summary once every
 // shop has finished.
 
 import { getDb, nowIso } from './db.js';
-import { STORES, storeName } from './stores.js';
-import { getSetting } from './settings.js';
+import { storeName } from './stores.js';
 import { sendMail, emailHtml, siteUrl, siteName } from './mailer.js';
+import * as helpers from './helpers.js';
 
 const REPEAT_AFTER_MS = 20 * 3600 * 1000;
 const DROP_RATIO = 0.7; // fewer than 70% of last time's products counts as a problem
@@ -171,7 +171,7 @@ export async function checkRun(run) {
     scheduleSummary();
     if (run.status === 'error') {
       return raise(key, `${name} prices didn’t refresh`, [
-        `The ${name}${where(run)} refresh${run.source === 'collector' ? ' from the home collector' : ''} failed: ${run.error || 'unknown error'}.`,
+        `The ${name}${where(run)} refresh${run.source === 'collector' ? ' from a helper' : ''} failed: ${run.error || 'unknown error'}.`,
         'Prices for it stay as they were until a refresh works. If this keeps happening, the shop may have changed its website or be blocking this server — the home collector can help with blocking.',
       ]);
     }
@@ -190,24 +190,18 @@ export async function checkRun(run) {
   }
 }
 
-/** Daily: has the home collector gone quiet? */
-export async function checkCollector({ serverStores } = {}) {
+/** Daily: has a helper (one that's turned on and has connected before) gone quiet? */
+export async function checkCollector() {
   try {
-    if (!getSetting('COLLECTOR_TOKEN') || process.env.ADMIN_ALERTS === 'false') return null;
-    const crawled = serverStores ? serverStores() : STORES;
-    const fromCollector = STORES.filter((s) => !crawled.includes(s));
-    if (!fromCollector.length) return null;
-    const last = getDb().prepare(`SELECT MAX(finished_at) at FROM scrape_runs WHERE source IN ('collector', 'shared') AND status = 'ok'
-      AND store IN (${fromCollector.map(() => '?').join(',')})`).get(...fromCollector).at;
-    const quiet = !last || Date.now() - Date.parse(last) > COLLECTOR_QUIET_MS;
-    const names = fromCollector.map(storeName).join(' and ');
-    if (quiet) {
-      return raise('alert:collector', 'The home collector has gone quiet', [
-        last ? `The home collector last sent ${names} prices on ${new Date(last).toLocaleString('en-AU')}.` : `The home collector hasn’t sent any ${names} prices yet.`,
-        'Is the computer it runs on switched on and online? The admin page shows when it last connected.',
+    if (process.env.ADMIN_ALERTS === 'false') return null;
+    const quiet = helpers.list().filter((x) => !x.disabled && x.last_seen_at && Date.now() - Date.parse(x.last_seen_at) > COLLECTOR_QUIET_MS);
+    if (quiet.length) {
+      return raise('alert:collector', quiet.length === 1 ? `${quiet[0].name} has gone quiet` : `${quiet.length} helpers have gone quiet`, [
+        ...quiet.map((x) => `${x.name} last connected on ${new Date(x.last_seen_at).toLocaleString('en-AU')}.`),
+        'Is the computer it runs on switched on and online? The others carry on with its share. Admin → Site settings → Helpers shows each one.',
       ]);
     }
-    return clear('alert:collector', 'The home collector is sending prices again', [`${names} prices are coming in again.`]);
+    return clear('alert:collector', 'The helpers are connecting again', ['Every helper that’s turned on has connected in the last day and a half.']);
   } catch (e) {
     console.error(`[admin alert] ${e.message}`);
     return null;

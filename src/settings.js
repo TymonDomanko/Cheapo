@@ -54,13 +54,6 @@ const SETTINGS = {
       return v;
     },
   },
-  COLLECTOR_TOKEN: {
-    secret: true,
-    check(v) {
-      if (v.length < 24) throw httpError(400, 'Use a token of at least 24 characters (or press Generate)');
-      return v;
-    },
-  },
   // Coles pages an hour, this server and every helper together.
   COLES_PAGES_PER_HOUR: {
     check(v) {

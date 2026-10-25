@@ -1,4 +1,4 @@
-// Builds the downloadable home collector: its code, a package.json, start
+// Builds the downloadable collector (for a helper): its code, a package.json, start
 // scripts for Windows and Mac/Linux, a README and a filled-in .env — as a zip
 // for people, or as JSON for a collector updating itself.
 
@@ -7,7 +7,6 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { COLLECTOR_CODE, COLLECTOR_DEPS, collectorVersion } from './collector-files.js';
-import { getDb, nowIso } from './db.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const readRepo = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -28,7 +27,7 @@ const PACKAGE_JSON = JSON.stringify({
 
 // Exit code 75 = "I've updated myself, start me again".
 const START_SH = `#!/bin/sh
-# Starts the home collector and keeps it running (it restarts itself after updating).
+# Starts the collector and keeps it running (it restarts itself after updating).
 cd "$(dirname "$0")"
 command -v node >/dev/null 2>&1 || { echo "Node.js 20 or newer is needed: https://nodejs.org"; exit 1; }
 [ -d node_modules ] || npm install --omit=dev --no-audit --no-fund || exit 1
@@ -40,7 +39,7 @@ done
 `;
 
 const START_BAT = `@echo off\r
-rem Starts the home collector and keeps it running (it restarts itself after updating).\r
+rem Starts the collector and keeps it running (it restarts itself after updating).\r
 cd /d "%~dp0"\r
 where node >nul 2>nul || (echo Node.js 20 or newer is needed: https://nodejs.org & pause & exit /b 1)\r
 if not exist node_modules call npm install --omit=dev --no-audit --no-fund\r
@@ -51,7 +50,7 @@ pause\r
 `;
 
 function readme(serverUrl, helper) {
-  const title = helper ? `Price collector for ${serverUrl} (${helper})` : `Home collector for ${serverUrl}`;
+  const title = `Price collector for ${serverUrl}${helper ? ` (${helper})` : ''}`;
   return `${title}
 ${'='.repeat(title.length)}
 
@@ -86,7 +85,7 @@ export function bundleFiles(serverUrl, helper = null) {
   files['start.sh'] = START_SH;
   files['start.bat'] = START_BAT;
   files['README.txt'] = readme(serverUrl, helper);
-  files['.collector-bundle'] = 'This folder is a downloaded home collector; it may update itself.\n';
+  files['.collector-bundle'] = 'This folder is a downloaded collector; it may update itself.\n';
   return files;
 }
 
@@ -164,22 +163,4 @@ export function zip(files, folder) {
   end.writeUInt32LE(centralBuf.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, centralBuf, end]);
-}
-
-// ---------------------------------------------------------------- who's connecting
-
-/** Remember the last collector that talked to us, for the admin page. */
-export function recordCollector({ version, mode }) {
-  if (!version) return;
-  const status = JSON.stringify({ version: String(version).slice(0, 40), mode: String(mode || 'unknown').slice(0, 20), at: nowIso() });
-  getDb().prepare("INSERT INTO app_settings (key, value) VALUES ('collector:last', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
-    .run(status);
-}
-
-export function collectorStatus() {
-  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = 'collector:last'").get();
-  const latest = latestCollectorVersion();
-  if (!row) return { latest, last: null };
-  const last = JSON.parse(row.value);
-  return { latest, last: { ...last, upToDate: last.version === latest } };
 }

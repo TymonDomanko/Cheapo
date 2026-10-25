@@ -50,19 +50,21 @@ Settings marked **Admin page** can also be changed by an admin under **Admin →
 | `SCRAPE_MODE` | `fetch` | `browser` fetches through a real Chromium (needs Playwright, which isn't in the Docker image) |
 | `HTTPS_PROXY` | — | Send the scrapers' requests through a proxy (e.g. a residential one). Only the scrapers use it |
 
-## Home collector
+## Helpers
+
+Helpers (the collector program on your PC or someone else's) are added on the Admin page, each with its own token; see [DEPLOY.md](../DEPLOY.md#helpers-sharing-the-work-and-shops-that-block-your-server).
 
 | Variable | Default | What it does |
 |---|---|---|
-| `COLLECTOR_TOKEN` | — | Lets a home collector send prices. Made for you when you download it from the Admin page. **Admin page** |
-| `SERVER_SCRAPE_STORES` | all | The shops this server crawls itself, e.g. `coles,iga,harrisfarm`. The rest come from the collector. **Admin page** |
+| `SERVER_SCRAPE_STORES` | all | The shops this server crawls itself, e.g. `coles,iga,harrisfarm`. The rest are left to helpers. **Admin page** |
+| `COLLECTOR_TOKEN` | — | Only from before helpers: an old single collector token. On start-up it becomes a helper called "Home collector", so a collector already using it keeps working |
 | `COLLECTOR_EXE_PREBUILT` | `/app/collector-exe` in Docker | A folder of ready-made collector programs |
 | `NODE_DIST_MIRROR` | `https://nodejs.org/dist` | Where to download Node.js from when building collector programs |
-| `COLLECTOR_CHECK_CRON` | `0 11 * * *` | When to check the collector has been sending prices |
+| `COLLECTOR_CHECK_CRON` | `0 11 * * *` | When to check every helper has connected in the last day and a half |
 | `COLLECT_STORES` | any | On a collector: only refresh these shops, e.g. `woolworths,aldi`. Unset, it does whatever the site asks |
 | `COLLECT_COLES` | `true` | On a collector: `false` stops it fetching Coles pages for the site |
 
-Helpers (collectors on other people's connections, each with its own token) are added on the Admin page; see [DEPLOY.md](../DEPLOY.md#sharing-the-work-helpers).
+
 
 ## Email
 
@@ -70,7 +72,7 @@ Helpers (collectors on other people's connections, each with its own token) are 
 |---|---|---|
 | `SMTP_URL` | — | Any SMTP service, e.g. `smtps://user:password@smtp.example.com:465`. Without it, emails go to the Admin page's outbox. **Admin page** (set it here to keep the password out of the database) |
 | `MAIL_FROM` | `SITE_NAME <no-reply@localhost>` | The "from" address. **Admin page** |
-| `ADMIN_ALERTS` | `true` | Email admins a summary when a price refresh has problems, and when the home collector goes quiet |
+| `ADMIN_ALERTS` | `true` | Email admins a summary when a price refresh has problems, and when a helper goes quiet |
 
 ## Backups
 

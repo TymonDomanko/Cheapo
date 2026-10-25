@@ -6,7 +6,7 @@ None of the supermarkets has a public API. Each scraper reads the same data the 
 
 | Chain | Source | Notes |
 |---|---|---|
-| Woolworths | Website JSON API | Can block cloud servers; a home connection or the home collector works |
+| Woolworths | Website JSON API | Can block cloud servers; a home connection or a helper works |
 | Coles | Next.js data routes | Blocks connections that ask for too much (a "Pardon Our Interruption" bot check), so it's refreshed steadily rather than all at once (below) |
 | ALDI | api.aldi.com.au | In-store only, so there's no online ordering |
 | IGA | igashop.com.au storefront API | Each IGA has its own prices; only stores someone has picked are collected |
@@ -36,7 +36,7 @@ Coles has about 30,000 products on about 640 pages. At the default 30 pages an h
 
 A bot check pauses it for 2 hours, then 4, 8… up to a day, and admins get one email about it. The admin page's Coles tile shows what it's doing. `src/coles-live.js` has all of this.
 
-**Sharing it.** Collectors (the home collector and helpers) can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together and is split evenly between the connections at work, except that none goes over its own cap (`COLES_MAX_PER_CONNECTION`, 40, or lower for a helper). What a capped connection can't use is shared among the others. Every answer tells a collector when to come back. Only connections that are part-way through something and on time are counted, so one that misses its turn by 3 minutes stops slowing the rest, and its department is handed on. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
+**Sharing it.** Helpers can take part. Each connection takes a department, or the specials, and fetches its pages with the same code (`src/scrapers/coles-pages.js`). The page limit is for all of them together and is split evenly between the connections at work, except that none goes over its own cap (`COLES_MAX_PER_CONNECTION`, 40, or lower for a helper). What a capped connection can't use is shared among the others. Every answer tells a collector when to come back. Only connections that are part-way through something and on time are counted, so one that misses its turn by 3 minutes stops slowing the rest, and its department is handed on. A late answer for a page that has since been handed on is ignored. A bot check pauses only that connection. Searches, list items and barcodes stay on the server.
 
 ## Matching the same product across shops
 
@@ -87,7 +87,7 @@ src/
   cli/             scrape, collect, seed demo data, make an admin, build collector programs
 public/            the web app (vanilla JS, Chart.js; works offline)
 test/              npm test
-deploy/            Docker Compose files for a server with a domain, and for the home collector
+deploy/            Docker Compose files for a server with a domain, and for a helper's collector
 ```
 
 ## Developing

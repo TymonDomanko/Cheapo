@@ -59,17 +59,17 @@
   - Start a price refresh and follow it live.
   - See each shop's data health: freshness, how much can be compared, and uncategorised products.
   - Manage admins.
-  - Change site settings: email, the privacy page and the home collector.
+  - Change site settings: email, the privacy page, and sharing the work with helpers.
   - Download backups.
   - See which version is running.
-- **Problems come to you.** If a refresh has problems, admins get **one summary email** after it finishes: what failed, what found far fewer products, and what has recovered. Admins are also emailed if the home collector goes quiet.
+- **Problems come to you.** If a refresh has problems, admins get **one summary email** after it finishes: what failed, what found far fewer products, and what has recovered. Admins are also emailed if a helper goes quiet.
 - **Fresh Coles prices without getting blocked.** Coles is refreshed a page every couple of minutes instead of all at once. Searching something whose Coles prices are over a day old fetches them there and then.
 - **Blocked shops back off.** When a shop blocks the crawler (Coles' bot check), the crawl stops, remembers where it got to, and carries on a few hours later. It doesn't push through the block.
 - **Helpers share the work.** People you trust can run the collector on their own connection.
   - Each shop's refresh is split into departments that the server and collectors share. Coles pages are shared out under one combined limit. Helpers make refreshes more reliable without asking the shops for more.
   - **Invite them by email:** they get what it is, how to set it up and a link to download it themselves, set up for your site.
   - Each helper has its own token and can be turned off.
-- **Home collector, one click.** For shops that block your server, the Admin page has a ready-configured download:
+- **Helpers, one click.** Your own PC (for shops that block your server) or a friend's: each helper has a ready-configured download:
   - a single program for Windows or Linux (including a Raspberry Pi);
   - a zip for a Mac.
   - It sends prices to your site and keeps itself up to date.
