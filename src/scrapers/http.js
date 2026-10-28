@@ -95,11 +95,15 @@ export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch'
 
 let curlMissing = false;
 
-/** One request with the curl program, answered like fetch's (status, text; no cookies). */
+/**
+ * One request with the curl program, answered like fetch's (status, text; no cookies).
+ * It sends just the headers of the request that was checked to get through Dan
+ * Murphy's (no Accept-Language, no compression).
+ */
 async function curlFetch(url, { method, headers, body }) {
   const { spawn } = await import('node:child_process');
-  const args = ['-sS', '--compressed', '--max-time', '60', '-X', method, '-w', '\n%{http_code}', '-o', '-'];
-  for (const [k, v] of Object.entries(headers)) args.push('-H', `${k}: ${v}`);
+  const args = ['-sS', '--max-time', '60', '-X', method, '-w', '\n%{http_code}', '-o', '-'];
+  for (const [k, v] of Object.entries(headers)) if (k !== 'Accept-Language') args.push('-H', `${k}: ${v}`);
   if (body != null) args.push('--data-binary', '@-');
   args.push(url);
   return new Promise((resolve, reject) => {
