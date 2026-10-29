@@ -4,6 +4,10 @@
 
 - **Every product and price** from Woolworths, Coles, ALDI, IGA and Harris Farm (about 75,000 products), and the liquor shops Dan Murphy's, BWS and Liquorland, refreshed every night. Third-party marketplace listings (Woolworths' Everyday Market) are left out.
 - **The cheapest of it, any brand.** Search `1l milk` and the top of the page shows the cheapest 1L milk at your shops, whatever the brand, then the next cheapest and the cheapest at each shop. Search `milk` and it shows each common size with its cheapest, highlighting the best value per litre, kilo or item.
+- **Meat, deli and odd sizes per kg.** Meat, deli and anything without a common pack size (olives, frozen pizza) are ranked by price per kg, litre or item instead of by size.
+- **Pickles by kind.** `pickles` shows the cheapest sweet mustard pickles, Branston, Indian pickles, pickled onions, jalapeños, sauerkraut & kimchi, and dill pickles & gherkins; `gherkins` or `pickled onions` ranks just those.
+- **What counts as the thing.** "Spaghetti in tomato sauce" isn't tomato sauce, "triple cream brie" isn't cream cheese, minced garlic isn't fresh garlic, and processed versions (Kyiv, crumbed, pies) aren't plain chicken; `canned tomatoes` finds the cans.
+- **Bread by type.** Search `bread` and it shows the cheapest loaf, rolls, buns, wraps & flatbread, baguettes & crusty loaves, bagels, English muffins and crumpets, each by price per kg (or per item for packs), with the cheapest at each shop and chips for white, wholemeal, wholegrain & seeds, sourdough, rye, gluten free, fruit and low carb. `rolls` splits rolls by what they're made from, and `wholemeal rolls` ranks just those.
   - "Milk" means plain milk. Lite, lactose-free, oat and so on are one tap away as chips. Free range, barn and cage eggs count as grades of the same thing.
   - Nicknames work: `coke` finds Coca-Cola, and `tp` finds toilet paper.
   - **Fruit and veg** are compared the way they're sold: by the kilo (loose, bagged, or each with a weight) and each, with every shop's price per kg. A plain name means the fresh kind (`tomatoes`, not tinned).

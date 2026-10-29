@@ -860,7 +860,7 @@ function renderBestPrice(b) {
         ${b.variants.map((v, i) => `<button type="button" class="chip" data-narrow="${esc(v.word)}" ${i >= CHIPS ? 'hidden data-more' : ''}>${esc(v.label)}</button>`).join('')}
         ${b.variants.length > CHIPS ? `<button type="button" class="chip ghost" data-show-more>+${b.variants.length - CHIPS}</button>` : ''}</div>`
     : '';
-  if (b.size) {
+  if (b.size || b.ranked) {
     const g = b.groups[0];
     const [top, ...rest] = g.products;
     const stores = state.allStores.filter((s) => g.cheapestPerStore?.[s]);
@@ -869,7 +869,7 @@ function renderBestPrice(b) {
     const noun = esc(b.query.replace(/\b\d\S*\s*(ml|l|g|kg|pack)?\b/gi, '').trim());
     return `<section class="best-price">
       <h2>Cheapest ${esc(niceQuery(b.query.replace(/\s+/g, ' ')))}</h2>
-      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
+      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed || b.kinds ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
       ${chips}
       <div class="bp-top">
         ${thumb(top)}
@@ -877,8 +877,8 @@ function renderBestPrice(b) {
           <div class="hint">${chip(top.store)}</div></div>
         <div class="bp-price"><span class="price big">${money(top.price)}</span><span class="hint">${perUnitText(top)}</span>${dealBadges(top)}</div>
       </div>
-      <div class="bp-add"><button class="add primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>
-        <button class="add" data-add="${top.id}">+ This one</button></div>
+      <div class="bp-add">${b.size ? `<button class="add primary" data-add-cheapest="${esc(b.query)}" title="Keeps picking whichever ${what} is cheapest as prices change">+ Add cheapest</button>` : ''}
+        <button class="add ${b.size ? '' : 'primary'}" data-add="${top.id}">+ ${b.size ? 'This one' : 'Add to list'}</button></div>
       ${stores.length > 1 ? `<div class="bp-shops">${stores.map((s) => `<div class="${g.cheapestPerStore[s].price <= low + 0.004 ? 'win' : ''}">
         <span>${esc(SHORT_STORE[s] || storeName(s))}</span><b>${money(g.cheapestPerStore[s].price)}</b></div>`).join('')}</div>` : ''}
       ${rest.length ? `<ol class="bp-rank">${rest.map((p, i) => `<li ${i >= SHOWN ? 'hidden data-more' : ''}>
@@ -890,7 +890,7 @@ function renderBestPrice(b) {
     </section>`;
   }
   return `<section class="best-price">
-    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : 'by size <span class="hint">any brand</span>'}</h2>
+    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : b.byUnit ? '<span class="hint">any brand, by price per kg, litre or item</span>' : b.kinds ? `by ${b.kinds.by} <span class="hint">any brand, per kg or per item</span>` : 'by size <span class="hint">any brand</span>'}</h2>
     ${b.refreshing ? '<div class="hint"><span class="state pending">Checking Coles for today’s prices…</span></div>' : ''}
     ${chips}
     <div class="size-cards">${b.groups.map((g) => {
@@ -900,11 +900,12 @@ function renderBestPrice(b) {
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
         <div class="hint">${chip(p.store)}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
-        ${b.produce && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
+        ${(b.produce || b.kinds || b.byUnit) && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
           .map((s) => `${chip(s)} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
         <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
           <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
-          ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}</div>
+          ${g.qty ? `<button type="button" class="small ghost" data-size-search="${esc(g.label)}">All ${esc(g.label)} (${g.count})</button>` : ''}
+          ${g.search && g.count > 1 ? `<button type="button" class="small ghost" data-narrow="${esc(g.search)}">All ${esc(g.label.toLowerCase())} (${g.count})</button>` : ''}</div>
       </div>`;
     }).join('')}</div>
   </section>`;

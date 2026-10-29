@@ -15,8 +15,10 @@ import { runSearch, expandQuery } from './compare.js';
 import { parseSizeFrom, SIZE_TOKEN_RE, formatSize } from './units.js';
 import { nameTokens, tokensOf, VARIANT_WORDS, namedFor, sameWord } from './matcher.js';
 import { unitPriceFor } from './promos.js';
-import { aisleFor } from './aisles.js';
+import { aisleFor, namesProduce } from './aisles.js';
 import { catalogueVersion } from './db.js';
+import { breadQuery, breadType, breadGrain, BREAD_GRAINS, TYPE_ORDER, TYPE_SEARCH, typeLabel } from './bread.js';
+import { pickleQuery, pickleType, PICKLE_TYPES } from './pickles.js';
 
 const CANDIDATES = 600;
 const SIZES_SHOWN = 5;
@@ -36,6 +38,31 @@ const VARIANT_LABEL = {
 const VARIANT_SEARCH = { gluten: 'gluten free', lactose: 'lactose free', freerange: 'free range', longlife: 'long life' };
 
 const UNIT_WORD = { g: 'kg', ml: 'L', ea: 'item' };
+
+// More words that make something not the plain version, for this answer only
+// (the matcher across shops keeps its own list): processed meat ("Chicken
+// Breast Kyiv"), flavours ("Lemon & Pepper Tuna"), and things made with it.
+const MORE_VARIANTS = new Set([
+  'kyiv', 'schnitzel', 'crumbed', 'battered', 'marinated', 'seasoned', 'stuffed', 'nugget', 'nuggets', 'tender', 'tenders',
+  'kebab', 'kebabs', 'skewer', 'skewers', 'meatball', 'meatballs', 'patty', 'patties', 'burger', 'burgers', 'sausage', 'pie', 'pies',
+  'gyoza', 'dumpling', 'dumplings', 'herb', 'herbs', 'lemon', 'pepper', 'condensed', 'seed', 'seeds', 'pickle', 'pickles',
+  'bar', 'bars', 'goat', 'goats', 'maple', 'cultured', 'quiche', 'roll', 'snack', 'crackers', 'biscuits', 'wafers',
+  'beans', 'spaghetti', 'oil', 'soup', 'soups', 'tea', 'bubble', 'salsa', 'bowl', 'mexican', 'laksa', 'pockets', 'pocket', 'mustard', 'skin', 'rind', 'ravioli', 'arancini', 'gnocchi', 'pizza', 'lasagne', 'risotto', 'yoghurt', 'yogurt', 'batter', 'crispbread', 'snaps', 'crepes', 'kangaroo', 'chargrilled', 'roasted',
+]);
+// Words that describe the usual form of something rather than make it another
+// product, so can be normal for a search ("Salted Butter", "Shredded Mozzarella").
+const CAN_BE_NORMAL = new Set(['salted', 'shredded', 'grated', 'sliced', 'slice', 'block', 'cheese', 'white', 'smooth', 'crunchy', 'thick', 'thin', 'frozen', 'freerange', 'barn', 'cage', 'vanilla']);
+// Fruit and veg come in colours and sizes that are all the thing itself ("Brown Onion"), but spring onions aren't onions.
+const PRODUCE_GRADES = new Set(['brown', 'red', 'white', 'green', 'yellow', 'gold', 'purple', 'baby', 'black']);
+const PRODUCE_VARIANTS = new Set(['spring', 'pickled', 'pickling', 'cocktail']);
+// "Honey & Pistachio Cream Cheese": a flavour, unless the & is the shop's brand.
+const FLAVOUR_PAIR = /\w+ (&|and) \w+/;
+const AMPERSAND_BRANDS = /black (&|and) gold|crosse (&|and) blackwell|marks (&|and) spencer|ben (&|and) jerry|bonne (&|and) filou|green (&|and) black|lea (&|and) perrins|smith (&|and) sons|slape (&|and) sons|bundaberg|m (&|and) m|byron bay|salt (&|and) vinegar/;
+const DESCRIBING = new Set(['frozen', 'fresh', 'organic', 'free', 'range', 'raw', 'cooked', 'australian', 'natural', 'plain', 'whole', 'light', 'lite', 'large', 'small', 'mini', 'baby', 'fat', 'low', 'reduced', 'sliced', 'diced']);
+/** A word that makes it a variety, singular or plural ("oats", "crumbs"). */
+const isVariant = (t) => VARIANT_WORDS.has(t) || MORE_VARIANTS.has(t) || VARIANT_WORDS.has(`${t}s`) || (t.endsWith('s') && VARIANT_WORDS.has(t.slice(0, -1)));
+// Not fresh, though named for a fruit or vegetable: jars, pastes, dried and juiced.
+const PROCESSED = /minced|crushed|\bpaste\b|chopped|pur[eé]e|\bdried\b|powder|\bground\b|granules|smashed|\bin oil\b|juice|\bjar\b|flakes|sauce|frozen|canned|\btin\b|chips|crisps|\bdip\b/i;
 
 
 /** Price per kg / L / item. */
@@ -61,7 +88,7 @@ const sectionOf = (p) => (p.category ? aisleFor({ category: p.category }) : aisl
  * products that are the thing searched for ("Bananas", not "Banana Bread")
  * when there are any.
  */
-function mainSection(found, wanted) {
+function mainSection(found, wanted, text = '') {
   const top = found.slice(0, 60);
   const named = top.filter((p) => namedFor(p, wanted, 1));
   const counts = {};
@@ -72,6 +99,8 @@ function mainSection(found, wanted) {
   // A plain fruit or veg name means the fresh one ("tomatoes", not tinned), if there's a fair choice of fresh.
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   if (named.length && (counts.produce || 0) >= Math.max(3, total / 4)) return 'produce';
+  // A fruit or veg asked for by name ("watermelon", not watermelon drinks), if there's any fresh.
+  if (namesProduce(text) && (counts.produce || 0) >= 2) return 'produce';
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
@@ -80,12 +109,16 @@ function mainSection(found, wanted) {
  * weight, like Coles' "approx. 170g" banana) and one by the item, each
  * cheapest first by price per kg / per item.
  */
-function produceGroups(pool, wanted, item) {
-  const things = pool.filter((p) => namedFor(p, wanted, 1));
+function produceGroups(pool, wanted, item, near = 1) {
+  let things = pool.filter((p) => namedFor(p, wanted, near));
+  if (!things.length) things = pool;
   const groups = [
     { key: 'g:per', label: 'By the kilo', unit: 'g', qty: null, products: things.filter((p) => p.size_unit === 'g').map(item) },
+    { key: 'ml:per', label: 'By the litre', unit: 'ml', qty: null, products: things.filter((p) => p.size_unit === 'ml').map(item) },
     { key: 'ea:per', label: 'Each', unit: 'ea', qty: null, products: things.filter((p) => p.size_unit === 'ea').map(item) },
-  ].filter((g) => g.products.length);
+  ].filter((g) => g.products.length)
+    // The way most of it is sold first.
+    .sort((a, b) => b.products.length - a.products.length);
   for (const g of groups) {
     g.products.sort((a, b) => (a.perUnit ?? Infinity) - (b.perUnit ?? Infinity) || a.price - b.price);
     g.count = g.products.length;
@@ -95,6 +128,113 @@ function produceGroups(pool, wanted, item) {
     g.products = g.products.slice(0, PER_SIZE);
   }
   return groups;
+}
+
+// Things people search for by kind rather than by size: bread (loaves, rolls,
+// wraps… and white, wholemeal…) and pickles (mustard pickles, gherkins,
+// pickled onions…). Each family says how to read a search and sort a product.
+const FAMILIES = [
+  {
+    aisle: 'bakery',
+    query: (q) => {
+      const w = breadQuery(q);
+      return w && { type: w.type, sub: w.grain, rest: w.rest };
+    },
+    // Every type's words are searched, since rolls and wraps needn't say "bread".
+    words: (want) => (want.type ? [TYPE_SEARCH[want.type], want.type === 'loaf' ? 'bread' : null]
+      : ['bread', 'loaf', 'roll', 'bun', 'wrap', 'tortilla', 'pita', 'naan', 'bagel', 'crumpet', 'english muffin', 'baguette', 'turkish', 'vienna', 'sourdough', 'toast']),
+    typeOf: (p) => breadType(p.name, p.category),
+    subOf: (p) => breadGrain(p.name),
+    types: TYPE_ORDER.map((key) => ({ key, label: typeLabel(key), search: TYPE_SEARCH[key] })),
+    subs: BREAD_GRAINS.map((g) => ({ key: g.key, label: g.label, search: g.search })),
+  },
+  {
+    aisle: 'pantry',
+    query: (q) => {
+      const w = pickleQuery(q);
+      return w && { type: w.type, sub: null, rest: w.rest };
+    },
+    words: () => ['pickle', 'pickled', 'gherkin', 'cornichon', 'sauerkraut', 'kimchi', 'piccalilli'],
+    typeOf: (p) => pickleType(p.name),
+    subOf: null,
+    types: PICKLE_TYPES.map((t) => ({ key: t.key, label: t.label, search: t.search })),
+    subs: null,
+  },
+];
+
+/**
+ * The cheapest of each type in a family (loaves, rolls…), or of each sub-kind
+ * when a type was asked for (white rolls, wholemeal rolls…), by price per kg
+ * (or per item for what's sold by the pack), with chips for the kinds there
+ * are. A type with nothing more to split it by: one ranking. Null if there's
+ * nothing, so the usual answer is given instead.
+ */
+function kindPrices(asTyped, fam, want, { stores, igaStore, memberships, alcohol }) {
+  const extra = want.rest.join(' ');
+  const seen = new Map();
+  for (const w of fam.words(want).filter(Boolean)) {
+    for (const p of runSearch(`${extra} ${w}`.trim(), { stores, igaStore, limit: CANDIDATES, alcohol })) seen.set(p.id, p);
+  }
+  const rest = want.rest.flatMap((w) => [...nameTokens(w)]);
+  const found = [...seen.values()]
+    .filter((p) => p.price > 0 && p.size_unit && (p.size_qty || p.per_weight) && sectionOf(p) === fam.aisle)
+    .map((p) => ({ p, type: fam.typeOf(p), sub: fam.subOf?.(p) ?? null }))
+    .filter((b) => b.type && (!want.type || b.type === want.type) && (!want.sub || b.sub === want.sub))
+    // Other words (a brand, "dill") have to be in the name.
+    .filter((b) => rest.every((w) => [...nameTokens(b.p.name, null)].some((t) => sameWord(t, w))));
+  if (!found.length) return null;
+
+  const item = (p) => {
+    const price = unitPriceFor(p, memberships);
+    const pu = perUnit(price, p);
+    return {
+      id: p.id, store: p.store, name: p.name, brand: p.brand, size_text: p.size_text, image_url: p.image_url,
+      price: round2(price), was_price: p.was_price, on_special: p.on_special, promo_text: p.promo_text,
+      multi_qty: p.multi_qty, multi_price: p.multi_price, member_price: p.member_price,
+      perUnit: pu == null ? null : round2(pu), unitWord: p.per_weight ? (p.size_unit === 'ea' ? 'each' : 'kg') : UNIT_WORD[p.size_unit],
+    };
+  };
+  // Cheapest first by price per kg / L, or per item if most of them are sold by the pack.
+  const rank = (list) => {
+    const units = {};
+    for (const b of list) units[b.p.size_unit] = (units[b.p.size_unit] || 0) + 1;
+    const unit = Object.entries(units).sort((a, b) => b[1] - a[1])[0][0];
+    const unitOf = new Map(list.map((b) => [b.p.id, b.p.size_unit]));
+    return list.map((b) => item(b.p)).sort((a, b) => ((unitOf.get(b.id) === unit) - (unitOf.get(a.id) === unit))
+      || (a.perUnit ?? Infinity) - (b.perUnit ?? Infinity) || a.price - b.price);
+  };
+  const group = (key, label, list, search, shown) => {
+    const products = rank(list);
+    const perStore = {};
+    for (const p of products) if (!perStore[p.store]) perStore[p.store] = p;
+    return { key, label, unit: products[0].unitWord === 'each' || products[0].unitWord === 'item' ? 'ea' : 'g', qty: null, count: products.length, products: products.slice(0, shown), cheapestPerStore: perStore, search };
+  };
+  const labelOf = (list, k) => list.find((x) => x.key === k)?.label || k;
+
+  const ranked = !!want.type && (!fam.subs || !!want.sub);
+  const by = want.type ? 'sub' : 'type';
+  let groups;
+  if (ranked) {
+    const label = want.sub ? `${labelOf(fam.subs, want.sub)} ${labelOf(fam.types, want.type).toLowerCase()}` : labelOf(fam.types, want.type);
+    groups = [group('asked', label, found, null, RANKED)];
+  } else {
+    const kinds = by === 'type' ? fam.types : fam.subs;
+    const parts = new Map();
+    for (const b of found) {
+      if (!parts.has(b[by])) parts.set(b[by], []);
+      parts.get(b[by]).push(b);
+    }
+    groups = kinds.filter((k) => parts.has(k.key)).map((k) => group(k.key, k.label, parts.get(k.key), k.search, PER_SIZE));
+  }
+
+  // Chips: the sub-kinds there are (when none was asked for), then the types (when only a sub-kind was).
+  const count = (k, v) => found.filter((b) => b[k] === v).length;
+  const chips = (list) => (list.length > 1 ? list : []); // one choice isn't a choice
+  const variants = [
+    ...(want.sub || !fam.subs ? [] : chips(fam.subs.filter((g) => count('sub', g.key) >= 2).map((g) => ({ word: g.search, label: g.label })))),
+    ...(want.type || !want.sub ? [] : chips(fam.types.filter((t) => count('type', t.key) >= 2).map((t) => ({ word: t.search, label: t.label })))),
+  ];
+  return { query: asTyped, size: null, aisle: fam.aisle, mixed: false, variants, kinds: { by: by === 'type' ? 'type' : 'kind' }, ranked, groups };
 }
 
 /**
@@ -115,7 +255,17 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
   const asTyped = String(q).trim();
   q = expandQuery(q);
   const size = parseSizeFrom(q);
-  const text = size ? String(q).replace(SIZE_TOKEN_RE, ' ') : String(q);
+  if (!size) {
+    for (const fam of FAMILIES) {
+      const want = fam.query(asTyped);
+      const answer = want && kindPrices(asTyped, fam, want, { stores, igaStore, memberships, alcohol });
+      if (answer) return answer;
+    }
+  }
+  let text = size ? String(q).replace(SIZE_TOKEN_RE, ' ') : String(q);
+  // "canned tomatoes", "tinned tuna": the cans, whatever their names say.
+  const canned = /\b(canned|tinned)\b/.test(text);
+  if (canned) text = text.replace(/\b(canned|tinned)\b/g, ' ');
   const wanted = nameTokens(text);
   if (!wanted.size) return null;
 
@@ -123,20 +273,37 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
   // Every word searched for has to be in the product's own name (not just its
   // shop category: "Dairy, Eggs & Fridge" doesn't make yoghurt eggs).
   const asked = (t) => [...wanted].some((w) => sameWord(t, w));
-  const search = (sized) => runSearch(text, { stores, igaStore, limit: CANDIDATES, size: sized, alcohol })
-    .filter((p) => p.price != null && p.size_unit && (p.size_qty || p.per_weight))
-    .filter((p) => {
-      const own = [...nameTokens(p.name, null)];
-      return [...wanted].every((w) => own.some((t) => sameWord(t, w)));
-    });
+  const hasAll = (toks) => [...wanted].every((w) => [...toks].some((t) => sameWord(t, w)));
+  // "Salmon in Vegetable Oil" isn't vegetable oil; "Baked Beans in Tomato Sauce" is still baked beans.
+  const inSomethingElse = (p) => {
+    const parts = p.name.toLowerCase().split(/\b(?:in|with)\b/);
+    return parts.length > 1 && !hasAll(nameTokens(parts[0], null));
+  };
+  // Two or more words: products with them together ("cream cheese", not "triple cream brie cheese").
+  // Describing words aren't part of it: "Frozen Margherita Pizza" is a frozen pizza.
+  const words = (text.toLowerCase().match(/[a-z0-9]+/g) || []).filter((w) => !DESCRIBING.has(w));
+  const phrase = words.length > 1 && new RegExp(`\\b${words.map((w) => w.replace(/(e?s)$/, '')).join('(e?s)?[\\s&\'-]+')}(e?s)?\\b`);
+  const search = (sized) => {
+    let list = runSearch(text, { stores, igaStore, limit: CANDIDATES, size: sized, alcohol })
+      .filter((p) => p.price != null && p.size_unit && (p.size_qty || p.per_weight))
+      .filter((p) => !(p.size_unit === 'ea' && p.size_qty > 1000)) // sheets counted as items ("5760 pack")
+      .filter((p) => hasAll(nameTokens(p.name, null)));
+    const notIn = list.filter((p) => !inSomethingElse(p));
+    if (notIn.length) list = notIn;
+    if (phrase) {
+      const together = list.filter((p) => phrase.test(p.name.toLowerCase()));
+      if (together.length >= Math.min(3, list.length) || together.length >= list.length * 0.4) list = together;
+    }
+    return list;
+  };
 
   let found = search(size);
-  let aisle = found.length ? mainSection(found, wanted) : null;
+  let aisle = found.length ? (canned ? 'pantry' : mainSection(found, wanted, text)) : null;
   // Fruit and veg are sold by the kilo or by the item, whatever size the
   // search said ("bananas 1kg"): compare them that way.
   if (size && size.unit !== 'ml') {
     const loose = search(null);
-    if (loose.length && mainSection(loose, wanted) === 'produce') {
+    if (loose.length && mainSection(loose, wanted, text) === 'produce') {
       found = loose;
       aisle = 'produce';
     }
@@ -146,10 +313,27 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
   found = found.filter((p) => sectionOf(p) === aisle);
 
   // Plain versions only, unless there aren't enough of them.
-  const extraVariants = (p) => [...tokensOf(p)].filter((t) => VARIANT_WORDS.has(t) && !GRADES.has(t) && !asked(t));
+  const flavourPair = (p) => {
+    const n = p.name.toLowerCase().replace(AMPERSAND_BRANDS, ' ');
+    return FLAVOUR_PAIR.test(n) && !(phrase && FLAVOUR_PAIR.test(text.toLowerCase()));
+  };
+  const extraVariants = (p) => [
+    ...[...tokensOf(p)].filter((t) => (produce ? !PRODUCE_GRADES.has(t) && (isVariant(t) || PRODUCE_VARIANTS.has(t)) : isVariant(t)) && !GRADES.has(t) && !asked(t)),
+    ...(!produce && flavourPair(p) ? ['&'] : []),
+  ];
   const otherChoices = (p) => [...tokensOf(p)].filter((t) => VARIANT_WORDS.has(t) && !asked(t));
-  const plain = found.filter((p) => !extraVariants(p).length);
-  const mixed = !plain.length;
+  if (produce) {
+    const fresh = found.filter((p) => !PROCESSED.test(p.name));
+    if (fresh.length) found = fresh;
+  }
+  // A word on a good share of them is normal for this search, not a variety
+  // (most butter is salted, most mozzarella shredded).
+  const share = {};
+  for (const p of found) for (const t of new Set(extraVariants(p))) share[t] = (share[t] || 0) + 1 / found.length;
+  const normal = (t) => found.length >= 10 && share[t] >= 0.3 && CAN_BE_NORMAL.has(t);
+  const plain = found.filter((p) => !extraVariants(p).some((t) => !normal(t)));
+  // Hardly any plain ones (every custard is a flavour): show them all.
+  const mixed = plain.length < Math.min(2, found.length);
   const variantCounts = {};
   for (const p of found) {
     for (const t of new Set(otherChoices(p))) variantCounts[t] = (variantCounts[t] || 0) + 1;
@@ -188,6 +372,13 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
   }
   for (const g of bySize.values()) g.products.sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
 
+  // Meat and deli (packs of any weight), or anything with no common size
+  // (olives, frozen pizza): the cheapest per kg / L / item instead.
+  const largest = Math.max(...[...bySize.values()].map((g) => g.products.length));
+  if (!size && (['meat', 'deli'].includes(aisle) || (bySize.size >= 4 && largest < Math.max(4, pool.length * 0.08)))) {
+    return { query: asTyped, size: null, aisle, mixed, variants, byUnit: true, groups: produceGroups(pool, wanted, item, 2) };
+  }
+
   let groups = [...bySize.values()];
   if (size) {
     // One size asked for: the ranking, and the cheapest at each shop.
@@ -208,7 +399,9 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
       const loose = g.products.filter((p) => endsWith(p, 2));
       if (loose.length) g.products = loose;
     }
-    if (groups.some((g) => g.main)) groups = groups.filter((g) => g.main);
+    // (Unless hardly any are: "coca cola" products end "Soft Drink".)
+    const mains = groups.reduce((n, g) => n + g.main, 0);
+    if (mains >= pool.length * 0.25) groups = groups.filter((g) => g.main);
     groups = groups
       .sort((a, b) => b.main - a.main || b.products.length - a.products.length)
       .slice(0, SIZES_SHOWN)

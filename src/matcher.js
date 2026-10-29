@@ -24,6 +24,7 @@ const SYNONYMS = {
   sultanas: 'sultana', carrots: 'carrot', onions: 'onion', oranges: 'orange', lemons: 'lemon',
   tissues: 'tissue', towels: 'towel', capsules: 'capsule', pods: 'pod',
   breasts: 'breast', fillets: 'fillet', thighs: 'thigh', sausages: 'sausage', rashers: 'rasher',
+  hommus: 'hummus', houmous: 'hummus',
 };
 
 // Words that define a *different* product variant. If one name has one of
@@ -68,7 +69,7 @@ export function nameTokens(name, brand) {
   let s = ` ${String(name || '').toLowerCase()} `;
   s = s.replace(SIZE_TOKEN_RE, ' ');
   s = s.replace(/free[\s-]range/g, 'freerange').replace(/full[\s-]cream/g, 'fullcream')
-    .replace(/long[\s-]life/g, 'longlife');
+    .replace(/long[\s-]life/g, 'longlife').replace(/corn ?flakes/g, 'cornflakes');
   const out = new Set();
   if (brand) {
     const b = String(brand).toLowerCase().trim();
