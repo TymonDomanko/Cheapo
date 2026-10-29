@@ -119,6 +119,7 @@ function showTab(name) {
   if (location.pathname !== '/') history.pushState(null, '', '/');
   history.replaceState(null, '', `/#${name}`);
   show(name);
+  if (name === 'compare') renderListPicker();
   if (name === 'list') loadList();
   if (name === 'changes') loadChanges();
   if (name === 'admin') loadAdmin();
@@ -1274,7 +1275,35 @@ async function refreshListCount() {
   const l = state.lists.find((x) => x.id === state.listId);
   $('#list-count').hidden = !l;
   if (l) $('#list-count').textContent = l.item_count;
+  renderListPicker();
 }
+
+/** Compare's "Add to" picker: which list + buttons add to, starting with the last one opened. */
+function renderListPicker() {
+  const wrap = $('#add-to-wrap');
+  wrap.hidden = !user() || !state.lists.length;
+  if (wrap.hidden) return;
+  $('#add-to-list').innerHTML = state.lists.map((l) => `<option value="${l.id}" ${l.id === state.listId ? 'selected' : ''}>${esc(l.name)}</option>`).join('')
+    + '<option value="new">New list…</option>';
+}
+
+$('#add-to-list').addEventListener('change', async (e) => {
+  try {
+    if (e.target.value === 'new') {
+      const name = prompt('Name for the new list', 'Shopping')?.trim();
+      if (name) {
+        const made = await api('/api/lists', { method: 'POST', body: { name } });
+        state.lists.push(made);
+        selectList(made.id);
+      }
+    } else {
+      selectList(Number(e.target.value));
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+  refreshListCount().catch(() => {});
+});
 
 /** Grey outlines of `n` cards, shown while something loads. */
 function skeleton(n = 3) {
