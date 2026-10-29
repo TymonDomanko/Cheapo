@@ -2,10 +2,16 @@
   "name": "Cheapo",
   "short_name": "Cheapo",
   "description": "Compare Australian supermarket prices and shop from a shared list.",
+  "id": "/",
+  "scope": "/",
   "start_url": "/#list",
   "display": "standalone",
   "background_color": "#f6f6f4",
   "theme_color": "#e3262f",
+  "shortcuts": [
+    { "name": "My list", "url": "/#list", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Compare prices", "url": "/#compare", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ],
   "icons": [
     {
       "src": "/icon.svg",

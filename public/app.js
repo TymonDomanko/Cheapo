@@ -119,6 +119,7 @@ function showTab(name) {
   if (location.pathname !== '/') history.pushState(null, '', '/');
   history.replaceState(null, '', `/#${name}`);
   show(name);
+  if (name === 'compare') renderListPicker();
   if (name === 'list') loadList();
   if (name === 'changes') loadChanges();
   if (name === 'admin') loadAdmin();
@@ -146,7 +147,10 @@ async function route() {
     if (GUEST_ONLY.includes(page) && user()) return navigate('/');
     if (page === 'signup' && !state.config.allowSignups) return navigate('/login');
     show(page);
-    if (page === 'settings') fillSettings();
+    if (page === 'settings') {
+      fillSettings();
+      fillInstallCard();
+    }
     else if (page === 'privacy') renderPrivacy();
     else if (page === 'verify-email') confirmEmail();
     else if (page === 'reset-password' || page === 'forgot-password') {
@@ -1274,7 +1278,35 @@ async function refreshListCount() {
   const l = state.lists.find((x) => x.id === state.listId);
   $('#list-count').hidden = !l;
   if (l) $('#list-count').textContent = l.item_count;
+  renderListPicker();
 }
+
+/** Compare's "Add to" picker: which list + buttons add to, starting with the last one opened. */
+function renderListPicker() {
+  const wrap = $('#add-to-wrap');
+  wrap.hidden = !user() || !state.lists.length;
+  if (wrap.hidden) return;
+  $('#add-to-list').innerHTML = state.lists.map((l) => `<option value="${l.id}" ${l.id === state.listId ? 'selected' : ''}>${esc(l.name)}</option>`).join('')
+    + '<option value="new">New list…</option>';
+}
+
+$('#add-to-list').addEventListener('change', async (e) => {
+  try {
+    if (e.target.value === 'new') {
+      const name = prompt('Name for the new list', 'Shopping')?.trim();
+      if (name) {
+        const made = await api('/api/lists', { method: 'POST', body: { name } });
+        state.lists.push(made);
+        selectList(made.id);
+      }
+    } else {
+      selectList(Number(e.target.value));
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+  refreshListCount().catch(() => {});
+});
 
 /** Grey outlines of `n` cards, shown while something loads. */
 function skeleton(n = 3) {
@@ -3081,10 +3113,91 @@ $('#admin-root').addEventListener('change', async (e) => {
   }
 });
 
+// ================================================================== install as an app
+
+// Chrome, Edge and Samsung Internet offer to install it (beforeinstallprompt);
+// iPhones and iPads only install from Safari's Share menu, so they get the steps.
+let installPrompt = null;
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const ios = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const iosSafari = () => ios() && !/crios|fxios|edgios|opios/i.test(navigator.userAgent);
+const IOS_STEPS = 'In Safari, tap <strong>Share</strong> <span aria-hidden="true">⎙</span> (the square with an arrow), then <strong>Add to Home Screen</strong>.';
+const IOS_OTHER = 'Open this page in <strong>Safari</strong>, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.';
+const ANDROID_STEPS = 'In Chrome, tap the <strong>⋮</strong> menu, then <strong>Install app</strong> (or <strong>Add to Home screen</strong>).';
+
+function installLater() {
+  try {
+    return Date.now() < Number(localStorage.getItem('installLater') || 0);
+  } catch {
+    return false;
+  }
+}
+
+/** The banner: once per 30 days at most, only on a phone or tablet that can install it. */
+function showInstallBanner() {
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const can = installPrompt || iosSafari();
+  if (standalone() || !touch || !can || installLater()) return;
+  $('#install-text').innerHTML = installPrompt
+    ? '<strong>Add Cheapo to your home screen.</strong> It opens like an app, and your list works in the shop without signal.'
+    : `<strong>Add Cheapo to your home screen.</strong> ${IOS_STEPS}`;
+  $('#install-go').hidden = !installPrompt;
+  $('#install-later').textContent = installPrompt ? 'Not now' : 'Got it';
+  $('#install-banner').hidden = false;
+}
+
+async function install() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  const { outcome } = await installPrompt.userChoice;
+  installPrompt = null;
+  $('#install-banner').hidden = true;
+  if (outcome === 'accepted') toast('Installed — look for Cheapo on your home screen');
+  fillInstallCard();
+}
+
+/** Settings' card: an Install button where the browser offers one, else the steps for this phone. */
+function fillInstallCard() {
+  const box = $('#install-steps');
+  if (standalone()) {
+    box.innerHTML = '<p class="hint">You’re using the app. ✓</p>';
+    return;
+  }
+  box.innerHTML = installPrompt
+    ? '<p class="hint">Put Cheapo on your home screen. It opens full-screen like an app, and your list works in the shop without signal.</p><button type="button" class="primary" data-install>Install Cheapo</button>'
+    : `<p class="hint">Put Cheapo on your home screen. It opens full-screen like an app, and your list works in the shop without signal.</p>
+      <p><strong>iPhone or iPad:</strong> ${iosSafari() || !ios() ? IOS_STEPS : IOS_OTHER}</p>
+      <p><strong>Android:</strong> ${ANDROID_STEPS}</p>`;
+}
+
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); // offered by our own button instead
+  installPrompt = e;
+  showInstallBanner();
+  if (!$('#tab-settings').hidden) fillInstallCard();
+});
+addEventListener('appinstalled', () => {
+  installPrompt = null;
+  $('#install-banner').hidden = true;
+});
+$('#install-go').addEventListener('click', () => install().catch(() => {}));
+$('#install-later').addEventListener('click', () => {
+  $('#install-banner').hidden = true;
+  try {
+    localStorage.setItem('installLater', String(Date.now() + 30 * 86400000));
+  } catch {
+    /* private mode */
+  }
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-install]')) install().catch(() => {});
+});
+
 // ================================================================== start
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 if (!navigator.onLine) $('#offline-banner').hidden = false;
+setTimeout(showInstallBanner, 4000); // iPhones (no install event): after a moment on the site
 
 try {
   await loadConfig();

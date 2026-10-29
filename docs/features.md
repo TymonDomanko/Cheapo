@@ -29,6 +29,7 @@
 ## Shopping lists
 
 - **Add anything.** Type into the list's Add box and it searches. The cheapest of what you typed is picked by default, or press **Add as note** to keep plain text like "birthday card". **Paste a list** ("milk, bread, 2 x chips") adds several at once.
+- **Choose the list from Compare.** The **Add to** box next to the search picks which list the + buttons add to, starting with the last list you opened, or makes a new one.
 - **Add cheapest.** Adds "the cheapest 2L milk, any brand" rather than one product. Each shop's pick is worked out again whenever prices change.
 - **How each item matches.** For each item choose any brand of the same size, the same brand only, or this exact product. You can pick a different product at a particular shop, or rule a shop out.
 - **Always buy it at…** Pin an item to one shop, and the list shows what that costs you.
@@ -40,7 +41,7 @@
 
 - **A checklist per shop**, sorted by section (fruit & veg, bakery, dairy…) in the order most supermarkets are laid out. It learns your own shop's layout from the order you tick things off.
 - Tap to cross items out, or **scan a barcode** to tick an item or see what it costs elsewhere.
-- Ticks sync to everyone on a shared list and work offline. The site can be installed as an app.
+- Ticks sync to everyone on a shared list and work offline. The site can be installed as an app: on a phone, a banner offers it (an **Install** button on Android, the Share → Add to Home Screen steps on iPhone; **Not now** hides it for 30 days), and **Settings → Install as an app** has the steps any time.
 - **Finish shop** saves what you bought, so you can repeat it. You can also save regular shops to add in one go.
 - **Spending:** each finished shop records what it cost and how much splitting it across shops saved, with a monthly chart.
 
