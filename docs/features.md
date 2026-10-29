@@ -41,7 +41,7 @@
 
 - **A checklist per shop**, sorted by section (fruit & veg, bakery, dairy…) in the order most supermarkets are laid out. It learns your own shop's layout from the order you tick things off.
 - Tap to cross items out, or **scan a barcode** to tick an item or see what it costs elsewhere.
-- Ticks sync to everyone on a shared list and work offline. The site can be installed as an app.
+- Ticks sync to everyone on a shared list and work offline. The site can be installed as an app: on a phone, a banner offers it (an **Install** button on Android, the Share → Add to Home Screen steps on iPhone; **Not now** hides it for 30 days), and **Settings → Install as an app** has the steps any time.
 - **Finish shop** saves what you bought, so you can repeat it. You can also save regular shops to add in one go.
 - **Spending:** each finished shop records what it cost and how much splitting it across shops saved, with a monthly chart.
 

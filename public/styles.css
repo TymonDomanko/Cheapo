@@ -125,6 +125,10 @@ input[type="search"], select, input[type="number"] {
 .tabs button[aria-selected="true"] { background: var(--surface-2); color: var(--text); font-weight: 600; }
 .pill { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-size: 12px; text-align: center; }
 
+.install-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.install-banner img { border-radius: 9px; flex: none; }
+.install-banner p { flex: 1 1 200px; margin: 0; }
+.install-actions { display: flex; gap: 8px; margin-left: auto; }
 .banner { margin: 12px 16px 0; padding: 10px 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); font-size: 14px; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .hint { color: var(--muted); font-size: 13px; }

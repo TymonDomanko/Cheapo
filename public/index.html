@@ -10,6 +10,10 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#e3262f">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Cheapo">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <script src="/theme.js"></script>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" type="module"></script>
@@ -36,6 +40,11 @@
   <div id="verify-banner" class="banner closable" hidden>
     <span>Confirm your email to get price alerts and password resets — check your inbox. <button type="button" class="linkish" id="resend-verify">Send it again</button></span>
     <button type="button" class="ghost banner-close" data-close-banner="verify:{user}" aria-label="Hide this">✕</button>
+  </div>
+  <div id="install-banner" class="banner install-banner" hidden>
+    <img src="/icon-192.png" alt="" width="40" height="40">
+    <p id="install-text"></p>
+    <div class="install-actions"><button type="button" class="primary small" id="install-go" hidden>Install</button><button type="button" class="small ghost" id="install-later">Not now</button></div>
   </div>
   <div id="offline-banner" class="banner" hidden>You’re offline. Ticks are saved on this phone and sync when you’re back online.</div>
 
@@ -125,6 +134,11 @@
     <section id="tab-settings" class="tab page" hidden>
       <h2>Settings</h2>
       <div class="settings-grid">
+        <div class="card stack" id="install-card">
+          <h3>Install as an app</h3>
+          <div id="install-steps"></div>
+        </div>
+
         <form id="profile-form" class="card stack">
           <h3>Profile</h3>
           <label>Name<input name="name" maxlength="80" required></label>
