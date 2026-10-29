@@ -72,7 +72,7 @@ test('the cheapest of each type, loaves first, by price per kg; narrowing by gra
   ]);
 
   const b = bestPrices('bread');
-  assert.equal(b.bread.by, 'type');
+  assert.equal(b.kinds.by, 'type');
   assert.deepEqual(b.groups.map((g) => g.label), ['Loaves', 'Rolls', 'Wraps & flatbread'], 'garlic bread left out; loaves first');
   const loaves = b.groups[0];
   assert.equal(loaves.products[0].name, 'Coles Simply White Sandwich Loaf 650g');
@@ -83,7 +83,7 @@ test('the cheapest of each type, loaves first, by price per kg; narrowing by gra
   assert.deepEqual(b.variants.map((v) => v.label), ['Wholemeal', 'White'], 'chips for what it\'s made from');
 
   const rolls = bestPrices('rolls');
-  assert.equal(rolls.bread.by, 'grain');
+  assert.equal(rolls.kinds.by, 'kind');
   assert.deepEqual(rolls.groups.map((g) => [g.label, g.count]), [['Wholemeal', 2], ['White', 2]]);
 
   const wm = bestPrices('wholemeal rolls');

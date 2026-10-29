@@ -869,7 +869,7 @@ function renderBestPrice(b) {
     const noun = esc(b.query.replace(/\b\d\S*\s*(ml|l|g|kg|pack)?\b/gi, '').trim());
     return `<section class="best-price">
       <h2>Cheapest ${esc(niceQuery(b.query.replace(/\s+/g, ' ')))}</h2>
-      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed || b.bread ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
+      <div class="hint bp-sub">${plural(g.count, 'product')} compared, any brand${b.mixed || b.kinds ? '' : ` · regular ${noun}`}${b.refreshing ? ' · <span class="state pending">checking Coles for today’s prices…</span>' : ''}</div>
       ${chips}
       <div class="bp-top">
         ${thumb(top)}
@@ -890,7 +890,7 @@ function renderBestPrice(b) {
     </section>`;
   }
   return `<section class="best-price">
-    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : b.bread ? `by ${b.bread.by === 'grain' ? 'kind' : 'type'} <span class="hint">any brand, per kg or per item</span>` : 'by size <span class="hint">any brand</span>'}</h2>
+    <h2>Cheapest ${what} ${b.produce ? '<span class="hint">by the kilo, and each</span>' : b.kinds ? `by ${b.kinds.by} <span class="hint">any brand, per kg or per item</span>` : 'by size <span class="hint">any brand</span>'}</h2>
     ${b.refreshing ? '<div class="hint"><span class="state pending">Checking Coles for today’s prices…</span></div>' : ''}
     ${chips}
     <div class="size-cards">${b.groups.map((g) => {
@@ -900,7 +900,7 @@ function renderBestPrice(b) {
         <a href="#" class="deal-name" data-product="${p.id}">${esc(p.name)}</a>
         <div class="hint">${chip(p.store)}</div>
         <div><span class="price">${money(p.price)}</span> <span class="hint">${perUnitText(p)}</span></div>
-        ${(b.produce || b.bread) && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
+        ${(b.produce || b.kinds) && g.cheapestPerStore ? `<div class="per-store hint">${state.allStores.filter((s) => g.cheapestPerStore[s] && s !== p.store)
           .map((s) => `${chip(s)} ${perUnitText(g.cheapestPerStore[s])}`).join(' · ')}</div>` : ''}
         <div class="actions">${g.qty ? `<button class="add small primary" data-add-cheapest="${esc(`${b.query} ${g.label}`)}" title="Keeps picking whichever is cheapest as prices change">+ Add cheapest</button>` : ''}
           <button class="add small" data-add="${p.id}">+ ${g.qty ? 'This one' : 'List'}</button>
