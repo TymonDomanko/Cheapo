@@ -73,6 +73,7 @@ src/
   match-index.js   in-memory size and word indexes, so matching takes milliseconds
   compare.js       search and cross-shop grouping
   bestprice.js     "the cheapest of it, any brand"
+  bread.js         bread by type (loaf, rolls, wraps…) and grain (white, wholemeal…), for the bread answer
   coles-live.js    Coles a page at a time, shared between this server and collectors
   sharing.js       other shops' refreshes, split into parts and shared out
   helpers.js       approved helpers, their tokens and invite links

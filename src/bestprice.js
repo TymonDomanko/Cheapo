@@ -17,6 +17,7 @@ import { nameTokens, tokensOf, VARIANT_WORDS, namedFor, sameWord } from './match
 import { unitPriceFor } from './promos.js';
 import { aisleFor } from './aisles.js';
 import { catalogueVersion } from './db.js';
+import { breadQuery, breadType, breadGrain, BREAD_GRAINS, TYPE_ORDER, TYPE_SEARCH, typeLabel, grainLabel } from './bread.js';
 
 const CANDIDATES = 600;
 const SIZES_SHOWN = 5;
@@ -98,6 +99,87 @@ function produceGroups(pool, wanted, item) {
 }
 
 /**
+ * Bread ("bread", "white bread", "wholemeal rolls", "sourdough"): the cheapest
+ * of each type (loaves, rolls, buns, wraps…), or of each grain when a type was
+ * asked for, by price per kg (or per item for what's sold by the pack), with
+ * chips for the grains and types there are. Both asked for: one ranking.
+ * Null if the bakery has none, so the usual answer is given instead.
+ */
+function breadPrices(asTyped, want, { stores, igaStore, memberships, alcohol }) {
+  // Every type's words are searched, since rolls and wraps needn't say "bread".
+  const words = want.type ? [TYPE_SEARCH[want.type], want.type === 'loaf' ? 'bread' : null] : ['bread', 'loaf', 'roll', 'bun', 'wrap', 'tortilla', 'pita', 'naan', 'bagel', 'crumpet', 'english muffin', 'baguette', 'turkish', 'vienna', 'sourdough', 'toast'];
+  const extra = want.rest.join(' ');
+  const seen = new Map();
+  for (const w of words.filter(Boolean)) {
+    for (const p of runSearch(`${extra} ${w}`.trim(), { stores, igaStore, limit: CANDIDATES, alcohol })) seen.set(p.id, p);
+  }
+  const rest = want.rest.flatMap((w) => [...nameTokens(w)]);
+  const breads = [...seen.values()]
+    .filter((p) => p.price > 0 && p.size_unit && (p.size_qty || p.per_weight) && sectionOf(p) === 'bakery')
+    .map((p) => ({ p, type: breadType(p.name, p.category), grain: breadGrain(p.name) }))
+    .filter((b) => b.type && (!want.type || b.type === want.type) && (!want.grain || b.grain === want.grain))
+    // Other words (a brand, "brioche") have to be in the name.
+    .filter((b) => rest.every((w) => [...nameTokens(b.p.name, null)].some((t) => sameWord(t, w))));
+  if (!breads.length) return null;
+
+  const item = (p) => {
+    const price = unitPriceFor(p, memberships);
+    const pu = perUnit(price, p);
+    return {
+      id: p.id, store: p.store, name: p.name, brand: p.brand, size_text: p.size_text, image_url: p.image_url,
+      price: round2(price), was_price: p.was_price, on_special: p.on_special, promo_text: p.promo_text,
+      multi_qty: p.multi_qty, multi_price: p.multi_price, member_price: p.member_price,
+      perUnit: pu == null ? null : round2(pu), unitWord: p.per_weight ? (p.size_unit === 'ea' ? 'each' : 'kg') : UNIT_WORD[p.size_unit],
+    };
+  };
+  // Cheapest first by price per kg, or per item if most of them are sold by the pack.
+  const rank = (list) => {
+    const units = {};
+    for (const b of list) units[b.p.size_unit] = (units[b.p.size_unit] || 0) + 1;
+    const unit = Object.entries(units).sort((a, b) => b[1] - a[1])[0][0];
+    return list.map((b) => item(b.p)).sort((a, b) => {
+      const ua = list.find((x) => x.p.id === a.id).p.size_unit === unit;
+      const ub = list.find((x) => x.p.id === b.id).p.size_unit === unit;
+      return (ub - ua) || (a.perUnit ?? Infinity) - (b.perUnit ?? Infinity) || a.price - b.price;
+    });
+  };
+  const group = (key, label, list, search, shown) => {
+    const products = rank(list);
+    const perStore = {};
+    for (const p of products) if (!perStore[p.store]) perStore[p.store] = p;
+    return { key, label, unit: products[0].unitWord === 'kg' ? 'g' : 'ea', qty: null, count: products.length, products: products.slice(0, shown), cheapestPerStore: perStore, search };
+  };
+
+  const by = want.type ? 'grain' : 'type';
+  const keyOf = (b) => b[by];
+  const order = by === 'type' ? TYPE_ORDER : BREAD_GRAINS.map((x) => x.key);
+  let groups;
+  if (want.type && want.grain) {
+    groups = [group('asked', `${grainLabel(want.grain)} ${typeLabel(want.type).toLowerCase()}`, breads, null, RANKED)];
+  } else {
+    const parts = new Map();
+    for (const b of breads) {
+      if (!parts.has(keyOf(b))) parts.set(keyOf(b), []);
+      parts.get(keyOf(b)).push(b);
+    }
+    groups = [...parts.entries()]
+      .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+      .map(([k, list]) => (by === 'type'
+        ? group(k, typeLabel(k), list, TYPE_SEARCH[k], PER_SIZE)
+        : group(k, grainLabel(k), list, BREAD_GRAINS.find((g) => g.key === k).search, PER_SIZE)));
+  }
+
+  // Chips: the grains there are (when none was asked for), then the types (when none was).
+  const count = (k, v) => breads.filter((b) => b[k] === v).length;
+  const chips = (list) => (list.length > 1 ? list : []); // one choice isn't a choice
+  const variants = [
+    ...(want.grain ? [] : chips(BREAD_GRAINS.filter((g) => count('grain', g.key) >= 2).map((g) => ({ word: g.search, label: g.label })))),
+    ...(want.type || !want.grain ? [] : chips(TYPE_ORDER.filter((t) => count('type', t) >= 2).map((t) => ({ word: TYPE_SEARCH[t], label: typeLabel(t) })))),
+  ];
+  return { query: asTyped, size: null, aisle: 'bakery', mixed: false, variants, bread: { type: want.type, grain: want.grain, by }, ranked: !!(want.type && want.grain), groups };
+}
+
+/**
  * @param {string} q the search as typed
  * @param {{stores?: string[], igaStore?: string, memberships?: string[]}} opts
  */
@@ -115,6 +197,11 @@ function compute(q, { stores, igaStore, memberships = [], alcohol = true } = {})
   const asTyped = String(q).trim();
   q = expandQuery(q);
   const size = parseSizeFrom(q);
+  if (!size) {
+    const bread = breadQuery(asTyped);
+    const answer = bread && breadPrices(asTyped, bread, { stores, igaStore, memberships, alcohol });
+    if (answer) return answer;
+  }
   const text = size ? String(q).replace(SIZE_TOKEN_RE, ' ') : String(q);
   const wanted = nameTokens(text);
   if (!wanted.size) return null;
