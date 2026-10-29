@@ -27,7 +27,7 @@ const LABEL = Object.fromEntries(AISLES.map((a) => [a.key, a.label]));
 // Checked in this order, so the more specific types come first (frozen peas are
 // frozen, not veg; dog food is pet, not meat; tomato sauce is pantry, not veg).
 const RULES = [
-  ['frozen', /\bfrozen|\bfreezer\b(?! bags?)|ice ?creams?\b|gelato|ice blocks?|\bsorbet|pastry sheets?|^pizzas$|^streets$/],
+  ['frozen', /\bfrozen|\bfreezer\b(?! bags?)|ice ?creams?\b|gelato|ice blocks?|\bsorbet|pastry sheets?|^pizzas$|^streets$|beer batter(ed)? chips|oven (bake )?chips|\bfries\b|potato wedges|hash browns?/],
   ['liquor', new RegExp(String.raw`\bliquor|\bbeers?\b|\bwines?\b|\bcider\b|spirits|vodka|whisk(e)?y|\bgin\b|\brum\b|bourbon|prosecco|champagne|sauvignon|shiraz|chardonnay|merlot|pinot|\blager\b|\bale\b|seltzer|^ros[eé]$|premix(ed)? drinks|^liqueurs?$|sparkling ros`
     // Wine and spirit types shops file under their own names (IGA's "Moscato", Woolworths' "Cabernet Blends").
     + String.raw`|cabernet|riesling|moscato|tempranillo|grenache|verdelho|semillon|malbec|sangiovese|zinfandel|viognier|nebbiolo|fiano|gew[uü]rztraminer|muscat\b`
@@ -50,6 +50,9 @@ const RULES = [
 const PICKLED = /pickle|gherkin|cornichon|sauerkraut|piccalilli/;
 // Pickle-flavoured or with pickle in it: chips, cheese, dips, mayo, burgers.
 const NOT_A_JAR = /chips?\b|crisps|snack|flavou?r|cheese|cheddar|\bdips?\b|mayo|aioli|burger\b(?! pickles?)|sandwich(?! pickles?)|popcorn|crackers|bites\b/;
+
+/** Does a search name a fruit or vegetable ("watermelon", "red onion")? */
+export const namesProduce = (text) => RULES[RULES.length - 1][1].test(String(text).toLowerCase());
 
 /** Which aisle a product belongs in. @param {{name?:string, category?:string}} p */
 export function aisleFor(p) {

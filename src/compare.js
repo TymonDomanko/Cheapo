@@ -28,7 +28,8 @@ const AVAILABLE_SQL = `${priced('available', 0)} = 1`;
 const loc = (igaStore) => String(igaStore || defaultStoreId());
 
 // What people type vs what's on the label.
-const NICKNAMES = [[/\bcoke\b/g, 'coca cola'], [/\b(tp|loo roll|bog roll)\b/g, 'toilet paper'], [/\bvego\b/g, 'vegetarian']];
+const NICKNAMES = [[/\bcoke\b/g, 'coca cola'], [/\b(tp|loo roll|bog roll)\b/g, 'toilet paper'], [/\bvego\b/g, 'vegetarian'],
+  [/\bcornflakes\b/g, 'corn flakes']];
 
 /** A search as it should be looked up: nicknames swapped for label wording. */
 export function expandQuery(q) {
