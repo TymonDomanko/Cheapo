@@ -9,7 +9,7 @@ import * as colesLive from './coles-live.js';
 import * as sharing from './sharing.js';
 import { adoptSiteToken } from './helpers.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
-import { checkCollector, resumeSummary } from './admin-alerts.js';
+import { sendDailyReport } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
 import { unusualDeals } from './deals.js';
 import { ensureDefaultTracked, ensureDirectory, checkOnlineStores, checkIsDue } from './iga.js';
@@ -55,8 +55,10 @@ if (SCRAPE_CRON) {
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
-// Tell admins if a helper has stopped connecting.
-cron.schedule(process.env.COLLECTOR_CHECK_CRON || '0 11 * * *', () => checkCollector(), { timezone: process.env.TZ || undefined });
+// The admins' daily report on refreshes and helpers (at most one a day, and only with news), after the morning refresh.
+cron.schedule(process.env.ADMIN_REPORT_CRON || '30 7 * * *', () => {
+  sendDailyReport().catch((e) => console.error(`admin report: ${e.message}`));
+}, { timezone: process.env.TZ || undefined });
 // Weekly "on special this week" email: Wednesday morning, when the big chains' specials change.
 cron.schedule(process.env.DIGEST_CRON || '0 8 * * 3', () => {
   sendWeeklyDigests().catch((e) => console.error(`weekly digest: ${e.message}`));
@@ -74,7 +76,6 @@ cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
 app.listen(PORT, () => {
   console.log(`Cheapo (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
-  resumeSummary(); // a refresh's admin summary that was waiting when the server stopped
   if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') {
     colesLive.start(); // each checks every 30s whether it has work
     sharing.start();
