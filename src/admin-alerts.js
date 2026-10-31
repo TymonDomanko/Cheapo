@@ -1,29 +1,36 @@
-// Emails the site's admins when price refreshes go wrong, so stale prices
-// don't go unnoticed:
-//  - a refresh fails, or finds far fewer products than last time (a store
-//    changed its website, or started blocking us);
-//  - a helper stops connecting.
-// Each problem is reported once (then at most daily while it lasts), and
-// again when it's fixed. While prices are refreshing nothing is sent: what
-// the refresh turned up is collected and emailed as one summary once every
-// shop has finished.
+// Emails the site's admins about price refreshes, so stale prices don't go
+// unnoticed — in one daily report, never more than one a day:
+//  - what needs a look: a refresh that failed, or found far fewer products
+//    than last time (a shop changed its website, or is blocking us), or a
+//    helper that stopped connecting;
+//  - what's working again;
+//  - and the last day at a glance: each shop's refreshes, Coles' steady
+//    refresh (with its bot checks), and each helper.
+// It's only sent when there's news (something new broke or got fixed); while
+// a problem lasts it's repeated every few days. Coles bot checks are routine
+// (the connection pauses and carries on), so they're counted, not reported,
+// unless Coles stops getting anywhere for a day.
 
 import { getDb, nowIso } from './db.js';
-import { storeName } from './stores.js';
-import { sendMail, emailHtml, siteUrl, siteName } from './mailer.js';
+import { storeName, STORES } from './stores.js';
+import { sendMail, emailHtml, siteUrl, siteName, escapeHtml } from './mailer.js';
 import * as helpers from './helpers.js';
 
-const REPEAT_AFTER_MS = 20 * 3600 * 1000;
 const DROP_RATIO = 0.7; // fewer than 70% of last time's products counts as a problem
 const COLLECTOR_QUIET_MS = 36 * 3600 * 1000;
-// After the last run finishes, wait a moment before sending: IGA stores are
-// fetched a few at a time, so another may be about to start.
-const SETTLE_MS = Number(process.env.ADMIN_ALERT_SETTLE_MS || 2 * 60 * 1000);
+const REMIND_AFTER_MS = Number(process.env.ADMIN_REMIND_DAYS ?? 3) * 86400000; // problems that carry on
+const DAY_MS = 86400000;
 const PENDING = 'alert-pending';
-// …but don't hold news for longer than this (a home collector that died mid-run never finishes).
-const MAX_HOLD_MS = 3 * 3600 * 1000;
+const REPORT = 'alert-report'; // { day, at, colesPages }
 
 const keyFor = (store, location) => `alert:${store}${store === 'iga' ? '' : location ? `:${location}` : ''}`;
+/** Today's date where the site is (TZ), e.g. 2026-10-31. */
+const localDay = (t = Date.now()) => new Date(t).toLocaleDateString('en-CA', { timeZone: process.env.TZ || undefined });
+const when = (iso) => new Date(iso).toLocaleString('en-AU', { timeZone: process.env.TZ || undefined, weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+const ago = (iso) => {
+  const h = (Date.now() - Date.parse(iso)) / 3600000;
+  return h < 1 ? 'under an hour ago' : h < 48 ? `${Math.round(h)} hours ago` : `${Math.round(h / 24)} days ago`;
+};
 
 function openAlert(key) {
   const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
@@ -42,48 +49,56 @@ function admins() {
   return getDb().prepare('SELECT email, name FROM users WHERE is_admin = 1').all();
 }
 
+// Lines starting "## " are section headings.
 async function email(subject, lines) {
   const to = admins();
   if (!to.length) return 0;
   const adminUrl = `${siteUrl()}/#admin`;
+  const text = lines.map((l) => (l.startsWith('## ') ? `\n${l.slice(3).toUpperCase()}` : l)).join('\n\n');
+  const body = lines.map((l) => (l.startsWith('## ')
+    ? `<h2 style="font-size:15px;margin:18px 0 8px">${escapeHtml(l.slice(3))}</h2>`
+    : `<p style="font-size:14px;line-height:1.5;margin:0 0 8px">${escapeHtml(l)}</p>`)).join('');
   for (const a of to) {
     await sendMail({
       to: a.email,
       subject: `[${siteName()}] ${subject}`,
-      text: `${lines.join('\n\n')}\n\nAdmin page: ${adminUrl}`,
-      html: emailHtml({ heading: subject, paragraphs: lines, button: { label: 'Open the admin page', url: adminUrl } }),
+      text: `${text}\n\nAdmin page: ${adminUrl}`,
+      html: emailHtml({ heading: subject, extraHtml: body, button: { label: 'Open the admin page', url: adminUrl } }),
       kind: 'admin-alert',
     }).catch((e) => console.error(`[admin alert] ${e.message}`));
   }
   return to.length;
 }
 
-// ---------------------------------------------------------------- the summary
-// Waiting to be sent: { notes: [{kind: 'problem'|'fixed', key, subject, lines, isNew}], runs: [...] }.
-// Kept in the database so a restart mid-refresh doesn't lose it.
+// ---------------------------------------------------------------- what to tell
+// Waiting for the next report: { notes: [{kind: 'problem'|'fixed', key, subject, lines, isNew, at}] }.
 
-const pending = () => openAlert(PENDING) || { notes: [], runs: [], since: nowIso() };
+const pending = () => openAlert(PENDING) || { notes: [] };
 
 function note(n) {
   const p = pending();
   const earlier = p.notes.find((x) => x.key === n.key);
   p.notes = p.notes.filter((x) => x.key !== n.key);
-  // Broke and was fixed again within one refresh: nothing to tell.
-  if (!(n.kind === 'fixed' && earlier?.kind === 'problem' && earlier.isNew)) p.notes.push(n);
+  // Broke and was fixed again before the report: nothing to tell.
+  if (!(n.kind === 'fixed' && earlier?.kind === 'problem' && earlier.isNew)) p.notes.push({ ...n, at: nowIso() });
   saveAlert(PENDING, p);
-  scheduleSummary();
 }
 
-/** Raise (or repeat, at most daily) an alert. */
+/** Raise an alert (the details are kept up to date; it's reported in the next daily report). */
 function raise(key, subject, lines) {
   const open = openAlert(key);
-  if (open && Date.now() - Date.parse(open.sentAt) < REPEAT_AFTER_MS) return false;
-  saveAlert(key, { subject, since: open?.since || nowIso(), sentAt: nowIso() });
-  note({ kind: 'problem', key, subject, lines, isNew: !open });
+  saveAlert(key, { subject, lines, since: open?.since || nowIso(), sentAt: open?.sentAt || null });
+  if (!open) note({ kind: 'problem', key, subject, lines, isNew: true });
+  else {
+    // Waiting to be reported: report the latest details.
+    const p = pending();
+    const waiting = p.notes.find((n) => n.key === key && n.kind === 'problem');
+    if (waiting) Object.assign(waiting, { subject, lines }), saveAlert(PENDING, p);
+  }
   return true;
 }
 
-/** Clear an alert, telling admins it's fixed. */
+/** Clear an alert: the next report says it's working again. */
 function clear(key, subject, lines) {
   if (!openAlert(key)) return false;
   saveAlert(key, null);
@@ -91,73 +106,7 @@ function clear(key, subject, lines) {
   return true;
 }
 
-/** Is a refresh still going? (Ignores runs stuck for hours: those are a problem of their own.) */
-function refreshing() {
-  const since = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
-  return getDb().prepare("SELECT COUNT(*) n FROM scrape_runs WHERE status = 'running' AND started_at > ?").get(since).n > 0;
-}
-
-let timer = null;
-function scheduleSummary() {
-  clearTimeout(timer);
-  timer = setTimeout(() => sendSummary().catch((e) => console.error(`[admin alert] ${e.message}`)), SETTLE_MS);
-  timer.unref?.();
-}
-
-function runsLine(runs) {
-  const byStore = new Map();
-  for (const r of runs) {
-    if (!byStore.has(r.store)) byStore.set(r.store, []);
-    byStore.get(r.store).push(r);
-  }
-  return [...byStore].map(([store, rs]) => {
-    const failed = rs.filter((r) => r.status === 'error').length;
-    if (store === 'iga' && rs.length > 1) {
-      return `IGA: ${rs.length - failed} of ${rs.length} stores refreshed${failed ? ` (${failed} failed)` : ''}`;
-    }
-    const last = rs.at(-1);
-    return last.status === 'error' ? `${storeName(store)}: failed` : `${storeName(store)}: ${last.products.toLocaleString()} products`;
-  }).join(' · ');
-}
-
-/**
- * Email what the refresh turned up, once nothing is refreshing any more.
- * `force` sends now regardless (tests, or when asked). Returns how many admins were emailed.
- */
-export async function sendSummary({ force = false } = {}) {
-  clearTimeout(timer);
-  const held = Date.now() - Date.parse(openAlert(PENDING)?.since || nowIso());
-  if (!force && refreshing() && held < MAX_HOLD_MS) {
-    scheduleSummary();
-    return 0;
-  }
-  const p = pending();
-  saveAlert(PENDING, null);
-  if (!p.notes.length) return 0;
-  const problems = p.notes.filter((n) => n.kind === 'problem');
-  const fixed = p.notes.filter((n) => n.kind === 'fixed');
-  const subject = p.notes.length === 1 ? p.notes[0].subject
-    : [problems.length && `${problems.length} problem${problems.length === 1 ? '' : 's'}`, fixed.length && `${fixed.length} fixed`]
-      .filter(Boolean).join(', ').replace(/^./, (c) => `Price refresh: ${c}`);
-  const lines = [];
-  if (p.runs.length) lines.push(`This refresh: ${runsLine(p.runs)}.`);
-  if (problems.length) {
-    if (p.notes.length > 1) lines.push(`Needs a look (${problems.length}):`);
-    for (const n of problems) lines.push(...(p.notes.length > 1 ? [`⚠️ ${n.subject}. ${n.lines.join(' ')}`] : n.lines));
-  }
-  if (fixed.length) {
-    if (p.notes.length > 1) lines.push(`Working again (${fixed.length}):`);
-    for (const n of fixed) lines.push(...(p.notes.length > 1 ? [`✓ ${n.subject}. ${n.lines.join(' ')}`] : n.lines));
-  }
-  return email(subject, lines);
-}
-
 const where = (run) => (run.store === 'iga' && run.location ? ` (IGA store ${run.location})` : '');
-
-/** After a restart: send anything a refresh left waiting. */
-export function resumeSummary() {
-  if (openAlert(PENDING)) scheduleSummary();
-}
 
 /** Look at a refresh that just finished. Never throws. */
 export async function checkRun(run) {
@@ -165,14 +114,12 @@ export async function checkRun(run) {
     if (!run || process.env.ADMIN_ALERTS === 'false') return;
     const name = storeName(run.store);
     const key = keyFor(run.store, run.location);
-    const p = pending();
-    p.runs.push({ store: run.store, location: run.location, status: run.status, products: run.products || 0 });
-    saveAlert(PENDING, p);
-    scheduleSummary();
+    // A bot check on Coles' steady refresh is routine: that connection pauses and carries on (counted in the report).
+    if (run.status === 'error' && run.store === 'coles' && /bot check/i.test(run.error || '')) return false;
     if (run.status === 'error') {
       return raise(key, `${name} prices didn’t refresh`, [
         `The ${name}${where(run)} refresh${run.source === 'collector' ? ' from a helper' : ''} failed: ${run.error || 'unknown error'}.`,
-        'Prices for it stay as they were until a refresh works. If this keeps happening, the shop may have changed its website or be blocking this server — the home collector can help with blocking.',
+        'Prices for it stay as they were until a refresh works. If this keeps happening, the shop may have changed its website or be blocking this connection — a helper on another connection can cover it.',
       ]);
     }
     if (run.status !== 'ok') return;
@@ -206,6 +153,123 @@ export async function checkCollector() {
     console.error(`[admin alert] ${e.message}`);
     return null;
   }
+}
+
+// ---------------------------------------------------------------- the daily report
+
+/** Each shop's last day: "Woolworths: refreshed, 21,856 products (Thu 4:52 am)". */
+function shopLines(since) {
+  const d = getDb();
+  const out = [];
+  for (const store of STORES) {
+    const runs = d.prepare('SELECT * FROM scrape_runs WHERE store = ? AND started_at >= ? ORDER BY id').all(store, since);
+    const ok = runs.filter((r) => r.status === 'ok');
+    const failed = runs.filter((r) => r.status === 'error');
+    const name = storeName(store);
+    if (store === 'coles' && ok.length + failed.length === runs.length && !ok.length) continue; // in its own section
+    if (store === 'iga') {
+      const stores = new Set(runs.map((r) => r.location)).size;
+      if (runs.length) out.push(`${name}: ${new Set(ok.map((r) => r.location)).size} of ${stores} stores refreshed${failed.length ? ` (${failed.length} failed: ${failed.at(-1).error})` : ''}.`);
+      continue;
+    }
+    const last = d.prepare("SELECT * FROM scrape_runs WHERE store = ? AND status = 'ok' AND products > 0 ORDER BY id DESC LIMIT 1").get(store);
+    if (ok.length) out.push(`${name}: refreshed, ${ok.at(-1).products.toLocaleString()} product${ok.at(-1).products === 1 ? '' : 's'} (${when(ok.at(-1).finished_at || ok.at(-1).started_at)})${failed.length ? `; ${failed.length} failed attempt${failed.length === 1 ? '' : 's'}` : ''}.`);
+    else if (failed.length) out.push(`${name}: didn’t refresh — ${failed.at(-1).error}${last ? ` (last good refresh ${ago(last.finished_at || last.started_at)})` : ''}.`);
+    else if (runs.length) out.push(`${name}: still refreshing (started ${when(runs.at(-1).started_at)}).`);
+    else if (last) out.push(`${name}: no refresh in the last day (last ${ago(last.finished_at || last.started_at)}).`);
+  }
+  return out;
+}
+
+/** Coles' steady refresh: how far the pass has got since the last report, and the bot checks. */
+async function colesLines(since, lastReport) {
+  const colesLive = await import('./coles-live.js');
+  if (!colesLive.enabled()) return { lines: [], pages: null, stuck: false };
+  const st = colesLive.status();
+  const lines = [];
+  const pass = st.pass;
+  if (pass?.pages) lines.push(`Coles: this pass is ${Math.round((pass.pagesDone / pass.pages) * 100)}% through the shop (${pass.pagesDone} of ${pass.pages} pages, started ${when(pass.startedAt)}).`);
+  if (st.lastPassAt) lines.push(`Last full pass finished ${when(st.lastPassAt)}.`);
+  // Which connection: the message names it ("…bot check (Home collector)…"), else the run's worker.
+  const checks = {};
+  for (const r of getDb().prepare("SELECT worker, error FROM scrape_runs WHERE store = 'coles' AND status = 'error' AND error LIKE '%bot check%' AND started_at >= ?").all(since)) {
+    const who = r.error.match(/bot check \(([^)]+)\)/)?.[1] || helpers.nameOf(r.worker || 'server');
+    checks[who] = (checks[who] || 0) + 1;
+  }
+  if (Object.keys(checks).length) lines.push(`Bot checks in the last day: ${Object.entries(checks).map(([who, n]) => `${who} ${n}`).join(', ')}. Each pauses that connection (2 hours, doubling) while the others carry on.`);
+  const paused = st.workers.filter((w) => w.blockedUntil);
+  if (paused.length) lines.push(`Paused now: ${paused.map((w) => `${w.name} until ${when(w.blockedUntil)}`).join(', ')}.`);
+  // Stuck: the pass hasn't moved since the last report, a day or more ago.
+  const stuck = lastReport?.colesPages != null && pass && pass.pagesDone <= lastReport.colesPages && Date.now() - Date.parse(lastReport.at) >= DAY_MS - 3600000;
+  return { lines, pages: pass?.pagesDone ?? null, stuck };
+}
+
+/** Each helper: last connection, version, and any shop it's paused for. */
+async function helperLines() {
+  const [{ latestCollectorVersion }, sharing] = await Promise.all([import('./collector-bundle.js'), import('./sharing.js')]);
+  const latest = latestCollectorVersion();
+  const shared = Object.entries(sharing.status());
+  return helpers.list().map((h) => {
+    if (h.disabled) return `${h.name}: turned off.`;
+    if (!h.last_seen_at) return `${h.name}: hasn’t connected yet.`;
+    const paused = shared.flatMap(([store, s]) => s.paused.filter((p) => p.id === `h${h.id}`).map(() => storeName(store)));
+    return `${h.name}: last connected ${ago(h.last_seen_at)}${h.version && h.version !== latest ? ' (an older version: it updates itself)' : ''}${paused.length ? `; paused for ${paused.join(', ')} after a bot check` : ''}.`;
+  });
+}
+
+/**
+ * The daily report (the server sends it each morning, after the refresh).
+ * At most one a day, and only when there's news, or problems are still open
+ * and the last reminder was a few days ago. `force` sends whatever there is
+ * now (tests). Returns how many admins were emailed.
+ */
+export async function sendDailyReport({ force = false } = {}) {
+  if (process.env.ADMIN_ALERTS === 'false' && !force) return 0;
+  const last = openAlert(REPORT);
+  if (!force && last?.day === localDay()) return 0;
+  await checkCollector();
+  const since = new Date(Date.now() - DAY_MS).toISOString();
+  const coles = await colesLines(since, last).catch(() => ({ lines: [], pages: null, stuck: false }));
+  if (coles.stuck) {
+    raise('alert:coles-stuck', 'Coles prices aren’t getting through', ['Coles’ steady refresh hasn’t fetched any new pages for a day: every connection is being stopped by bot checks. Lowering the pages an hour on the Admin page, or adding a helper on another connection, usually helps.']);
+  } else if (coles.pages != null) {
+    clear('alert:coles-stuck', 'Coles prices are getting through again', ['Coles’ steady refresh is fetching pages again.']);
+  }
+
+  const p = pending();
+  const open = openAlerts().filter((a) => a.key !== PENDING && a.key !== REPORT);
+  const fresh = new Set(p.notes.map((n) => n.key));
+  const ongoing = open.filter((a) => !fresh.has(a.key));
+  const remind = ongoing.length && (!last || Date.now() - Date.parse(last.at) >= REMIND_AFTER_MS || ongoing.some((a) => !a.sentAt || Date.now() - Date.parse(a.sentAt) >= REMIND_AFTER_MS));
+  if (!force && !p.notes.length && !remind) return 0;
+
+  const problems = p.notes.filter((n) => n.kind === 'problem');
+  const fixed = p.notes.filter((n) => n.kind === 'fixed');
+  const counts = [problems.length && `${problems.length} new problem${problems.length === 1 ? '' : 's'}`,
+    ongoing.length && `${ongoing.length} still open`, fixed.length && `${fixed.length} fixed`].filter(Boolean);
+  const subject = `Daily report: ${counts.join(', ') || 'all working'}`;
+  const lines = [];
+  if (problems.length) {
+    lines.push(`## Needs a look (${problems.length})`);
+    for (const n of problems) lines.push(`⚠️ ${n.subject} (since ${when(n.at)}). ${n.lines.join(' ')}`);
+  }
+  if (ongoing.length) {
+    lines.push(`## Still not working (${ongoing.length})`);
+    for (const a of ongoing) lines.push(`⚠️ ${a.subject} — since ${when(a.since)}.${a.lines ? ` ${a.lines.join(' ')}` : ''}`);
+  }
+  if (fixed.length) {
+    lines.push(`## Working again (${fixed.length})`);
+    for (const n of fixed) lines.push(`✓ ${n.subject}. ${n.lines.join(' ')}`);
+  }
+  const shops = shopLines(since);
+  if (shops.length || coles.lines.length) lines.push('## The last day', ...shops, ...coles.lines);
+  const helperInfo = await helperLines().catch(() => []);
+  if (helperInfo.length) lines.push('## Helpers', ...helperInfo);
+
+  saveAlert(PENDING, null);
+  for (const a of open) saveAlert(a.key, { ...a, key: undefined, sentAt: nowIso() });
+  saveAlert(REPORT, { day: localDay(), at: nowIso(), colesPages: coles.pages });
+  return email(subject, lines);
 }
 
 /** Problems admins have been told about and that aren't fixed yet, for the admin page. */

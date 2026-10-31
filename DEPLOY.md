@@ -322,11 +322,13 @@ If the server was off at that time, the IGA check runs when it next starts. Admi
 - **ALDI and Harris Farm:** about a minute each.
 - **Coles:** not in the nightly refresh. Coles blocks connections that ask for too much (home ones too), so it's refreshed steadily instead: one page every couple of minutes, searches with day-old Coles prices first, then what's on people's lists, every special daily and the whole shop every two days (or every day with `COLES_FULL_EVERY_DAYS=1` and `COLES_PAGES_PER_HOUR=40`). Helpers share these pages (see [Helpers](#helpers-sharing-the-work-and-shops-that-block-your-server)). A bot check pauses it for a while and it carries on. See [how it works](docs/how-it-works.md#coles-a-little-at-a-time); `COLES_PAGES_PER_HOUR=0` goes back to a nightly full crawl (about 40 minutes, `COLES_DELAY_MS`).
 
-**When something goes wrong, admins hear about it.** Every admin is emailed when:
-- a shop's refresh fails, or finds less than 70% of the products the previous one did (usually the shop changed its website or started blocking the server);
-- a helper that's turned on hasn't connected for a day and a half (checked daily at 11:00, `COLLECTOR_CHECK_CRON`).
+**When something goes wrong, admins hear about it, in one daily report.** Every admin gets at most one email a day, at 7:30 am (after the morning refresh, `ADMIN_REPORT_CRON`), and only when there's news:
+- **Needs a look:** a shop's refresh failed, or found less than 70% of the products the previous one did (usually the shop changed its website or started blocking the connection); a helper that's turned on hasn't connected for a day and a half; or Coles has made no progress for a day.
+- **Still not working:** problems that carry on, with when they started. On their own they're repeated every 3 days (`ADMIN_REMIND_DAYS`), not daily.
+- **Working again:** what's been fixed.
+- **The last day:** each shop's refreshes (products, failed attempts and why), how far Coles' current pass has got, its bot checks per connection and any pauses, and each helper's last connection, version and any shop it's paused for.
 
-While prices are refreshing, nothing is sent straight away: problems (and fixes) are collected and emailed as **one summary** a couple of minutes after the last shop finishes, with a line on how each shop's refresh went. Each problem is reported once, then at most daily while it lasts, and again when it's fixed. Open problems also show at the top of **Admin → Data health**, alongside how fresh each shop's data is and how much of it can be compared. These emails need email set up (above). Turn them off with `ADMIN_ALERTS=false`.
+Coles bot checks on their own aren't problems (the connection pauses and carries on), so they're counted in the report rather than reported. Open problems also show at the top of **Admin → Data health**. These emails need email set up (above). Turn them off with `ADMIN_ALERTS=false`.
 
 ## Disk space
 

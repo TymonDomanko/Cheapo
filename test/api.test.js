@@ -864,10 +864,11 @@ test('older databases are migrated to allow notes', async () => {
   ]);
 });
 
-test('admins are emailed when a refresh fails or shrinks, and when it recovers', async () => {
+test('admins get one daily report: what broke, what’s fixed, and the last day at a glance', async () => {
   const { capturedMail } = await import('../src/mailer.js');
-  const { checkCollector, sendSummary } = await import('../src/admin-alerts.js');
+  const { checkCollector, sendDailyReport } = await import('../src/admin-alerts.js');
   const helpersMod = await import('../src/helpers.js');
+  const { getDb } = await import('../src/db.js');
   const alertsHelper = helpersMod.add('Alerts PC');
   const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alertsHelper.token}` }, body: JSON.stringify(body) }).then((r) => r.json());
   const items = (n) => Array.from({ length: n }, (_, i) => ({ store_product_id: `al${i}`, name: `Alert Test Product ${i}`, size_text: '1kg', price: 2 + i / 100 }));
@@ -876,69 +877,80 @@ test('admins are emailed when a refresh fails or shrinks, and when it recovers',
     if (n) await post(`/api/ingest/runs/${runId}/items`, { items: items(n) });
     await post(`/api/ingest/runs/${runId}/finish`, error ? { error } : { complete: true });
     await new Promise((r) => setTimeout(r, 20)); // runs are checked in the background
-    await sendSummary(); // (normally a couple of minutes after the refresh ends)
   };
   const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
+  const nextDay = () => getDb().prepare("UPDATE app_settings SET value = json_set(value, '$.day', '2000-01-01') WHERE key = 'alert-report'").run();
   const before = alerts().length;
-  const { getDb } = await import('../src/db.js');
   getDb().prepare("UPDATE scrape_runs SET status = 'error' WHERE status = 'running'").run(); // left over from other tests
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert%'").run();
 
   await run({ n: 20 });
-  assert.equal(alerts().length, before, 'a normal refresh sends nothing');
+  assert.equal(await sendDailyReport(), 0, 'a normal day sends nothing');
+
+  // Several failures in a day: one report, the next morning.
   await run({ error: 'HTTP 403 for https://example' });
-  assert.equal(alerts().length, before + 1);
-  assert.equal(alerts().at(-1).to, 'admin@example.com');
-  assert.match(alerts().at(-1).subject, /Harris Farm prices didn’t refresh/);
-  assert.match(alerts().at(-1).text, /HTTP 403/);
   await run({ error: 'again' });
-  assert.equal(alerts().length, before + 1, 'not repeated within a day');
-  await run({ n: 20 });
-  assert.match(alerts().at(-1).subject, /refreshing again/, 'tells admins it’s fixed');
-  await run({ n: 5 });
-  assert.match(alerts().at(-1).subject, /far fewer products/);
-  assert.match(alerts().at(-1).text, /found 5 products; the one before found 20/);
-  await run({ n: 20 });
+  assert.equal(alerts().length, before, 'nothing sent straight away');
+  await sendDailyReport();
+  assert.equal(alerts().length, before + 1);
+  const m = alerts().at(-1);
+  assert.equal(m.to, 'admin@example.com');
+  assert.match(m.subject, /Daily report: 1 new problem/);
+  assert.match(m.text, /NEEDS A LOOK/);
+  assert.match(m.text, /Harris Farm prices didn’t refresh/);
+  assert.match(m.text, /again/, 'the latest details');
+  assert.match(m.text, /THE LAST DAY[\s\S]*Harris Farm: refreshed, 20 products[\s\S]*failed attempts/);
+  assert.match(m.text, /HELPERS[\s\S]*Alerts PC: last connected/);
 
-  // The helper check: every helper that's turned on has connected lately.
+  await run({ error: 'third time' });
+  assert.equal(await sendDailyReport(), 0, 'never more than one a day');
+  nextDay();
+  assert.equal(await sendDailyReport(), 0, 'a problem that carries on isn’t repeated every day');
+
+  // Fixed, then a new problem: both in the next report.
+  await run({ n: 20 });
+  await run({ n: 5 });
+  await sendDailyReport();
+  const fixed = alerts().at(-1);
+  assert.equal(alerts().length, before + 2);
+  assert.match(fixed.subject, /1 new problem/);
+  assert.match(fixed.text, /far fewer products[\s\S]*found 5 products; the one before found 20/);
+  await run({ n: 20 });
+  nextDay();
+  await sendDailyReport();
+  assert.match(alerts().at(-1).subject, /1 fixed/);
+  assert.match(alerts().at(-1).text, /WORKING AGAIN[\s\S]*Harris Farm prices are refreshing again/);
+
+  // A helper that stops connecting is in the next report; one that's turned off doesn't count.
   assert.equal(await checkCollector(), false, 'nothing to report');
   getDb().prepare("UPDATE collectors SET last_seen_at = '2020-01-01T00:00:00Z' WHERE id = ?").run(alertsHelper.id);
-  assert.equal(await checkCollector(), true);
-  await sendSummary();
-  assert.match(alerts().at(-1).subject, /Alerts PC has gone quiet/);
+  nextDay();
+  await sendDailyReport();
+  assert.match(alerts().at(-1).text, /Alerts PC has gone quiet/);
   helpersMod.setDisabled(alertsHelper.id, true);
   assert.equal(await checkCollector(), true, 'a helper that’s turned off doesn’t count: all clear again');
-  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert%'").run();
   helpersMod.remove(alertsHelper.id);
 });
 
-test('during a refresh, admin emails wait for the end and come as one summary', async () => {
+test('Coles bot checks are counted in the report, not reported as problems', async () => {
   const { capturedMail } = await import('../src/mailer.js');
-  const { sendSummary } = await import('../src/admin-alerts.js');
+  const { sendDailyReport, openAlerts } = await import('../src/admin-alerts.js');
   const { startRun, getRun, finishRun } = await import('../src/scrapers/index.js');
   const { getDb } = await import('../src/db.js');
-  const alerts = () => capturedMail.filter((m) => m.kind === 'admin-alert');
-  const before = alerts().length;
-  const tick = () => new Promise((r) => setTimeout(r, 20));
-  getDb().prepare("UPDATE scrape_runs SET status = 'error' WHERE status = 'running'").run(); // left over from other tests
-
-  const still = startRun('woolworths'); // still going
-  finishRun(getRun(startRun('coles').runId), { error: 'HTTP 403' });
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert%'").run();
+  finishRun(getRun(startRun('coles').runId), { error: 'Coles is showing a bot check (Home collector). Trying again in 2 hours.' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(openAlerts(), []);
   finishRun(getRun(startRun('aldi').runId), { error: 'timed out' });
-  await tick();
-  assert.equal(await sendSummary(), 0, 'Woolworths is still refreshing: wait');
-  assert.equal(alerts().length, before);
-
-  getDb().prepare("UPDATE scrape_runs SET status = 'ok', finished_at = ? WHERE id = ?").run(new Date().toISOString(), still.runId);
-  await sendSummary();
-  assert.equal(alerts().length, before + 1, 'one email for the whole refresh');
-  const m = alerts().at(-1);
-  assert.match(m.subject, /Price refresh: 2 problems/);
-  assert.match(m.text, /Coles prices didn’t refresh/);
+  await new Promise((r) => setTimeout(r, 20));
+  const before = capturedMail.length;
+  await sendDailyReport();
+  const m = capturedMail.at(-1);
+  assert.equal(capturedMail.length, before + 1);
   assert.match(m.text, /ALDI prices didn’t refresh/);
-  assert.match(m.text, /HTTP 403/);
-  assert.match(m.text, /This refresh: .*Coles: failed/);
-  assert.equal(await sendSummary(), 0, 'nothing new to send');
-  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert:%'").run();
+  assert.doesNotMatch(m.text, /Coles prices didn’t refresh/);
+  getDb().prepare("DELETE FROM app_settings WHERE key LIKE 'alert%'").run();
 });
 
 test('product details and list items say whether it’s a good price', async () => {
