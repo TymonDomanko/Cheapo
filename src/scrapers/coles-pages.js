@@ -21,13 +21,19 @@ export const ORIGIN = 'https://www.coles.com.au';
 /** A connection to Coles that fetches jobs. */
 export function colesPages(makeClient = () => createClient({ origin: ORIGIN, delayMs: 0, softBlockWaits: [] })) {
   let session = null; // { client, buildId, store }
+  /** Start afresh next time (closing a browser tab, if it's one). */
+  const drop = () => {
+    session?.client.close?.()?.catch?.(() => {});
+    session = null;
+  };
   let requests = 0;
 
   async function getSession(store = null) {
     if (session && session.store === store) return session;
+    await session?.client.close?.(); // (a browser tab)
     const client = makeClient();
     if (store) client.pinCookie?.('fulfillmentStoreId', store);
-    if (client.constructor.name === 'BrowserClient') await client.init(); // SCRAPE_MODE=browser
+    if (client.needsInit) await client.init(); // a real browser: load the site first
     requests++;
     const html = await client.request(`${ORIGIN}/`, { accept: 'text/html' });
     const buildId = html.match(/"buildId":"([^"]+)"/)?.[1];
@@ -47,7 +53,7 @@ export function colesPages(makeClient = () => createClient({ origin: ORIGIN, del
       text = await s.client.request(`${ORIGIN}/_next/data/${s.buildId}/en/${path}`);
     } catch (e) {
       // A new version of the site moves the data pages: start a new session next time.
-      if (e.status === 404) session = null;
+      if (e.status === 404) drop();
       if (e.status === 403) throw new BlockedError('Coles refused the request (HTTP 403)');
       throw e;
     }
@@ -107,13 +113,13 @@ export function colesPages(makeClient = () => createClient({ origin: ORIGIN, del
       try {
         return { ...(await fetchJob(job)), requests };
       } catch (e) {
-        if (e.blocked) session = null;
+        if (e.blocked) drop();
         e.requests = requests;
         throw e;
       }
     },
     reset() {
-      session = null;
+      drop();
     },
   };
 }

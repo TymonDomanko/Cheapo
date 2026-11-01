@@ -69,6 +69,8 @@ Helpers (the collector program on your PC or someone else's) are added on the Ad
 | `ADMIN_REMIND_DAYS` | `3` | How often a problem that carries on is repeated in the report |
 | `COLLECT_STORES` | any | On a collector: only refresh these shops, e.g. `woolworths,aldi`. Unset, it does whatever the site asks |
 | `COLLECT_COLES` | `true` | On a collector: `false` stops it fetching Coles pages for the site |
+| `COLLECT_BROWSER` | `true` | On a collector: use an installed Edge, Chrome or Chromium for the shops that block programs (Coles, Liquorland). `false` turns it off |
+| `BROWSER_SHOPS`, `BROWSER_PATH`, `BROWSER_HEADLESS`, `BROWSER_ARGS` | — | Which shops go through the browser (set automatically on a collector that finds one), which browser, `false` to show its window, and extra switches for it |
 
 
 

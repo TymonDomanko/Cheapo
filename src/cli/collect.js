@@ -56,6 +56,18 @@ const MODE = process.env.COLLECTOR_MODE === 'exe' ? 'exe'
   : fs.existsSync(path.join(ROOT, '.collector-bundle')) ? 'bundle' : fs.existsSync('/.dockerenv') ? 'docker' : 'source';
 const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf8'));
 
+// Shops that block programs (Coles, Liquorland) go through a real browser when
+// this computer has one (Edge on every Windows PC; Chrome or Chromium on Linux).
+// COLLECT_BROWSER=false turns that off; BROWSER_SHOPS chooses the shops.
+if (process.env.COLLECT_BROWSER !== 'false' && process.env.BROWSER_SHOPS === undefined) {
+  const { findBrowser } = await import('../scrapers/devtools-browser.js');
+  const found = findBrowser();
+  if (found) {
+    process.env.BROWSER_SHOPS = 'coles,liquorland';
+    console.log(`Coles and Liquorland will go through ${path.basename(found)} (no window; COLLECT_BROWSER=false turns this off).`);
+  }
+}
+
 // Scrapers read proxy settings when loaded, so load them after .env.
 const { SCRAPERS } = await import('../scrapers/registry.js');
 const { sleep } = await import('../scrapers/http.js');

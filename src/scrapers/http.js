@@ -23,6 +23,8 @@ async function proxyAgent(url) {
 const UA = process.env.SCRAPE_USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
+import { DevtoolsClient, browserHosts } from './devtools-browser.js';
+
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const REQUEST_TIMEOUT_MS = Number(process.env.SCRAPE_TIMEOUT_MS) || 60000;
 
@@ -87,9 +89,12 @@ export async function requestJson(client, url, opts) {
  * protection refuses Node's (Dan Murphy's); without curl installed, Node's is used.
  */
 export function createClient({ origin, mode = process.env.SCRAPE_MODE || 'fetch', delayMs = 400, extraHeaders = {}, softBlockWaits, cookies = true, curl = false }) {
+  // Shops that block programs, on a computer with a browser to use (src/scrapers/devtools-browser.js).
+  const viaBrowser = mode !== 'browser' && browserHosts().includes(new URL(origin).hostname);
   const client = mode === 'browser'
     ? new BrowserClient(origin, delayMs, extraHeaders)
-    : new FetchClient(origin, delayMs, extraHeaders, cookies, curl);
+    : viaBrowser ? new DevtoolsClient(origin, delayMs, extraHeaders, { HttpError, requestJson, sleep })
+      : new FetchClient(origin, delayMs, extraHeaders, cookies, curl);
   client.softBlockWaits = softBlockWaits;
   return client;
 }
@@ -252,6 +257,7 @@ class FetchClient {
 
 class BrowserClient {
   constructor(origin, delayMs, extraHeaders) {
+    this.needsInit = true;
     this.origin = origin;
     this.delayMs = delayMs;
     this.extraHeaders = extraHeaders;

@@ -279,6 +279,14 @@ Then run `sudo systemctl enable --now grocery-collector`.
 
 The token inside a download is what lets it send prices, so don't share the file. If it's ever exposed, download it again (that makes a new token and the old one stops working), or **Turn off** the helper.
 
+### Shops that block programs: a real browser
+
+Coles and Liquorland use Imperva bot protection, which blocks most programs but rarely a real browser. A helper on a computer with Microsoft Edge (every Windows PC), Google Chrome or Chromium uses it for those two shops: it starts the browser out of sight, with a profile of its own (in the helper's data folder, separate from yours), and asks for each page from inside a tab on the shop's site, the way the site's own pages do. Nothing extra is downloaded; the helper's log says which browser it's using.
+
+- **Windows:** works out of the box with Edge (or Chrome).
+- **Linux:** install Chrome or Chromium (`sudo apt install chromium`, or Google's package); a desktop isn't needed, it runs without a window. The Docker helper has no browser, so it fetches these shops the usual way.
+- `COLLECT_BROWSER=false` turns it off; `BROWSER_PATH` picks a browser; `BROWSER_SHOPS` changes which shops (e.g. `coles,liquorland`); `BROWSER_HEADLESS=false` shows the window, to watch what happens.
+
 ### How the work is shared
 
 The server and the helpers share the refreshing, and the site decides who does what:
