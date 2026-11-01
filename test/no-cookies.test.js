@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+process.env.SCRAPE_TIMEOUT_MS = '300';
 const { createClient } = await import('../src/scrapers/http.js');
 
 test('a client without cookies skips the home page and never sends any', async (t) => {
@@ -49,6 +50,24 @@ test('a client can make its requests with curl (a shop that refuses Node’s own
     await assert.rejects(c.getJson(`${base}/gone`), (e) => e.status === 404);
   } finally {
     Object.assign(process.env, saved);
+    server.close();
+  }
+});
+
+test('a shop that never answers gives up after a time limit instead of hanging', async () => {
+  const http = await import('node:http');
+  const server = http.createServer(() => {}); // never answers
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const saved = { ...process.env };
+  for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) delete process.env[k];
+  try {
+    const c = createClient({ origin: 'https://shop.example', delayMs: 0, cookies: false });
+    const t = Date.now();
+    await assert.rejects(c.getJson(`http://127.0.0.1:${server.address().port}/api`), /No answer from .* within/);
+    assert.ok(Date.now() - t < 10000, 'gave up rather than waiting for ever');
+  } finally {
+    Object.assign(process.env, saved);
+    server.closeAllConnections?.();
     server.close();
   }
 });

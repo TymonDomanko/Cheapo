@@ -24,6 +24,7 @@ const UA = process.env.SCRAPE_USER_AGENT ||
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const REQUEST_TIMEOUT_MS = Number(process.env.SCRAPE_TIMEOUT_MS) || 60000;
 
 /** A bot-protection page (Imperva / Incapsula, used by Coles) instead of the real thing. */
 // (Ordinary Coles pages load an Imperva script too, so a page with the shop's data in it isn't one.)
@@ -147,7 +148,9 @@ class FetchClient {
         console.warn('curl isn’t installed, so this shop is fetched the usual way (it may refuse that)');
       }
     }
-    return fetch(url, { ...opts, redirect: 'follow', dispatcher });
+    // A time limit: bot protection may hold a connection open and never answer,
+    // which would otherwise stall a collector's work for good.
+    return fetch(url, { ...opts, redirect: 'follow', dispatcher, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   }
 
   async init() {
@@ -220,6 +223,11 @@ class FetchClient {
       } catch (e) {
         lastErr = e;
         if (e.fatal) break;
+        // A shop that doesn't answer in time: one more try, then give up (it's often bot protection).
+        if (e.name === 'TimeoutError') {
+          lastErr = Object.assign(new Error(`No answer from ${new URL(url).host} within ${REQUEST_TIMEOUT_MS / 1000}s`), { timeout: true });
+          if (attempt >= 1) break;
+        }
       }
     }
     throw lastErr;

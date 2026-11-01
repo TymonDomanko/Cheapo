@@ -92,7 +92,7 @@ const headers = () => ({
 async function call(method, urlPath, body) {
   for (let attempt = 0; ; attempt++) {
     try {
-      const res = await fetch(server + urlPath, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined });
+      const res = await fetch(server + urlPath, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(120000) });
       const data = await res.json().catch(() => ({}));
       if (res.ok) return data;
       if (res.status < 500 && res.status !== 429) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { fatal: true, status: res.status });
