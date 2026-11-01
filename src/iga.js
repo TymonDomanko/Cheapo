@@ -25,16 +25,26 @@ export async function ensureDirectory() {
   const row = d.prepare('SELECT COUNT(*) n, MIN(updated_at) oldest FROM iga_stores').get();
   const stale = !row.n || Date.parse(row.oldest) < Date.now() - DIRECTORY_MAX_AGE_DAYS * 86400000;
   if (!stale) return;
-  refreshing ||= refreshDirectory().finally(() => {
+  // After a failed try, leave IGA alone for an hour (a stale list is still usable).
+  if (row.n && Date.now() - lastFailedAt < 3600 * 1000) return;
+  refreshing ||= refreshDirectory().catch((e) => {
+    lastFailedAt = Date.now();
+    throw e;
+  }).finally(() => {
     refreshing = null;
   });
+  // A stale list is still usable: refresh it in the background rather than hold the page up.
+  if (row.n) {
+    refreshing.catch((e) => console.warn(`IGA store list: ${e.message}`));
+    return;
+  }
   try {
     await refreshing;
   } catch (e) {
-    // A stale directory is still usable; an empty one isn't.
-    if (!row.n) throw httpError(503, `Couldn’t load the IGA store list: ${e.message}`);
+    throw httpError(503, `Couldn’t load the IGA store list: ${e.message}`);
   }
 }
+let lastFailedAt = 0;
 
 async function refreshDirectory() {
   const client = createClient({ origin: 'https://www.igashop.com.au', delayMs: 0 });
