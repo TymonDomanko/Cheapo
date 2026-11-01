@@ -202,7 +202,7 @@ export function createApp() {
 
   const searchLimit = rateLimit({ windowMs: 60000, max: Number(process.env.SEARCH_RATE_LIMIT) || 90 });
   app.get('/api/search', searchLimit, h((req) => {
-    const { q = '', store, specials, mode } = req.query;
+    const { q = '', store, specials, mode, sort } = req.query;
     const groups = compareSearch(String(q).slice(0, 100), {
       store,
       stores: shopsFor(req),
@@ -211,7 +211,9 @@ export function createApp() {
       alcohol: wantsAlcohol(req),
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
-      limit: Math.min(Number(req.query.limit) || 30, 60),
+      sort: sort === 'price' || sort === 'unit' ? sort : null,
+      // Sorted by price: from a wider set, so the cheapest aren't just the cheapest of the best matches.
+      limit: sort === 'price' || sort === 'unit' ? 60 : Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
     // Coles prices over a day old: fetch Coles' own results for this search now.

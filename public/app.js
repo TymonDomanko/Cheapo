@@ -711,7 +711,7 @@ document.addEventListener('click', async (e) => {
 
 let searchTimer;
 let searchSeq = 0;
-['#q', '#store-filter', '#mode-filter', '#specials'].forEach((s) => $(s).addEventListener('input', () => {
+['#q', '#store-filter', '#mode-filter', '#sort-filter', '#specials'].forEach((s) => $(s).addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(runSearch, 250);
 }));
@@ -730,6 +730,7 @@ async function runSearch({ again = false } = {}) {
     q: $('#q').value.trim(),
     store: $('#store-filter').value,
     mode: $('#mode-filter').value,
+    sort: $('#sort-filter').value,
     specials: $('#specials').checked ? '1' : '',
   });
   const box = $('#results');

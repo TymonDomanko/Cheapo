@@ -58,6 +58,11 @@
           <option value="similar">Match any brand, same size</option>
           <option value="exact">Match same brand only</option>
         </select>
+        <select id="sort-filter" aria-label="Sort">
+          <option value="">Best match</option>
+          <option value="price">Cheapest first</option>
+          <option value="unit">Cheapest per kg / L</option>
+        </select>
         <label class="check"><input id="specials" type="checkbox"> Specials only</label>
         <button type="button" class="small" id="compare-scan" title="Scan a barcode">📷 Scan</button>
         <label class="add-to" id="add-to-wrap" hidden>Add to <select id="add-to-list" aria-label="List to add to"></select></label>
