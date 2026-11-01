@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.SCRAPE_TIMEOUT_MS = '300';
+// Local test servers: straight there, not through a proxy (the client picks one when it loads).
+for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) delete process.env[k];
 const { createClient } = await import('../src/scrapers/http.js');
 
 test('a client without cookies skips the home page and never sends any', async (t) => {
