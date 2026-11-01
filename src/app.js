@@ -40,7 +40,7 @@ import crypto from 'node:crypto';
 import { startOrder, orderStatus } from './order/index.js';
 
 // Which build this is (set when the Docker image is built), so you can tell an update arrived.
-const APP_VERSION = process.env.APP_VERSION || 'dev';
+const APP_VERSION = appVersion();
 
 // Alcohol is left out of search, deals and price changes unless you've turned it on in Settings.
 const wantsAlcohol = (req) => !!req.user?.showAlcohol;
@@ -95,6 +95,17 @@ function versionedIndex() {
     .replace('<span class="brand-text">Cheapo</span>', `<span class="brand-text${name === 'Cheapo' ? ' bang' : ''}">${name}</span>`)
     .replace('src="/app.js"', `src="/app.js?v=${tag('app.js')}"`)
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
+}
+
+/** The running version: the image's VERSION file (see Dockerfile), else APP_VERSION, else "dev". */
+export function appVersion() {
+  try {
+    const v = fs.readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
+    if (v && v !== 'dev') return v;
+  } catch {
+    /* not built as an image */
+  }
+  return process.env.APP_VERSION || 'dev';
 }
 
 export function createApp() {

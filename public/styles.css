@@ -263,6 +263,9 @@ dialog .close { position: absolute; right: 12px; top: 10px; border: none; backgr
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--text-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .table-scroll { overflow-x: auto; }
+/* A fieldset grows to fit its widest content (a long store name in a select) unless told otherwise. */
+fieldset { min-width: 0; }
+fieldset select { max-width: 100%; }
 table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }

@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { getDb } from './db.js';
-import { createApp } from './app.js';
+import { createApp, appVersion } from './app.js';
 import { scrapeAll, scrapeStatus, serverStores, closeInterruptedRuns } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
@@ -74,7 +74,7 @@ cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
 }, { timezone: process.env.TZ || undefined });
 
 app.listen(PORT, () => {
-  console.log(`Cheapo (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
+  console.log(`Cheapo (version ${appVersion()}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
   if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') {
     colesLive.start(); // each checks every 30s whether it has work
