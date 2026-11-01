@@ -148,7 +148,7 @@ export function createApp() {
   // Barcode reading for phones without a built-in barcode reader (iPhone Safari).
   app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd'), vendor));
   // Pages handled by the single-page app.
-  app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
+  app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/s/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
   // For load balancers / platform health checks.
   // Product photos, kept here (src/images.js).
   app.get('/img/:id', async (req, res) => {
@@ -472,6 +472,19 @@ export function createApp() {
     return { ...inv, url: `${req.protocol}://${req.get('host')}/join/${inv.token}` };
   }));
   app.get('/api/invites/:token', h((req) => lists.describeInvite(req.params.token)));
+  // A shopping link: see a list and tick things off without an account.
+  const shareUrl = (req, token) => (token ? `${siteUrl(req)}/s/${token}` : null);
+  app.post('/api/lists/:id/share-link', requireUser, h((req) => ({ url: shareUrl(req, lists.setShareLink(id(req.params.id), req.user.id, true)) })));
+  app.delete('/api/lists/:id/share-link', requireUser, h((req) => {
+    lists.setShareLink(id(req.params.id), req.user.id, false);
+    return { url: null };
+  }));
+  const sharedLimit = rateLimit({ windowMs: 60000, max: 120 });
+  app.get('/api/shared/:token', sharedLimit, h((req) => lists.sharedListView(req.params.token)));
+  app.put('/api/shared/:token/items/:item/checked', sharedLimit, h((req) => {
+    lists.setCheckedShared(req.params.token, id(req.params.item), !!req.body?.checked);
+    return { ok: true };
+  }));
   app.post('/api/invites/:token/accept', requireUser, h((req) => ({ listId: lists.acceptInvite(req.params.token, req.user.id) })));
   app.delete('/api/lists/:id/members/:userId', requireUser, h((req) => {
     lists.removeMember(id(req.params.id), req.user.id, id(req.params.userId));

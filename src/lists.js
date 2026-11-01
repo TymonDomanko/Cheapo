@@ -74,6 +74,7 @@ export function getListSummary(listId, userId) {
     excludedStores: parseStores(list.excluded_stores),
     igaStoreId: list.iga_store || defaultStoreId(),
     members,
+    shareToken: list.share_token || null,
   };
 }
 
@@ -142,6 +143,59 @@ export function acceptInvite(token, userId) {
   getDb().prepare(`INSERT INTO list_members (list_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)
     ON CONFLICT DO NOTHING`).run(listId, userId, nowIso());
   return listId;
+}
+
+// ---------------------------------------------------------------- a shopping link (no account needed)
+
+/** Make a new shopping link for a list (replacing any old one), or turn it off (on = false). */
+export function setShareLink(listId, userId, on = true) {
+  requireMember(listId, userId);
+  const token = on ? crypto.randomBytes(18).toString('base64url') : null;
+  getDb().prepare('UPDATE lists SET share_token = ? WHERE id = ?').run(token, listId);
+  return token;
+}
+
+function sharedListId(token) {
+  const row = /^[\w-]{20,40}$/.test(String(token)) && getDb().prepare('SELECT id FROM lists WHERE share_token = ?').get(String(token));
+  if (!row) throw httpError(404, 'This shopping link has been turned off, or isn’t right');
+  return row.id;
+}
+
+/**
+ * What someone with the shopping link sees: the items, which shop each is
+ * cheapest at, what's ticked and the total. Priced as the list's owner sees
+ * it; no one's email or settings.
+ */
+export function sharedListView(token) {
+  const listId = sharedListId(token);
+  const owner = getDb().prepare("SELECT user_id FROM list_members WHERE list_id = ? ORDER BY role = 'owner' DESC, joined_at LIMIT 1").get(listId);
+  const v = listView(listId, owner.user_id);
+  return {
+    name: v.name,
+    stores: v.included,
+    total: v.plan.total,
+    byStore: Object.fromEntries(Object.entries(v.plan.byStore).map(([s, x]) => [s, { total: x.total, count: x.items.length }])),
+    items: v.items.map((it) => {
+      const p = it.cheapest ? it.perStore[it.cheapest].product : it.anchor;
+      return {
+        id: it.id,
+        name: it.note ?? p?.name ?? '',
+        size: it.note != null ? null : p?.size_text || null,
+        quantity: it.quantity,
+        store: it.cheapest || null,
+        price: it.lineTotal ?? null,
+        checked: !!it.checkedAt,
+        aisle: it.aisle,
+      };
+    }),
+  };
+}
+
+/** Tick an item off from the shopping link. */
+export function setCheckedShared(token, itemId, checked) {
+  const listId = sharedListId(token);
+  if (itemListId(itemId) !== listId) throw httpError(404, 'Item not found');
+  getDb().prepare('UPDATE list_items SET checked_at = ?, checked_by = NULL WHERE id = ?').run(checked ? nowIso() : null, itemId);
 }
 
 /** Owners can remove anyone else; members can remove themselves (leave). */
