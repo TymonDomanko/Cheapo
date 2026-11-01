@@ -263,6 +263,10 @@ dialog .close { position: absolute; right: 12px; top: 10px; border: none; backgr
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--text-2); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .table-scroll { overflow-x: auto; }
+.changes-note { margin: 8px 0 12px; }
+.changes-note p { margin: 0 0 6px; }
+.changes-note ul { margin: 6px 0; padding-left: 18px; font-size: 14px; }
+.changes-note .good { color: var(--good); }
 .shared-store { margin: 12px 0; }
 .shared-store h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
 .shared-items { list-style: none; margin: 0; padding: 0; }

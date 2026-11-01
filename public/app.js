@@ -1367,6 +1367,27 @@ async function loadList() {
   refreshListCount().catch(() => {});
 }
 
+/** "Since you last looked": what got cheaper or dearer on this list. */
+function changesNote(c) {
+  const when = new Date(c.since).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  const line = (x) => `<li>${esc(x.name)}: ${money(x.from)} → <strong>${money(x.to)}</strong>${x.store !== x.fromStore ? ` <span class="hint">now at</span> ${chip(x.store)}` : ''}</li>`;
+  const parts = [
+    c.cheaper.length && `<strong class="good">${c.cheaper.length} cheaper</strong>${c.saving >= 0.01 ? ` (save ${money(c.saving)})` : ''}`,
+    c.dearer.length && `${c.dearer.length} dearer${c.extra >= 0.01 ? ` (+${money(c.extra)})` : ''}`,
+  ].filter(Boolean);
+  return `<div class="notice changes-note">
+    <p>Since you last looked (${esc(when)}): ${parts.join(' · ')}.</p>
+    <details><summary>What changed</summary><ul>${[...c.cheaper, ...c.dearer].map(line).join('')}</ul></details>
+    <button type="button" class="small ghost" id="changes-seen">Got it</button>
+  </div>`;
+}
+
+document.addEventListener('click', async (e) => {
+  if (e.target.id !== 'changes-seen' || !state.list) return;
+  e.target.closest('.changes-note').remove();
+  await api(`/api/lists/${state.list.id}/seen`, { method: 'POST' }).catch(() => {});
+});
+
 function renderList() {
   const L = state.list;
   const isOwner = L.role === 'owner';
@@ -1391,6 +1412,7 @@ function renderList() {
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
+    ${L.changes ? changesNote(L.changes) : ''}
     <form id="quick-add" class="quick-add">
       <input name="note" maxlength="120" placeholder="Add something — e.g. milk 2L, or birthday card" aria-label="Add to the list" autocomplete="off">
       <button class="small" type="submit">Add</button>
@@ -2435,7 +2457,7 @@ async function openSharedList(token) {
         <h3>${s ? chip(s) : 'Other'} ${s && v.byStore[s] ? `<span class="hint">${money(v.byStore[s].total)}</span>` : ''}</h3>
         <ul class="shared-items">${byStore[s].map((it) => `<li class="${it.checked ? 'done' : ''}">
           <label class="check"><input type="checkbox" data-shared-tick="${it.id}" ${it.checked ? 'checked' : ''}>
-          <span>${it.quantity > 1 ? `${it.quantity} × ` : ''}${esc(it.name)}${it.size ? ` <span class="hint">${esc(it.size)}</span>` : ''}</span></label>
+          <span>${it.quantity > 1 ? `${it.quantity} × ` : ''}${esc(it.name)}${it.size && !it.name.toLowerCase().replace(/\s/g, '').includes(it.size.toLowerCase().replace(/\s/g, '')) ? ` <span class="hint">${esc(it.size)}</span>` : ''}</span></label>
           <span class="price">${it.price != null ? money(it.price) : ''}</span></li>`).join('')}</ul></section>`).join('')}
       <p class="hint">Want your own lists, and the cheapest of everything? <a href="/signup" data-link>Make a free account</a>.</p>`;
   };

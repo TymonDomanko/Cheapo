@@ -545,7 +545,67 @@ export function listView(listId, userId) {
     singleStore,
     aisles: AISLES,
     layouts: layoutsFor(userId), // the section order this shopper walks each shop in, once learned
+    changes: changesSince(listId, userId, items, plan, memberships),
   };
+}
+
+// ---------------------------------------------------------------- since you last looked
+
+const MIN_CHANGE = 0.05; // dollars, and…
+const MIN_CHANGE_PCT = 0.03; // …of the price, to count as a change worth mentioning
+
+/** What each item costs now (each, at its cheapest shop): { itemId: { price, store } }. */
+function pricesNow(items, plan, memberships) {
+  const out = {};
+  for (const it of items) {
+    const s = plan.choice[it.id];
+    if (it.note == null && s) out[it.id] = { price: unitPriceFor(it.perStore[s].product, memberships), store: s };
+  }
+  return out;
+}
+
+/**
+ * How this person's list has changed since they last dismissed the note:
+ * items that got cheaper or dearer (each, at their cheapest shop), and what
+ * the list costs now against then. Null when nothing much has. The first
+ * look just remembers the prices.
+ */
+function changesSince(listId, userId, items, plan, memberships) {
+  const d = getDb();
+  const now = pricesNow(items, plan, memberships);
+  const seen = d.prepare('SELECT seen_at, prices FROM list_seen WHERE user_id = ? AND list_id = ?').get(userId, listId);
+  if (!seen) {
+    d.prepare('INSERT INTO list_seen (user_id, list_id, seen_at, prices) VALUES (?, ?, ?, ?)').run(userId, listId, nowIso(), JSON.stringify(now));
+    return null;
+  }
+  const before = JSON.parse(seen.prices);
+  const cheaper = [];
+  const dearer = [];
+  for (const it of items) {
+    const a = before[it.id];
+    const b = now[it.id];
+    if (!a || !b) continue; // new since, or can't be got now
+    const diff = Math.round((b.price - a.price) * 100) / 100;
+    if (Math.abs(diff) < MIN_CHANGE || Math.abs(diff) < a.price * MIN_CHANGE_PCT) continue;
+    const name = (it.perStore[b.store]?.product || it.anchor)?.name;
+    const change = { itemId: it.id, name, from: a.price, to: b.price, store: b.store, fromStore: a.store, quantity: it.quantity };
+    (diff < 0 ? cheaper : dearer).push(change);
+  }
+  if (!cheaper.length && !dearer.length) return null;
+  const sum = (list) => Math.round(list.reduce((n, c) => n + (c.to - c.from) * c.quantity, 0) * 100) / 100;
+  return { since: seen.seen_at, cheaper, dearer, saving: -sum(cheaper), extra: sum(dearer) };
+}
+
+/** Dismiss the note: remember today's prices as the ones last seen. */
+export function markSeen(listId, userId) {
+  requireMember(listId, userId);
+  const summary = getListSummary(listId, userId);
+  const memberships = getUser(userId)?.memberships || [];
+  const items = resolveItems(listId, summary.igaStoreId, memberships);
+  const plan = planFor(items, summary.stores.filter((s) => !summary.excludedStores.includes(s)), memberships);
+  getDb().prepare(`INSERT INTO list_seen (user_id, list_id, seen_at, prices) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id, list_id) DO UPDATE SET seen_at = excluded.seen_at, prices = excluded.prices`)
+    .run(userId, listId, nowIso(), JSON.stringify(pricesNow(items, plan, memberships)));
 }
 
 // ---------------------------------------------------------------- in the shop

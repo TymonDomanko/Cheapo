@@ -474,6 +474,10 @@ export function createApp() {
   app.get('/api/invites/:token', h((req) => lists.describeInvite(req.params.token)));
   // A shopping link: see a list and tick things off without an account.
   const shareUrl = (req, token) => (token ? `${siteUrl(req)}/s/${token}` : null);
+  app.post('/api/lists/:id/seen', requireUser, h((req) => {
+    lists.markSeen(id(req.params.id), req.user.id);
+    return { ok: true };
+  }));
   app.post('/api/lists/:id/share-link', requireUser, h((req) => ({ url: shareUrl(req, lists.setShareLink(id(req.params.id), req.user.id, true)) })));
   app.delete('/api/lists/:id/share-link', requireUser, h((req) => {
     lists.setShareLink(id(req.params.id), req.user.id, false);

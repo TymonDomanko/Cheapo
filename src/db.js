@@ -459,6 +459,15 @@ function migrateAccountsAndShopping(d) {
       PRIMARY KEY (user_id, product_id)
     );
 
+    -- What each person last saw a list's items cost, for "since you last looked".
+    CREATE TABLE IF NOT EXISTS list_seen (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      seen_at TEXT NOT NULL,
+      prices TEXT NOT NULL, -- JSON { itemId: { price, store } }
+      PRIMARY KEY (user_id, list_id)
+    );
+
     -- Saved regular shops and finished-shop history, to add again later.
     CREATE TABLE IF NOT EXISTS list_snapshots (
       id INTEGER PRIMARY KEY,
