@@ -65,7 +65,8 @@ Helpers (the collector program on your PC or someone else's) are added on the Ad
 | `COLLECTOR_TOKEN` | — | Only from before helpers: an old single collector token. On start-up it becomes a helper called "Home collector", so a collector already using it keeps working |
 | `COLLECTOR_EXE_PREBUILT` | `/app/collector-exe` in Docker | A folder of ready-made collector programs |
 | `NODE_DIST_MIRROR` | `https://nodejs.org/dist` | Where to download Node.js from when building collector programs |
-| `COLLECTOR_CHECK_CRON` | `0 11 * * *` | When to check every helper has connected in the last day and a half |
+| `ADMIN_REPORT_CRON` | `30 7 * * *` | When admins' daily report is sent (in `TZ`). At most one a day, only when there's news |
+| `ADMIN_REMIND_DAYS` | `3` | How often a problem that carries on is repeated in the report |
 | `COLLECT_STORES` | any | On a collector: only refresh these shops, e.g. `woolworths,aldi`. Unset, it does whatever the site asks |
 | `COLLECT_COLES` | `true` | On a collector: `false` stops it fetching Coles pages for the site |
 
@@ -77,7 +78,7 @@ Helpers (the collector program on your PC or someone else's) are added on the Ad
 |---|---|---|
 | `SMTP_URL` | — | Any SMTP service, e.g. `smtps://user:password@smtp.example.com:465`. Without it, emails go to the Admin page's outbox. **Admin page** (set it here to keep the password out of the database) |
 | `MAIL_FROM` | `SITE_NAME <no-reply@localhost>` | The "from" address. **Admin page** |
-| `ADMIN_ALERTS` | `true` | Email admins a summary when a price refresh has problems, and when a helper goes quiet |
+| `ADMIN_ALERTS` | `true` | Email admins a daily report when a price refresh has problems, or a helper goes quiet, and when they're fixed |
 
 ## Backups
 
