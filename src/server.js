@@ -9,6 +9,7 @@ import * as colesLive from './coles-live.js';
 import * as sharing from './sharing.js';
 import { adoptSiteToken } from './helpers.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
+import { pruneImages } from './images.js';
 import { sendDailyReport } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
 import { unusualDeals } from './deals.js';
@@ -55,6 +56,7 @@ if (SCRAPE_CRON) {
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
+cron.schedule('20 3 * * *', () => pruneImages()); // product photos not wanted for a while
 // The admins' daily report on refreshes and helpers (at most one a day, and only with news), after the morning refresh.
 cron.schedule(process.env.ADMIN_REPORT_CRON || '30 7 * * *', () => {
   sendDailyReport().catch((e) => console.error(`admin report: ${e.message}`));

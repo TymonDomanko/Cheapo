@@ -23,6 +23,7 @@ import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
 import * as colesLive from './coles-live.js';
 import * as helpers from './helpers.js';
+import { productImage } from './images.js';
 import * as sharing from './sharing.js';
 import { invitePage, preparingPage, inviteEmail } from './helper-invite.js';
 import { previewPaste } from './paste.js';
@@ -149,6 +150,14 @@ export function createApp() {
   // Pages handled by the single-page app.
   app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
   // For load balancers / platform health checks.
+  // Product photos, kept here (src/images.js).
+  app.get('/img/:id', async (req, res) => {
+    const img = /^\d+$/.test(req.params.id) ? await productImage(req.params.id).catch(() => null) : null;
+    if (!img) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=604800');
+    res.type(img.type).sendFile(img.file);
+  });
+
   app.get('/healthz', (req, res) => {
     getDb().prepare('SELECT 1').get();
     res.json({ ok: true, version: APP_VERSION });

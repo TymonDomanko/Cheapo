@@ -931,9 +931,12 @@ $('#results').addEventListener('click', (e) => {
 
 const NO_IMAGE = '<div class="thumb none" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8h14l-1.4 11.2a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>';
 
+/** A product's photo, from this site's copy (src/images.js). */
+const imageSrc = (p) => (p.id ? `/img/${p.id}` : p.image_url);
+
 function thumb(p) {
   return p.image_url
-    ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    ? `<img class="thumb" src="${esc(imageSrc(p))}" alt="" loading="lazy">`
     : NO_IMAGE;
 }
 
@@ -1077,7 +1080,7 @@ async function openProduct(id) {
   const s = d.stats;
   box.innerHTML = `
     <div class="detail-head">
-      ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" referrerpolicy="no-referrer">` : ''}
+      ${p.image_url ? `<img src="${esc(imageSrc(p))}" alt="">` : ''}
       <div>
         <h2>${esc(p.name)}</h2>
         <div class="hint">${chip(p.store)} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
