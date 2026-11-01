@@ -147,7 +147,7 @@ test('Coles: an answer for a page that has since gone to someone else is ignored
   assert.deepEqual([dairy.page, dairy.worker], [2, 'server'], 'and the department carries on with the server');
 });
 
-test('Coles: helpers can’t send search, list or barcode answers', () => {
+test('Coles: helpers can’t send search or list answers, or barcodes they weren’t asked for', () => {
   for (const kind of ['search', 'list', 'barcode']) {
     assert.throws(() => live.helperResult(samWorker, { job: { kind, q: 'milk', id: 1 }, items: [] }), /job you were given/);
   }
@@ -422,4 +422,32 @@ test('a shop kept with a connection, or with the store a shop gives by location'
   assert.throws(() => settings.setSetting('PREFERRED_CONNECTIONS', 'woolworths=everyone'), /Choose a connection or a store/);
   settings.setSetting('PREFERRED_CONNECTIONS', null);
   settings.setSetting('SERVER_SCRAPE_STORES', null);
+});
+
+test('Coles: with nothing else to do, helpers fetch product pages for barcodes, one page per connection', async () => {
+  const { getDb } = await import('../src/db.js');
+  const d = getDb();
+  const alex = helpers.list().find((x) => x.name === 'Alex’s laptop');
+  const alexWorker = { id: `h${alex.id}`, name: alex.name, helperId: alex.id };
+  // Nothing due: the whole shop was done just now, and today's specials too.
+  const st = JSON.parse(d.prepare("SELECT value FROM app_settings WHERE key = 'coles-live'").get().value);
+  Object.assign(st, { pass: null, lastPassAt: new Date(now).toISOString(), lastPassStartedAt: new Date(now).toISOString() });
+  st.specials = { day: new Date(now).toLocaleDateString('en-CA', { timeZone: process.env.TZ }), page: 99, pages: 1 };
+  d.prepare("UPDATE app_settings SET value = ? WHERE key = 'coles-live'").run(JSON.stringify(st));
+  d.prepare("UPDATE products SET barcode = '9300000000000' WHERE store = 'coles'").run();
+  for (const id of ['bc1', 'bc2']) {
+    d.prepare(`INSERT INTO products (store, store_product_id, name, price, product_url, available, first_seen, last_seen)
+      VALUES ('coles', ?, ?, 2, ?, 1, '2026-10-01', '2026-10-01')`).run(id, `Barcode Test ${id}`, `https://www.coles.com.au/product/barcode-test-${id}`);
+  }
+  minutes(30);
+  const a = live.helperNext(samWorker).job;
+  const b = live.helperNext(alexWorker).job;
+  assert.equal(a.kind, 'barcode');
+  assert.equal(b.kind, 'barcode');
+  assert.notEqual(a.id, b.id, 'never the same page twice at once');
+  assert.throws(() => live.helperResult(alexWorker, { job: a, gtin: '9311111111111', requests: 1 }), /job you were given/, 'only from whoever it was given to');
+  live.helperResult(samWorker, { job: a, gtin: '9311111111111', canonical: 'javascript:alert(1)', requests: 1 });
+  const row = d.prepare('SELECT barcode, product_url FROM products WHERE id = ?').get(a.id);
+  assert.equal(row.barcode, '9311111111111');
+  assert.match(row.product_url, /^https:\/\/www\.coles\.com\.au\/product\//, 'a link that isn’t a Coles product page is ignored');
 });

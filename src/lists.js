@@ -74,6 +74,7 @@ export function getListSummary(listId, userId) {
     excludedStores: parseStores(list.excluded_stores),
     igaStoreId: list.iga_store || defaultStoreId(),
     members,
+    shareToken: list.share_token || null,
   };
 }
 
@@ -142,6 +143,59 @@ export function acceptInvite(token, userId) {
   getDb().prepare(`INSERT INTO list_members (list_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)
     ON CONFLICT DO NOTHING`).run(listId, userId, nowIso());
   return listId;
+}
+
+// ---------------------------------------------------------------- a shopping link (no account needed)
+
+/** Make a new shopping link for a list (replacing any old one), or turn it off (on = false). */
+export function setShareLink(listId, userId, on = true) {
+  requireMember(listId, userId);
+  const token = on ? crypto.randomBytes(18).toString('base64url') : null;
+  getDb().prepare('UPDATE lists SET share_token = ? WHERE id = ?').run(token, listId);
+  return token;
+}
+
+function sharedListId(token) {
+  const row = /^[\w-]{20,40}$/.test(String(token)) && getDb().prepare('SELECT id FROM lists WHERE share_token = ?').get(String(token));
+  if (!row) throw httpError(404, 'This shopping link has been turned off, or isn’t right');
+  return row.id;
+}
+
+/**
+ * What someone with the shopping link sees: the items, which shop each is
+ * cheapest at, what's ticked and the total. Priced as the list's owner sees
+ * it; no one's email or settings.
+ */
+export function sharedListView(token) {
+  const listId = sharedListId(token);
+  const owner = getDb().prepare("SELECT user_id FROM list_members WHERE list_id = ? ORDER BY role = 'owner' DESC, joined_at LIMIT 1").get(listId);
+  const v = listView(listId, owner.user_id);
+  return {
+    name: v.name,
+    stores: v.included,
+    total: v.plan.total,
+    byStore: Object.fromEntries(Object.entries(v.plan.byStore).map(([s, x]) => [s, { total: x.total, count: x.items.length }])),
+    items: v.items.map((it) => {
+      const p = it.cheapest ? it.perStore[it.cheapest].product : it.anchor;
+      return {
+        id: it.id,
+        name: it.note ?? p?.name ?? '',
+        size: it.note != null ? null : p?.size_text || null,
+        quantity: it.quantity,
+        store: it.cheapest || null,
+        price: it.lineTotal ?? null,
+        checked: !!it.checkedAt,
+        aisle: it.aisle,
+      };
+    }),
+  };
+}
+
+/** Tick an item off from the shopping link. */
+export function setCheckedShared(token, itemId, checked) {
+  const listId = sharedListId(token);
+  if (itemListId(itemId) !== listId) throw httpError(404, 'Item not found');
+  getDb().prepare('UPDATE list_items SET checked_at = ?, checked_by = NULL WHERE id = ?').run(checked ? nowIso() : null, itemId);
 }
 
 /** Owners can remove anyone else; members can remove themselves (leave). */
@@ -491,7 +545,67 @@ export function listView(listId, userId) {
     singleStore,
     aisles: AISLES,
     layouts: layoutsFor(userId), // the section order this shopper walks each shop in, once learned
+    changes: changesSince(listId, userId, items, plan, memberships),
   };
+}
+
+// ---------------------------------------------------------------- since you last looked
+
+const MIN_CHANGE = 0.05; // dollars, and…
+const MIN_CHANGE_PCT = 0.03; // …of the price, to count as a change worth mentioning
+
+/** What each item costs now (each, at its cheapest shop): { itemId: { price, store } }. */
+function pricesNow(items, plan, memberships) {
+  const out = {};
+  for (const it of items) {
+    const s = plan.choice[it.id];
+    if (it.note == null && s) out[it.id] = { price: unitPriceFor(it.perStore[s].product, memberships), store: s };
+  }
+  return out;
+}
+
+/**
+ * How this person's list has changed since they last dismissed the note:
+ * items that got cheaper or dearer (each, at their cheapest shop), and what
+ * the list costs now against then. Null when nothing much has. The first
+ * look just remembers the prices.
+ */
+function changesSince(listId, userId, items, plan, memberships) {
+  const d = getDb();
+  const now = pricesNow(items, plan, memberships);
+  const seen = d.prepare('SELECT seen_at, prices FROM list_seen WHERE user_id = ? AND list_id = ?').get(userId, listId);
+  if (!seen) {
+    d.prepare('INSERT INTO list_seen (user_id, list_id, seen_at, prices) VALUES (?, ?, ?, ?)').run(userId, listId, nowIso(), JSON.stringify(now));
+    return null;
+  }
+  const before = JSON.parse(seen.prices);
+  const cheaper = [];
+  const dearer = [];
+  for (const it of items) {
+    const a = before[it.id];
+    const b = now[it.id];
+    if (!a || !b) continue; // new since, or can't be got now
+    const diff = Math.round((b.price - a.price) * 100) / 100;
+    if (Math.abs(diff) < MIN_CHANGE || Math.abs(diff) < a.price * MIN_CHANGE_PCT) continue;
+    const name = (it.perStore[b.store]?.product || it.anchor)?.name;
+    const change = { itemId: it.id, name, from: a.price, to: b.price, store: b.store, fromStore: a.store, quantity: it.quantity };
+    (diff < 0 ? cheaper : dearer).push(change);
+  }
+  if (!cheaper.length && !dearer.length) return null;
+  const sum = (list) => Math.round(list.reduce((n, c) => n + (c.to - c.from) * c.quantity, 0) * 100) / 100;
+  return { since: seen.seen_at, cheaper, dearer, saving: -sum(cheaper), extra: sum(dearer) };
+}
+
+/** Dismiss the note: remember today's prices as the ones last seen. */
+export function markSeen(listId, userId) {
+  requireMember(listId, userId);
+  const summary = getListSummary(listId, userId);
+  const memberships = getUser(userId)?.memberships || [];
+  const items = resolveItems(listId, summary.igaStoreId, memberships);
+  const plan = planFor(items, summary.stores.filter((s) => !summary.excludedStores.includes(s)), memberships);
+  getDb().prepare(`INSERT INTO list_seen (user_id, list_id, seen_at, prices) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id, list_id) DO UPDATE SET seen_at = excluded.seen_at, prices = excluded.prices`)
+    .run(userId, listId, nowIso(), JSON.stringify(pricesNow(items, plan, memberships)));
 }
 
 // ---------------------------------------------------------------- in the shop

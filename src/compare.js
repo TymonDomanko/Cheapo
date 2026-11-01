@@ -266,7 +266,34 @@ export function compareSearch(q, opts = {}) {
       members: eq.map((m) => ({ ...m.product, score: m.score, via: m.via || null })).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9)),
     });
   }
-  return groups;
+  return sortGroups(groups, opts);
+}
+
+/**
+ * sort: 'price' (cheapest first, by each item's cheapest shop) or 'unit'
+ * (cheapest per kg / L / item; whichever unit most of them are measured in
+ * first, since a kilo and a litre can't be compared).
+ */
+function sortGroups(groups, { sort, memberships } = {}) {
+  if (sort !== 'price' && sort !== 'unit') return groups;
+  const cheapest = (g) => (g.cheapest ? g.best[g.cheapest].product : g.anchor);
+  if (sort === 'price') {
+    return groups.map((g) => ({ g, k: unitPriceFor(cheapest(g), memberships) ?? Infinity })).sort((a, b) => a.k - b.k).map((x) => x.g);
+  }
+  const keyed = groups.map((g) => {
+    // The lowest price per unit among its shops.
+    let best = null;
+    for (const m of Object.values(g.best || {})) {
+      const v = perUnit(m.product, memberships);
+      if (v != null && (!best || v < best.v)) best = { v, unit: m.product.size_unit };
+    }
+    return { g, ...(best || { v: Infinity, unit: null }) };
+  });
+  const counts = {};
+  for (const k of keyed) if (k.unit) counts[k.unit] = (counts[k.unit] || 0) + 1;
+  const order = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  const rank = (u) => (u ? order.indexOf(u) : order.length);
+  return keyed.sort((a, b) => rank(a.unit) - rank(b.unit) || a.v - b.v).map((x) => x.g);
 }
 
 /** Price changes over time; IGA products' history is for the given IGA store. */

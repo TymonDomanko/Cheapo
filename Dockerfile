@@ -51,7 +51,10 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # Shown on the admin page (the publish workflow passes the commit and date). Last, so the layers above stay cached.
+# Also written to a file, which wins: Unraid keeps a container's variables from when it was
+# set up, so an APP_VERSION variable there would otherwise show an old version forever.
 ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
+RUN printf '%s' "$APP_VERSION" > /app/VERSION
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "src/server.js"]

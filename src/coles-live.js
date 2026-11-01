@@ -19,8 +19,8 @@
 // other connections, see src/helpers.js) each take a department (or the
 // specials) at a time and fetch its pages. The page limit is for all of them
 // together: with two connections each goes half as fast, so more helpers make
-// it more reliable, not heavier on Coles. Searches, lists and barcodes stay on
-// this server. A bot check pauses just the connection that got it (2 hours,
+// it more reliable, not heavier on Coles. Searches and lists stay on this
+// server; barcode pages go to whichever connection has nothing else to do. A bot check pauses just the connection that got it (2 hours,
 // doubling up to a day), and its department goes back for someone else.
 // Set COLES_PAGES_PER_HOUR=0 to go back to the nightly full crawl.
 
@@ -222,11 +222,21 @@ function pick(st, w) {
       return { kind: 'browse', dept: free.dept, name: free.name, page: free.page };
     }
   }
-  if (w === SERVER) {
-    const [p] = barcodeTodo(1);
-    if (p) return { kind: 'barcode', id: p.id, url: p.product_url };
+  // Barcodes with whatever time is left, each product page to one connection at a time.
+  const p = barcodeTodo(20).find((x) => !barcodeLeases.has(x.id) || barcodeLeases.get(x.id).until < clock());
+  if (p) {
+    barcodeLeases.set(p.id, { w, until: clock() + 30 * 60 * 1000 });
+    return { kind: 'barcode', id: p.id, url: p.product_url };
   }
   return null;
+}
+
+// Product pages handed out for barcodes: id → { w, until }.
+const barcodeLeases = new Map();
+/** Was this barcode page given to `w` (and so may it say what the barcode is)? */
+function ownsBarcode(w, id) {
+  const lease = barcodeLeases.get(id);
+  return !!lease && lease.w === w;
 }
 
 /**
@@ -300,7 +310,10 @@ function complete(w, job, result) {
       if (st.pass.depts.every((x) => x.done)) finishPass(st);
     }
   } else if (job.kind === 'barcode') {
-    saveBarcode(job.id, result.gtin || null, result.canonical || null);
+    barcodeLeases.delete(job.id);
+    const gtin = /^\d{8,14}$/.test(String(result.gtin || '')) ? String(result.gtin) : null;
+    const canonical = /^https:\/\/www\.coles\.com\.au\/product\/[\w-]+$/.test(String(result.canonical || '')) ? result.canonical : null;
+    saveBarcode(job.id, gtin, canonical);
   }
   save(st);
 }
@@ -360,7 +373,8 @@ export function helperNext(worker) {
 /** A helper sends back a page: { job, items, pages, cats, requests } or { job, blocked: message } / { job, error }. */
 export function helperResult(worker, body) {
   const job = body?.job;
-  if (!job || typeof job.kind !== 'string' || ['list', 'barcode', 'search'].includes(job.kind)) {
+  // Barcode pages only from the helper they were given to (searches and lists stay on this server).
+  if (!job || typeof job.kind !== 'string' || ['list', 'search'].includes(job.kind) || (job.kind === 'barcode' && !ownsBarcode(worker.id, Number(job.id)))) {
     throw Object.assign(new Error('Send back the job you were given'), { status: 400 });
   }
   dueAt.set(worker.id, clock());
@@ -529,5 +543,6 @@ export function reset() {
   queried.clear();
   lastAt.clear();
   dueAt.clear();
+  barcodeLeases.clear();
   local = null;
 }

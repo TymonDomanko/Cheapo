@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { getDb } from './db.js';
-import { createApp } from './app.js';
+import { createApp, appVersion } from './app.js';
 import { scrapeAll, scrapeStatus, serverStores, closeInterruptedRuns } from './scrapers/index.js';
 import { purgeExpiredSessions } from './auth.js';
 import { snapshot } from './backup.js';
@@ -9,6 +9,7 @@ import * as colesLive from './coles-live.js';
 import * as sharing from './sharing.js';
 import { adoptSiteToken } from './helpers.js';
 import { sendPriceAlerts, sendWeeklyDigests } from './alerts.js';
+import { pruneImages } from './images.js';
 import { sendDailyReport } from './admin-alerts.js';
 import { warmUp } from './match-index.js';
 import { unusualDeals } from './deals.js';
@@ -55,6 +56,7 @@ if (SCRAPE_CRON) {
   }, { timezone: process.env.TZ || undefined });
 }
 cron.schedule('0 3 * * *', purgeExpiredSessions);
+cron.schedule('20 3 * * *', () => pruneImages()); // product photos not wanted for a while
 // The admins' daily report on refreshes and helpers (at most one a day, and only with news), after the morning refresh.
 cron.schedule(process.env.ADMIN_REPORT_CRON || '30 7 * * *', () => {
   sendDailyReport().catch((e) => console.error(`admin report: ${e.message}`));
@@ -74,7 +76,7 @@ cron.schedule(process.env.BACKUP_CRON || '30 2 * * *', () => {
 }, { timezone: process.env.TZ || undefined });
 
 app.listen(PORT, () => {
-  console.log(`Cheapo (version ${process.env.APP_VERSION || 'dev'}) running at http://localhost:${PORT}`);
+  console.log(`Cheapo (version ${appVersion()}) running at http://localhost:${PORT}`);
   if (SCRAPE_CRON) console.log(`Prices refresh on schedule "${SCRAPE_CRON}" (set SCRAPE_CRON= to disable)`);
   if (process.env.DISABLE_BACKGROUND_SCRAPES !== 'true') {
     colesLive.start(); // each checks every 30s whether it has work

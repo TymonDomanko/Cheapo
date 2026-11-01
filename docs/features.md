@@ -33,6 +33,9 @@
 ## Shopping lists
 
 - **Add anything.** Type into the list's Add box and it searches. The cheapest of what you typed is picked by default, or press **Add as note** to keep plain text like "birthday card". **Paste a list** ("milk, bread, 2 x chips") adds several at once.
+- **Sort results.** Best match, cheapest first, or cheapest per kg / L (the unit most results are measured in first).
+- **Since you last looked.** Opening a list says what's got cheaper or dearer since you last pressed **Got it**, and what that saves or costs, item by item.
+- **A shopping link.** Share → **Shopping link** gives a link for someone without an account to see the list (grouped by the shop each thing is cheapest at, with the total) and tick things off as they shop. They can't change the list; make a new link or turn it off any time.
 - **Choose the list from Compare.** The **Add to** box next to the search picks which list the + buttons add to, starting with the last list you opened, or makes a new one.
 - **Add cheapest.** Adds "the cheapest 2L milk, any brand" rather than one product. Each shop's pick is worked out again whenever prices change.
 - **How each item matches.** For each item choose any brand of the same size, the same brand only, or this exact product. You can pick a different product at a particular shop, or rule a shop out.

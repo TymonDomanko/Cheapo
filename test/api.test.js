@@ -104,6 +104,71 @@ test('shared list: invite, both edit, outsiders locked out', async () => {
   assert.equal((await jo('DELETE', `/api/lists/${list.id}`)).status, 403, 'only the owner deletes');
 });
 
+test('since you last looked: what got cheaper or dearer on your list, until you say “got it”', async () => {
+  const { upsertProducts } = await import('../src/db.js');
+  const me = client();
+  await me('POST', '/api/auth/signup', { email: 'changes@example.com', password: 'password123' });
+  upsertProducts('aldi', [
+    { store_product_id: 'ch1', name: 'Changes Test Rice 1kg', brand: 'Changes', size_text: '1kg', price: 4 },
+    { store_product_id: 'ch2', name: 'Changes Test Oats 1kg', brand: 'Changes', size_text: '1kg', price: 3 },
+    { store_product_id: 'ch3', name: 'Changes Test Salt 1kg', brand: 'Changes', size_text: '1kg', price: 2 },
+  ]);
+  const list = (await me('POST', '/api/lists', { name: 'Pantry' })).body;
+  for (const q of ['changes+test+rice', 'changes+test+oats', 'changes+test+salt']) await me('POST', `/api/lists/${list.id}/items`, { productId: await productId(me, q, 'aldi'), quantity: q.includes('rice') ? 2 : 1 });
+  assert.equal((await me('GET', `/api/lists/${list.id}`)).body.changes, null, 'the first look just remembers the prices');
+
+  upsertProducts('aldi', [
+    { store_product_id: 'ch1', name: 'Changes Test Rice 1kg', brand: 'Changes', size_text: '1kg', price: 3.5 },
+    { store_product_id: 'ch2', name: 'Changes Test Oats 1kg', brand: 'Changes', size_text: '1kg', price: 3.6 },
+    { store_product_id: 'ch3', name: 'Changes Test Salt 1kg', brand: 'Changes', size_text: '1kg', price: 2.01 }, // too small to mention
+  ]);
+  const c = (await me('GET', `/api/lists/${list.id}`)).body.changes;
+  assert.deepEqual(c.cheaper.map((x) => [x.name, x.from, x.to]), [['Changes Test Rice 1kg', 4, 3.5]]);
+  assert.deepEqual(c.dearer.map((x) => x.name), ['Changes Test Oats 1kg']);
+  assert.equal(c.saving, 1, 'two bags, 50c each');
+  assert.equal(c.extra, 0.6);
+  assert.ok((await me('GET', `/api/lists/${list.id}`)).body.changes, 'still there until dismissed');
+  await me('POST', `/api/lists/${list.id}/seen`);
+  assert.equal((await me('GET', `/api/lists/${list.id}`)).body.changes, null);
+  assert.equal((await client()('POST', `/api/lists/${list.id}/seen`)).status, 401);
+});
+
+test('a shopping link: see the list and tick things off without an account; turn it off', async () => {
+  const owner = client();
+  await owner('POST', '/api/auth/signup', { email: 'linkowner@example.com', password: 'password123' });
+  const list = (await owner('POST', '/api/lists', { name: 'Weekly shop' })).body;
+  await owner('POST', `/api/lists/${list.id}/items`, { productId: await productId(owner, 'milk', 'woolworths'), quantity: 2 });
+  const other = (await owner('POST', '/api/lists', { name: 'Other list' })).body;
+  await owner('POST', `/api/lists/${other.id}/items`, { productId: await productId(owner, 'milk', 'woolworths') });
+  const otherItem = (await owner('GET', `/api/lists/${other.id}`)).body.items[0].id;
+
+  const eve = client();
+  assert.equal((await eve('POST', `/api/lists/${list.id}/share-link`)).status, 401, 'only people on the list make links');
+  const { url } = (await owner('POST', `/api/lists/${list.id}/share-link`)).body;
+  assert.match(url, /\/s\/[\w-]{20,}$/);
+  const token = url.split('/s/')[1];
+  assert.equal((await owner('GET', `/api/lists/${list.id}`)).body.shareToken, token);
+
+  const guest = client(); // no account
+  const v = (await guest('GET', `/api/shared/${token}`)).body;
+  assert.equal(v.name, 'Weekly shop');
+  assert.equal(v.items.length, 1);
+  assert.equal(v.items[0].quantity, 2);
+  assert.ok(v.items[0].store && v.items[0].price > 0, 'where it’s cheapest, and what it costs');
+  assert.ok(!JSON.stringify(v).includes('linkowner@example.com'), 'nobody’s email');
+
+  assert.equal((await guest('PUT', `/api/shared/${token}/items/${v.items[0].id}/checked`, { checked: true })).status, 200);
+  assert.ok((await owner('GET', `/api/lists/${list.id}`)).body.items[0].checkedAt, 'the owner sees the tick');
+  assert.equal((await guest('PUT', `/api/shared/${token}/items/${otherItem}/checked`, { checked: true })).status, 404, 'only this list’s items');
+  assert.equal((await guest('PATCH', `/api/items/${v.items[0].id}`, { quantity: 9 })).status, 401, 'can’t change the list');
+
+  const { url: fresh } = (await owner('POST', `/api/lists/${list.id}/share-link`)).body;
+  assert.equal((await guest('GET', `/api/shared/${token}`)).status, 404, 'a new link replaces the old');
+  await owner('DELETE', `/api/lists/${list.id}/share-link`);
+  assert.equal((await guest('GET', `/api/shared/${fresh.split('/s/')[1]}`)).status, 404, 'turned off');
+  assert.equal((await guest('GET', '/api/shared/short')).status, 404);
+});
+
 test('store exclusion shows what each store saves or costs', async () => {
   const api = client();
   await api('POST', '/api/auth/signup', { email: 'kim@example.com', password: 'password123' });

@@ -84,3 +84,19 @@ test('fresh fruit and veg: jars of minced garlic aren\'t fresh, and watermelon m
   assert.ok(w.produce, 'the fruit, not watermelon drinks');
   assert.equal(aisleFor({ name: 'Three Threes Pickled Onions', category: 'Pickled Vegetables' }), 'pantry', 'pickled veg are pantry');
 });
+
+test('search results sort by cheapest, or cheapest per kg / L with the usual unit first', async () => {
+  const { compareSearch } = await import('../src/compare.js');
+  const cheapestOf = (g) => (g.cheapest ? g.best[g.cheapest].product : g.anchor);
+  const prices = compareSearch('tomato', { sort: 'price', limit: 60 }).map((g) => cheapestOf(g).price);
+  assert.deepEqual(prices, [...prices].sort((a, b) => a - b));
+  const byUnit = compareSearch('tomato', { sort: 'unit', limit: 60 }).map((g) => {
+    const p = cheapestOf(g);
+    return { unit: p.size_unit, per: p.size_unit === 'ea' ? p.price / p.size_qty : (p.price / p.size_qty) * 1000 };
+  });
+  const first = byUnit[0].unit;
+  const lead = byUnit.filter((x) => x.unit === first);
+  assert.ok(lead.length >= byUnit.filter((x) => x.unit !== first).length / 2, 'the most common unit leads');
+  assert.deepEqual(lead.map((x) => x.per), lead.map((x) => x.per).sort((a, b) => a - b));
+  assert.equal(byUnit.findIndex((x) => x.unit !== first) === -1 || byUnit.slice(byUnit.findIndex((x) => x.unit !== first)).every((x) => x.unit !== first), true, 'one unit, then the next');
+});

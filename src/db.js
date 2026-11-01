@@ -169,6 +169,9 @@ function migrate(d) {
   if (!userCols.includes('iga_store')) d.exec('ALTER TABLE users ADD COLUMN iga_store TEXT');
   const listCols = d.prepare('PRAGMA table_info(lists)').all().map((c) => c.name);
   if (!listCols.includes('iga_store')) d.exec('ALTER TABLE lists ADD COLUMN iga_store TEXT');
+  // A shopping link: anyone with it can see the list and tick things off, without an account.
+  if (!listCols.includes('share_token')) d.exec('ALTER TABLE lists ADD COLUMN share_token TEXT');
+  d.exec('CREATE UNIQUE INDEX IF NOT EXISTS lists_share_token ON lists(share_token) WHERE share_token IS NOT NULL');
   const runCols = d.prepare('PRAGMA table_info(scrape_runs)').all().map((c) => c.name);
   if (!runCols.includes('location')) d.exec('ALTER TABLE scrape_runs ADD COLUMN location TEXT');
 
@@ -454,6 +457,15 @@ function migrateAccountsAndShopping(d) {
       last_notified_price REAL,
       last_notified_at TEXT,
       PRIMARY KEY (user_id, product_id)
+    );
+
+    -- What each person last saw a list's items cost, for "since you last looked".
+    CREATE TABLE IF NOT EXISTS list_seen (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      seen_at TEXT NOT NULL,
+      prices TEXT NOT NULL, -- JSON { itemId: { price, store } }
+      PRIMARY KEY (user_id, list_id)
     );
 
     -- Saved regular shops and finished-shop history, to add again later.

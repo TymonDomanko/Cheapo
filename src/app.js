@@ -23,6 +23,7 @@ import * as collectorBundle from './collector-bundle.js';
 import * as collectorExe from './collector-exe.js';
 import * as colesLive from './coles-live.js';
 import * as helpers from './helpers.js';
+import { productImage } from './images.js';
 import * as sharing from './sharing.js';
 import { invitePage, preparingPage, inviteEmail } from './helper-invite.js';
 import { previewPaste } from './paste.js';
@@ -40,7 +41,7 @@ import crypto from 'node:crypto';
 import { startOrder, orderStatus } from './order/index.js';
 
 // Which build this is (set when the Docker image is built), so you can tell an update arrived.
-const APP_VERSION = process.env.APP_VERSION || 'dev';
+const APP_VERSION = appVersion();
 
 // Alcohol is left out of search, deals and price changes unless you've turned it on in Settings.
 const wantsAlcohol = (req) => !!req.user?.showAlcohol;
@@ -97,6 +98,17 @@ function versionedIndex() {
     .replace('href="/styles.css"', `href="/styles.css?v=${tag('styles.css')}"`);
 }
 
+/** The running version: the image's VERSION file (see Dockerfile), else APP_VERSION, else "dev". */
+export function appVersion() {
+  try {
+    const v = fs.readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim();
+    if (v && v !== 'dev') return v;
+  } catch {
+    /* not built as an image */
+  }
+  return process.env.APP_VERSION || 'dev';
+}
+
 export function createApp() {
   const app = express();
   // Number of reverse proxies in front of the app (e.g. 1), so req.ip / HTTPS detection are right.
@@ -136,8 +148,16 @@ export function createApp() {
   // Barcode reading for phones without a built-in barcode reader (iPhone Safari).
   app.use('/vendor/zxing', express.static(path.resolve('node_modules/@zxing/library/umd'), vendor));
   // Pages handled by the single-page app.
-  app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
+  app.get(['/index.html', '/login', '/signup', '/settings', '/join/:token', '/s/:token', '/forgot-password', '/reset-password', '/verify-email', '/privacy'], spa);
   // For load balancers / platform health checks.
+  // Product photos, kept here (src/images.js).
+  app.get('/img/:id', async (req, res) => {
+    const img = /^\d+$/.test(req.params.id) ? await productImage(req.params.id).catch(() => null) : null;
+    if (!img) return res.status(404).end();
+    res.set('Cache-Control', 'public, max-age=604800');
+    res.type(img.type).sendFile(img.file);
+  });
+
   app.get('/healthz', (req, res) => {
     getDb().prepare('SELECT 1').get();
     res.json({ ok: true, version: APP_VERSION });
@@ -182,7 +202,7 @@ export function createApp() {
 
   const searchLimit = rateLimit({ windowMs: 60000, max: Number(process.env.SEARCH_RATE_LIMIT) || 90 });
   app.get('/api/search', searchLimit, h((req) => {
-    const { q = '', store, specials, mode } = req.query;
+    const { q = '', store, specials, mode, sort } = req.query;
     const groups = compareSearch(String(q).slice(0, 100), {
       store,
       stores: shopsFor(req),
@@ -191,7 +211,9 @@ export function createApp() {
       alcohol: wantsAlcohol(req),
       specialsOnly: specials === '1',
       mode: mode === 'exact' ? 'exact' : 'similar',
-      limit: Math.min(Number(req.query.limit) || 30, 60),
+      sort: sort === 'price' || sort === 'unit' ? sort : null,
+      // Sorted by price: from a wider set, so the cheapest aren't just the cheapest of the best matches.
+      limit: sort === 'price' || sort === 'unit' ? 60 : Math.min(Number(req.query.limit) || 30, 60),
       offset: Math.max(0, Number(req.query.offset) || 0),
     });
     // Coles prices over a day old: fetch Coles' own results for this search now.
@@ -450,6 +472,23 @@ export function createApp() {
     return { ...inv, url: `${req.protocol}://${req.get('host')}/join/${inv.token}` };
   }));
   app.get('/api/invites/:token', h((req) => lists.describeInvite(req.params.token)));
+  // A shopping link: see a list and tick things off without an account.
+  const shareUrl = (req, token) => (token ? `${siteUrl(req)}/s/${token}` : null);
+  app.post('/api/lists/:id/seen', requireUser, h((req) => {
+    lists.markSeen(id(req.params.id), req.user.id);
+    return { ok: true };
+  }));
+  app.post('/api/lists/:id/share-link', requireUser, h((req) => ({ url: shareUrl(req, lists.setShareLink(id(req.params.id), req.user.id, true)) })));
+  app.delete('/api/lists/:id/share-link', requireUser, h((req) => {
+    lists.setShareLink(id(req.params.id), req.user.id, false);
+    return { url: null };
+  }));
+  const sharedLimit = rateLimit({ windowMs: 60000, max: 120 });
+  app.get('/api/shared/:token', sharedLimit, h((req) => lists.sharedListView(req.params.token)));
+  app.put('/api/shared/:token/items/:item/checked', sharedLimit, h((req) => {
+    lists.setCheckedShared(req.params.token, id(req.params.item), !!req.body?.checked);
+    return { ok: true };
+  }));
   app.post('/api/invites/:token/accept', requireUser, h((req) => ({ listId: lists.acceptInvite(req.params.token, req.user.id) })));
   app.delete('/api/lists/:id/members/:userId', requireUser, h((req) => {
     lists.removeMember(id(req.params.id), req.user.id, id(req.params.userId));

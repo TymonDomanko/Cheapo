@@ -141,6 +141,8 @@ async function route() {
   const path = location.pathname;
   const join = path.match(/^\/join\/([\w-]+)$/);
   if (join) return handleJoin(join[1]);
+  const shared = path.match(/^\/s\/([\w-]+)$/);
+  if (shared) return openSharedList(shared[1]);
   const page = path.slice(1);
   if (PAGES.includes(page)) {
     if (page === 'settings' && !user()) return goToAuth('login', 'Log in to change your settings.', { type: 'goto', path: '/settings' });
@@ -711,7 +713,7 @@ document.addEventListener('click', async (e) => {
 
 let searchTimer;
 let searchSeq = 0;
-['#q', '#store-filter', '#mode-filter', '#specials'].forEach((s) => $(s).addEventListener('input', () => {
+['#q', '#store-filter', '#mode-filter', '#sort-filter', '#specials'].forEach((s) => $(s).addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(runSearch, 250);
 }));
@@ -730,6 +732,7 @@ async function runSearch({ again = false } = {}) {
     q: $('#q').value.trim(),
     store: $('#store-filter').value,
     mode: $('#mode-filter').value,
+    sort: $('#sort-filter').value,
     specials: $('#specials').checked ? '1' : '',
   });
   const box = $('#results');
@@ -931,9 +934,12 @@ $('#results').addEventListener('click', (e) => {
 
 const NO_IMAGE = '<div class="thumb none" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 8h14l-1.4 11.2a2 2 0 0 1-2 1.8H8.4a2 2 0 0 1-2-1.8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>';
 
+/** A product's photo, from this site's copy (src/images.js). */
+const imageSrc = (p) => (p.id ? `/img/${p.id}` : p.image_url);
+
 function thumb(p) {
   return p.image_url
-    ? `<img class="thumb" src="${esc(p.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    ? `<img class="thumb" src="${esc(imageSrc(p))}" alt="" loading="lazy">`
     : NO_IMAGE;
 }
 
@@ -1077,7 +1083,7 @@ async function openProduct(id) {
   const s = d.stats;
   box.innerHTML = `
     <div class="detail-head">
-      ${p.image_url ? `<img src="${esc(p.image_url)}" alt="" referrerpolicy="no-referrer">` : ''}
+      ${p.image_url ? `<img src="${esc(imageSrc(p))}" alt="">` : ''}
       <div>
         <h2>${esc(p.name)}</h2>
         <div class="hint">${chip(p.store)} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
@@ -1361,6 +1367,27 @@ async function loadList() {
   refreshListCount().catch(() => {});
 }
 
+/** "Since you last looked": what got cheaper or dearer on this list. */
+function changesNote(c) {
+  const when = new Date(c.since).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+  const line = (x) => `<li>${esc(x.name)}: ${money(x.from)} → <strong>${money(x.to)}</strong>${x.store !== x.fromStore ? ` <span class="hint">now at</span> ${chip(x.store)}` : ''}</li>`;
+  const parts = [
+    c.cheaper.length && `<strong class="good">${c.cheaper.length} cheaper</strong>${c.saving >= 0.01 ? ` (save ${money(c.saving)})` : ''}`,
+    c.dearer.length && `${c.dearer.length} dearer${c.extra >= 0.01 ? ` (+${money(c.extra)})` : ''}`,
+  ].filter(Boolean);
+  return `<div class="notice changes-note">
+    <p>Since you last looked (${esc(when)}): ${parts.join(' · ')}.</p>
+    <details><summary>What changed</summary><ul>${[...c.cheaper, ...c.dearer].map(line).join('')}</ul></details>
+    <button type="button" class="small ghost" id="changes-seen">Got it</button>
+  </div>`;
+}
+
+document.addEventListener('click', async (e) => {
+  if (e.target.id !== 'changes-seen' || !state.list) return;
+  e.target.closest('.changes-note').remove();
+  await api(`/api/lists/${state.list.id}/seen`, { method: 'POST' }).catch(() => {});
+});
+
 function renderList() {
   const L = state.list;
   const isOwner = L.role === 'owner';
@@ -1385,6 +1412,7 @@ function renderList() {
       </div>
     </div>
     ${others.length ? `<p class="hint">Shared with ${others.map((m) => esc(m.name)).join(', ')}. Changes anyone makes show up for everyone.</p>` : ''}
+    ${L.changes ? changesNote(L.changes) : ''}
     <form id="quick-add" class="quick-add">
       <input name="note" maxlength="120" placeholder="Add something — e.g. milk 2L, or birthday card" aria-label="Add to the list" autocomplete="off">
       <button class="small" type="submit">Add</button>
@@ -2370,6 +2398,9 @@ setInterval(() => {
 
 // ================================================================== sharing
 
+const shopLinkRow = (url) => `<div class="copy-row"><input readonly value="${esc(url)}" id="shop-link-url"><button class="small" id="copy-shop-link">Copy</button></div>
+  <p><button class="small ghost" id="new-shop-link">New link</button> <button class="small ghost" id="stop-shop-link">Turn off</button></p>`;
+
 async function openShare() {
   const L = state.list;
   const box = $('#share-detail');
@@ -2377,6 +2408,9 @@ async function openShare() {
     <p>Anyone with the link can join this list after logging in, and add or change items. Links expire after 7 days.</p>
     <p><button class="primary" id="make-invite">Create invite link</button></p>
     <div id="invite-out"></div>
+    <h3>Shopping link</h3>
+    <p class="hint">For someone doing the shop who hasn’t got an account: they can see the list, where each thing is cheapest, and tick things off. They can’t change the list.</p>
+    <div id="shop-link">${L.shareToken ? shopLinkRow(`${location.origin}/s/${L.shareToken}`) : '<button class="small" id="make-shop-link">Create shopping link</button>'}</div>
     <h3>People on this list</h3>
     <ul class="members">${L.members.map((m) => `<li>${esc(m.name)} <span class="hint">${esc(m.email)}${m.role === 'owner' ? ' · owner' : ''}</span>
       ${L.role === 'owner' && m.id !== user().id ? `<button class="small ghost" data-remove-member="${m.id}">Remove</button>` : ''}</li>`).join('')}</ul>`;
@@ -2386,11 +2420,69 @@ async function openShare() {
     $('#invite-out').innerHTML = `<div class="copy-row"><input readonly value="${esc(inv.url)}" id="invite-url"><button class="small" id="copy-invite">Copy</button></div>`;
     $('#copy-invite').addEventListener('click', () => copyText(inv.url));
   });
+  box.onclick = async (e) => { // (replaced each time the dialog opens)
+    const t = e.target;
+    if (t.id === 'make-shop-link' || t.id === 'new-shop-link') {
+      const { url } = await api(`/api/lists/${L.id}/share-link`, { method: 'POST' });
+      $('#shop-link').innerHTML = shopLinkRow(url);
+      copyText(url);
+    } else if (t.id === 'copy-shop-link') copyText($('#shop-link-url').value);
+    else if (t.id === 'stop-shop-link') {
+      await api(`/api/lists/${L.id}/share-link`, { method: 'DELETE' });
+      $('#shop-link').innerHTML = '<p class="hint">The link’s turned off.</p><button class="small" id="make-shop-link">Create shopping link</button>';
+    } else return;
+    loadList().catch(() => {});
+  };
   $$('[data-remove-member]', box).forEach((b) => b.addEventListener('click', async () => {
     await api(`/api/lists/${L.id}/members/${b.dataset.removeMember}`, { method: 'DELETE' });
     await loadList();
     openShare();
   }));
+}
+
+// ================================================================== a shopping link (no account needed)
+
+let sharedTimer = null;
+async function openSharedList(token) {
+  show('shared');
+  const root = $('#shared-root');
+  const draw = (v) => {
+    const byStore = {};
+    for (const it of v.items) (byStore[it.store || ''] ||= []).push(it);
+    const left = v.items.filter((it) => !it.checked).length;
+    root.innerHTML = `<h2>${esc(v.name)}</h2>
+      <p class="hint">A shared shopping list from ${esc(state.config?.site?.name || 'Cheapo')}. Tick things off as you go: whoever shared it sees it too.</p>
+      <p class="shared-total"><strong>${money(v.total)}</strong> <span class="hint">· ${left} of ${v.items.length} to get</span></p>
+      ${[...v.stores, ''].filter((s) => byStore[s]).map((s) => `<section class="card shared-store">
+        <h3>${s ? chip(s) : 'Other'} ${s && v.byStore[s] ? `<span class="hint">${money(v.byStore[s].total)}</span>` : ''}</h3>
+        <ul class="shared-items">${byStore[s].map((it) => `<li class="${it.checked ? 'done' : ''}">
+          <label class="check"><input type="checkbox" data-shared-tick="${it.id}" ${it.checked ? 'checked' : ''}>
+          <span>${it.quantity > 1 ? `${it.quantity} × ` : ''}${esc(it.name)}${it.size && !it.name.toLowerCase().replace(/\s/g, '').includes(it.size.toLowerCase().replace(/\s/g, '')) ? ` <span class="hint">${esc(it.size)}</span>` : ''}</span></label>
+          <span class="price">${it.price != null ? money(it.price) : ''}</span></li>`).join('')}</ul></section>`).join('')}
+      <p class="hint">Want your own lists, and the cheapest of everything? <a href="/signup" data-link>Make a free account</a>.</p>`;
+  };
+  const load = async () => {
+    try {
+      draw(await api(`/api/shared/${token}`));
+    } catch (e) {
+      clearInterval(sharedTimer);
+      root.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  };
+  await load();
+  clearInterval(sharedTimer);
+  sharedTimer = setInterval(() => !document.hidden && location.pathname === `/s/${token}` && !root.querySelector('input:focus') && load(), 10000);
+  root.onchange = async (e) => {
+    const box = e.target.closest('[data-shared-tick]');
+    if (!box) return;
+    box.closest('li').classList.toggle('done', box.checked);
+    try {
+      await api(`/api/shared/${token}/items/${box.dataset.sharedTick}/checked`, { method: 'PUT', body: { checked: box.checked } });
+    } catch (err) {
+      toast(err.message);
+      box.checked = !box.checked;
+    }
+  };
 }
 
 async function copyText(text) {

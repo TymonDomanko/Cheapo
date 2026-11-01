@@ -11,6 +11,7 @@ export const COLLECTOR_CODE = [
   'src/promos.js',
   'src/scrapers/registry.js',
   'src/scrapers/http.js',
+  'src/scrapers/devtools-browser.js',
   'src/scrapers/woolworths.js',
   'src/scrapers/coles.js',
   'src/scrapers/coles-pages.js',
