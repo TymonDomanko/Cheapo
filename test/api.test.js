@@ -641,7 +641,8 @@ test('collector download for a helper, version check and self-update bundle', as
   const zipVersion = collectorVersion((p) => files[p]);
 
   // The collector asks for the latest version and gets the matching code.
-  const call = (p) => fetch(base + p, { headers: { Authorization: `Bearer ${token}`, 'X-Collector-Version': 'old123', 'X-Collector-Mode': 'bundle' } }).then((r) => r.json());
+  const setup = JSON.stringify({ host: 'KITCHEN-PC', platform: 'win32', browser: 'msedge.exe', stores: ['woolworths', 'aldi'], coles: false, log: 'C:\\Users\\me\\AppData\\Local\\GroceryCollector\\collector.log' });
+  const call = (p) => fetch(base + p, { headers: { Authorization: `Bearer ${token}`, 'X-Collector-Version': 'old123', 'X-Collector-Mode': 'bundle', 'X-Collector-Setup': setup } }).then((r) => r.json());
   assert.equal((await call('/api/collector/latest')).version, zipVersion);
   const bundle = await call('/api/collector/bundle');
   assert.equal(collectorVersion((p) => bundle.files[p]), bundle.version);
@@ -652,6 +653,8 @@ test('collector download for a helper, version check and self-update bundle', as
   const mine = (await admin('GET', '/api/admin/helpers')).body.helpers.find((x) => x.id === pc.id);
   assert.equal(mine.version, 'old123');
   assert.equal(mine.upToDate, false);
+  // …and how it's set up: which computer, its browser, the shops it's limited to, where its log is.
+  assert.deepEqual(mine.setup, { host: 'KITCHEN-PC', platform: 'win32', browser: 'msedge.exe', stores: ['woolworths', 'aldi'], coles: false, log: 'C:\\Users\\me\\AppData\\Local\\GroceryCollector\\collector.log' });
   assert.equal((await admin('GET', '/api/admin/settings')).body.collector.latest, zipVersion);
   // Repo files and served files fingerprint the same.
   assert.equal(collectorVersion((p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8')), zipVersion);

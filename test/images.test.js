@@ -16,11 +16,14 @@ const { pruneImages } = await import('../src/images.js');
 
 let served = 0;
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 0xff, 0xd9]);
 const shop = http.createServer((req, res) => {
   if (req.url === '/milk.png') {
     served++;
     return void res.writeHead(200, { 'Content-Type': 'image/png' }).end(PNG);
   }
+  if (req.url === '/coles.jpg') return void res.writeHead(200, { 'Content-Type': 'image/jpg' }).end(JPEG); // Coles' server says image/jpg
+  if (req.url === '/fake.png') return void res.writeHead(200, { 'Content-Type': 'image/png' }).end('<html>not really</html>');
   if (req.url === '/page.html') return void res.writeHead(200, { 'Content-Type': 'text/html' }).end('<p>not a photo</p>');
   res.writeHead(404).end();
 });
@@ -49,6 +52,13 @@ test('a product photo is fetched once, kept, and served from this site', async (
   assert.equal(served, 1, 'fetched from the shop once');
 });
 
+test('a photo whose server names its type oddly (Coles: image/jpg) still works', async () => {
+  const r = await fetch(`${base}/img/${add('img5', `${shopUrl}/coles.jpg`)}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'image/jpeg');
+  assert.equal((await fetch(`${base}/img/${add('img6', `${shopUrl}/fake.png`)}`)).status, 404, 'says it’s a photo but isn’t');
+});
+
 test('missing or not-a-photo gives 404, and only products’ own photos can be fetched', async () => {
   assert.equal((await fetch(`${base}/img/${add('img2', `${shopUrl}/gone.png`)}`)).status, 404);
   assert.equal((await fetch(`${base}/img/${add('img3', `${shopUrl}/page.html`)}`)).status, 404, 'a web page isn’t a photo');
@@ -60,6 +70,6 @@ test('missing or not-a-photo gives 404, and only products’ own photos can be f
 test('photos not wanted for a while are forgotten', () => {
   const dir = path.join(path.dirname(process.env.DB_PATH), 'images');
   for (const f of fs.readdirSync(dir)) fs.utimesSync(path.join(dir, f), new Date('2020-01-01'), new Date('2020-01-01'));
-  assert.equal(pruneImages(), 1);
+  assert.equal(pruneImages(), 2);
   assert.deepEqual(fs.readdirSync(dir), []);
 });

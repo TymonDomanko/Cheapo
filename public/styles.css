@@ -110,7 +110,7 @@ input[type="search"], select, input[type="number"] {
   display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; justify-content: space-between;
   padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.brand { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; }
+.brand { display: grid; grid-template-columns: 1fr auto auto; column-gap: 8px; align-items: center; }
 .brand h1 { font-size: 18px; grid-column: 1; }
 /* The logo: the winking specials sticker and a "Cheapo!" wordmark */
 .brand-name { display: flex; align-items: center; gap: 8px; }
@@ -119,6 +119,8 @@ input[type="search"], select, input[type="number"] {
 .brand-text.bang::after { content: "!"; color: var(--text); }
 .brand .sub { grid-column: 1; }
 .theme-toggle { grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); border-color: var(--border); }
+.help-btn { grid-column: 3; font-weight: 700; font-size: 17px; }
+.help-btn[hidden] { display: none; }
 .brand .sub { color: var(--muted); font-size: 13px; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs button { border: none; background: transparent; padding: 8px 12px; color: var(--text-2); }
@@ -267,6 +269,16 @@ dialog .close { position: absolute; right: 12px; top: 10px; border: none; backgr
 .changes-note p { margin: 0 0 6px; }
 .changes-note ul { margin: 6px 0; padding-left: 18px; font-size: 14px; }
 .changes-note .good { color: var(--good); }
+.shop-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+/* First-time walk-through: a dimmed page with a hole round the part being explained, and a card. */
+.tour-spot { position: fixed; z-index: 1000; border-radius: var(--radius); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); pointer-events: none; transition: all 0.25s ease; }
+.tour-card { position: fixed; z-index: 1001; width: min(340px, calc(100vw - 24px)); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); transition: top 0.25s ease, left 0.25s ease; }
+.tour-card h3 { margin: 0 0 6px; font-size: 17px; }
+.tour-card p { margin: 0 0 10px; color: var(--text-2); line-height: 1.4; }
+.tour-card .tour-step { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.tour-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+.tour-buttons [data-tour="skip"] { margin-right: auto; }
+@media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; } }
 .shared-store { margin: 12px 0; }
 .shared-store h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
 .shared-items { list-style: none; margin: 0; padding: 0; }
@@ -550,6 +562,7 @@ a.plain-link:hover { text-decoration: underline; }
   .brand { display: flex; align-items: center; gap: 10px; flex: 1; }
   .brand .sub { display: none; }
   .theme-toggle { margin-left: auto; width: 34px; height: 34px; }
+  .help-btn { margin-left: 0; }
   .account-wide { display: none; }
   .account-menu { display: block; }
   /* The tabs become an app-style bar along the bottom. */

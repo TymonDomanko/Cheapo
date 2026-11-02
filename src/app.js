@@ -555,7 +555,7 @@ export function createApp() {
     if (!worker) {
       return res.status(401).json({ error: helpers.list().length ? 'Bad collector token' : 'This server has no helpers yet (Admin → Site settings → Helpers)' });
     }
-    const seen = { version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode') };
+    const seen = { version: req.get('X-Collector-Version'), mode: req.get('X-Collector-Mode'), setup: req.get('X-Collector-Setup') };
     helpers.touch(worker, seen);
     req.worker = worker;
     next();

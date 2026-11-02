@@ -68,6 +68,7 @@ Helpers (the collector program on your PC or someone else's) are added on the Ad
 | `ADMIN_REPORT_CRON` | `30 7 * * *` | When admins' daily report is sent (in `TZ`). At most one a day, only when there's news |
 | `ADMIN_REMIND_DAYS` | `3` | How often a problem that carries on is repeated in the report |
 | `COLLECT_STORES` | any | On a collector: only refresh these shops, e.g. `woolworths,aldi`. Unset, it does whatever the site asks |
+| `COLLECT_LOG_FILE` | `collector.log` in the helper's data folder | On a collector: where it also writes what it prints (`%LOCALAPPDATA%\GroceryCollector\collector.log` on Windows, `~/.local/share/grocery-collector/collector.log` on Linux). `false` turns it off. Not used in Docker. The Admin page shows each helper's log path, computer name, browser and any shop limits |
 | `COLLECT_COLES` | `true` | On a collector: `false` stops it fetching Coles pages for the site |
 | `COLLECT_BROWSER` | `true` | On a collector: use an installed Edge, Chrome or Chromium for the shops that block programs (Coles, Liquorland). `false` turns it off |
 | `BROWSER_SHOPS`, `BROWSER_PATH`, `BROWSER_HEADLESS`, `BROWSER_ARGS` | — | Which shops go through the browser (set automatically on a collector that finds one), which browser, `false` to show its window, and extra switches for it |

@@ -126,6 +126,8 @@ function showTab(name) {
 }
 
 function show(name) {
+  endTour();
+  $('#help-btn').hidden = !['compare', 'list', 'changes', 'settings'].includes(name);
   $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   $$('.tab').forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   window.scrollTo(0, 0);
@@ -152,6 +154,7 @@ async function route() {
     if (page === 'settings') {
       fillSettings();
       fillInstallCard();
+      firstTimeTour('settings', () => !$('#tab-settings').hidden);
     }
     else if (page === 'privacy') renderPrivacy();
     else if (page === 'verify-email') confirmEmail();
@@ -796,6 +799,7 @@ async function renderHome(seq) {
   if (!h.regulars?.length) sections.reverse();
   box.innerHTML = `${sections.join('')}
     <p><button type="button" class="small" id="browse-specials">Browse all specials</button></p>`;
+  firstTimeTour('compare', onTab('compare'));
 }
 
 function dealCardShell(p, inner) {
@@ -939,13 +943,18 @@ const imageSrc = (p) => (p.id ? `/img/${p.id}` : p.image_url);
 
 function thumb(p) {
   return p.image_url
-    ? `<img class="thumb" src="${esc(imageSrc(p))}" alt="" loading="lazy">`
+    ? `<img class="thumb" src="${esc(imageSrc(p))}" data-orig="${esc(p.image_url)}" alt="" loading="lazy">`
     : NO_IMAGE;
 }
 
 // A product photo that won't load gets the same placeholder (inline onerror isn't allowed by the page's security policy).
+// If our copy can't be had, the shop's own server gets a go first.
 document.addEventListener('error', (e) => {
-  if (e.target.matches?.('img.thumb')) e.target.outerHTML = NO_IMAGE;
+  const img = e.target;
+  if (img.dataset?.orig && /^https:\/\//.test(img.dataset.orig)) {
+    img.src = img.dataset.orig;
+    delete img.dataset.orig;
+  } else if (img.matches?.('img.thumb')) img.outerHTML = NO_IMAGE;
 }, true);
 
 /** Is this shopper a member of the store's loyalty scheme (so member prices apply)? */
@@ -1083,7 +1092,7 @@ async function openProduct(id) {
   const s = d.stats;
   box.innerHTML = `
     <div class="detail-head">
-      ${p.image_url ? `<img src="${esc(imageSrc(p))}" alt="">` : ''}
+      ${p.image_url ? `<img src="${esc(imageSrc(p))}" data-orig="${esc(p.image_url)}" alt="">` : ''}
       <div>
         <h2>${esc(p.name)}</h2>
         <div class="hint">${chip(p.store)} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
@@ -1423,6 +1432,7 @@ function renderList() {
     ${L.items.length ? totalBar(L) : ''}
     ${renderStorePanel(L)}
     ${L.items.length ? renderSummary(L) : ''}`;
+  if (L.items.length) firstTimeTour('list', () => !state.shopping && !$('#tab-list').hidden);
 }
 
 /** What `qty` of a product costs this shopper (multi-buys and their member prices). Mirrors src/promos.js. */
@@ -1747,6 +1757,165 @@ const setShopPref = (key, value) => {
 
 // Keep the phone's screen on while shopping, where the browser allows it.
 let wakeLock = null;
+// ---------------------------------------------------------------- first-time walk-through
+// A few cards, each pointing at part of the page. Shown once (remembered on this
+// device); "? How this works" shows it again. Steps whose part isn't on the page
+// (e.g. shop tabs with one shop) are skipped.
+let tour = null;
+const seenTour = (key) => {
+  try {
+    return localStorage.getItem(`tour:${key}`) === 'done';
+  } catch {
+    return true; // no storage: don't show it on every visit
+  }
+};
+
+function startTour(key, steps) {
+  endTour();
+  const live = steps.filter((st) => visible(document.querySelector(st.target)));
+  if (!live.length) return;
+  const spot = document.createElement('div');
+  spot.className = 'tour-spot';
+  const card = document.createElement('div');
+  card.className = 'tour-card';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-live', 'polite');
+  document.body.append(spot, card);
+  let i = 0;
+  const finish = () => {
+    try {
+      localStorage.setItem(`tour:${key}`, 'done');
+    } catch {
+      /* storage blocked */
+    }
+    endTour();
+  };
+  const show = () => {
+    const st = live[i];
+    card.innerHTML = `<p class="tour-step">${i + 1} of ${live.length}</p>
+      <h3>${st.title}</h3><p>${st.text}</p>
+      <div class="tour-buttons">
+        <button type="button" class="small ghost" data-tour="skip">${i === live.length - 1 ? 'Close' : 'Skip'}</button>
+        ${i ? '<button type="button" class="small" data-tour="back">Back</button>' : ''}
+        <button type="button" class="small primary" data-tour="next">${i === live.length - 1 ? 'Got it' : 'Next'}</button>
+      </div>`;
+    document.querySelector(st.target)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(place, 350);
+    place();
+    card.querySelector('[data-tour="next"]').focus({ preventScroll: true });
+  };
+  // Re-find the part each time: the shop page redraws itself as ticks come in.
+  const place = () => {
+    const el = document.querySelector(live[i].target);
+    if (!visible(el)) return;
+    const r = el.getBoundingClientRect();
+    const pad = 6;
+    Object.assign(spot.style, { top: `${r.top - pad}px`, left: `${r.left - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
+    const below = r.bottom + 14 + card.offsetHeight < innerHeight - 70 || r.top < card.offsetHeight + 24;
+    card.style.top = `${below ? Math.min(r.bottom + 14, innerHeight - card.offsetHeight - 12) : Math.max(12, r.top - card.offsetHeight - 14)}px`;
+    card.style.left = `${Math.max(12, Math.min(r.left, innerWidth - card.offsetWidth - 12))}px`;
+  };
+  card.addEventListener('click', (e) => {
+    const what = e.target.closest('[data-tour]')?.dataset.tour;
+    if (what === 'skip' || (what === 'next' && i === live.length - 1)) return finish();
+    if (what === 'next') i++;
+    else if (what === 'back') i--;
+    else return;
+    show();
+  });
+  const onKey = (e) => e.key === 'Escape' && finish();
+  const timer = setInterval(place, 500); // the page redraws itself (ticks, polling)
+  addEventListener('keydown', onKey);
+  addEventListener('resize', place);
+  addEventListener('scroll', place, { passive: true });
+  tour = {
+    place,
+    end() {
+      clearInterval(timer);
+      removeEventListener('keydown', onKey);
+      removeEventListener('resize', place);
+      removeEventListener('scroll', place);
+      spot.remove();
+      card.remove();
+    },
+  };
+  show();
+}
+
+function endTour() {
+  tour?.end();
+  tour = null;
+}
+
+const visible = (el) => !!el && el.getClientRects().length > 0;
+
+/** Show a page's walk-through the first time someone sees it (once the page has drawn). */
+function firstTimeTour(key, stillHere) {
+  if (tour || seenTour(key)) return;
+  setTimeout(() => !tour && !document.querySelector('dialog[open]') && stillHere() && TOURS[key](), 600);
+}
+
+$('#help-btn').addEventListener('click', () => {
+  const key = currentTour();
+  if (key) TOURS[key]();
+});
+
+const onTab = (name) => () => !$(`#tab-${name}`).hidden;
+
+const TOURS = {
+  shop: () => startShopTour(),
+  compare: () => startTour('compare', [
+    { target: '#q', title: 'Search once, see every shop', text: 'Type what you’re after, like “milk 2L” or “bread”. You get the cheapest at each of your shops, side by side.' },
+    { target: '#mode-filter', title: 'Same brand, or any brand?', text: '“Any brand” compares the same size from every brand, so you see the cheapest swap. “Same brand” only matches that exact product.' },
+    { target: '#sort-filter', title: 'Cheapest per kg or litre', text: 'Sort by price per kg / L to find the best value, not just the lowest sticker price.' },
+    { target: '#specials', title: 'Just the specials', text: 'Tick this to see only what’s on special right now.' },
+    { target: '#compare-scan', title: 'Scan in the shop', text: 'Scan a barcode to see what the same thing costs at the other shops.' },
+    { target: '#add-to-wrap', title: 'Add to a list', text: 'Press “+ List” on any result to add it here. Your list then works out which shop is cheapest for each thing.' },
+    { target: '#results .home-section', title: 'Deals worth knowing', text: 'Before you search, this shows things you buy often that are on sale, and specials that don’t come round often.' },
+    { target: '.tabs', title: 'Find your way around', text: 'Lists is your shopping list and the in-the-shop checklist. Price changes shows the biggest rises and drops.' },
+  ]),
+  list: () => startTour('list', [
+    { target: '#quick-add', title: 'Add things fast', text: 'Type something and press Add, and it finds the product. “Add as note” adds exactly what you typed. “Paste a list” takes a whole list at once.' },
+    { target: '#items .item', title: 'Each item, at its cheapest shop', text: 'Each thing shows the shop where it’s cheapest and what the others charge. Options lets you change the brand matching or where to buy it.' },
+    { target: '.total-bar', title: 'Your total', text: 'What the whole list costs if you buy each thing where it’s cheapest, and how much that saves over one shop.' },
+    { target: '.store-panel', title: 'Where you shop', text: 'Untick a shop you don’t want to go to. Each card shows what that shop saves you on this list.' },
+    { target: '#shop-mode', title: 'In the shop', text: 'Turns the list into a checklist for each shop, sorted by section, to tick off as you go.' },
+    { target: '.list-menu summary', title: 'More', text: 'Share the list with your household, start another list, see your past shops and what you’ve spent.' },
+  ]),
+  changes: () => startTour('changes', [
+    { target: '#changes-dir', title: 'Rises and drops', text: 'See what’s gone up, what’s come down, or both.' },
+    { target: '#changes-days', title: 'How far back', text: 'The last day, week or month.' },
+    { target: '#changes .change', title: 'Price history', text: 'Tap a product to see its price over time and how often it goes on special.' },
+  ]),
+  settings: () => startTour('settings', [
+    { target: '#install-card', title: 'Put it on your phone', text: 'Add Cheapo to your home screen so it opens like an app.' },
+    { target: '#shops-form', title: 'Your shops', text: 'Choose the shops you go to. Prices and lists only use these.' },
+    { target: '#alerts-form', title: 'Emails and member prices', text: 'Choose what we email you about, and turn on member prices for the loyalty programs you’re in.' },
+    { target: '#watch-list', title: 'Watching', text: 'Products you’re watching. We email you when they drop in price.' },
+  ]),
+};
+
+/** Which walk-through fits what's on screen now. */
+function currentTour() {
+  const page = location.pathname.slice(1);
+  if (page === 'settings') return 'settings';
+  if (page) return null;
+  const tab = location.hash.slice(1) || 'compare';
+  if (tab === 'list') return state.shopping ? 'shop' : user() && state.list ? 'list' : null;
+  return TOURS[tab] ? tab : null;
+}
+
+function startShopTour() {
+  startTour('shop', [
+    { target: '.shop-section .checklist li', title: 'Tick things off', text: 'Tap an item as it goes in the trolley. Each shop’s list is in the order its sections usually come, and it learns the way you walk your shop.' },
+    { target: '#undo-tick', title: 'Tapped the wrong one?', text: 'Undo takes back your last tick. Keep tapping to step further back.' },
+    { target: '.shop-tabs', title: 'One shop at a time', text: 'Going to more than one shop? Pick a shop to see just what to get there.' },
+    { target: '.hide-ticked', title: 'Less to scroll', text: 'Hide what you’ve already got, so only what’s left shows.' },
+    { target: '#scan-btn', title: 'Scan a barcode', text: 'Scan a product to tick it off without hunting for it on the list.' },
+    { target: '#finish-shop', title: 'Done?', text: 'Finish shop takes the ticked items off your list and saves the shop under “Past shops”, so you can repeat it and see what you spent.' },
+  ]);
+}
+
 async function keepScreenOn(on) {
   try {
     if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
@@ -1763,6 +1932,7 @@ document.addEventListener('visibilitychange', () => state.shopping && keepScreen
 
 function setShopping(on) {
   state.shopping = on;
+  if (!on) endTour();
   setShopPref('on', on);
   keepScreenOn(on);
 }
@@ -1851,6 +2021,10 @@ function renderShopping() {
     </div>
     <div class="shop-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${L.items.length}" aria-valuenow="${ticked}">
       <span style="width:${L.items.length ? (ticked / L.items.length) * 100 : 0}%"></span></div>
+    <div class="shop-tools">
+      <button type="button" class="small" id="undo-tick" ${tickHistory.length ? '' : 'disabled'} title="Undo your last tick">↶ Undo</button>
+      <button type="button" class="small ghost" id="shop-tour">? How this works</button>
+    </div>
     ${lists.length > 1 ? `<div class="shop-tabs" role="tablist" aria-label="Which shop">
       <button role="tab" data-shop-store="all" aria-selected="${current === 'all'}">All shops</button>
       ${lists.map((l) => `<button role="tab" data-shop-store="${l.id}" aria-selected="${current === l.id}">${l.title}
@@ -1860,6 +2034,7 @@ function renderShopping() {
     <p class="hint">Each shop’s list is sorted by section, in the order most supermarkets are laid out. Tap an item to cross it out.
       ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
     ${showing.map(section).join('')}`;
+  firstTimeTour('shop', () => state.shopping && !$('#tab-list').hidden);
 }
 
 function pendingTicks() {
@@ -1884,7 +2059,14 @@ function isTicked(it) {
   return it.id in pending ? tickState(pending[it.id]) : !!it.checkedAt;
 }
 
-async function tick(itemId, checked, where = {}) {
+// Ticks made here, newest last, so Undo can take them back one at a time.
+const tickHistory = [];
+
+async function tick(itemId, checked, where = {}, { undoing = false } = {}) {
+  if (!undoing) {
+    tickHistory.push({ itemId, checked: !checked, where });
+    if (tickHistory.length > 50) tickHistory.shift();
+  }
   const pending = pendingTicks();
   pending[itemId] = { checked, store: where.store || null, aisle: where.aisle || null, at: new Date().toISOString() };
   savePendingTicks(pending);
@@ -2364,11 +2546,20 @@ $('#list-root').addEventListener('click', async (e) => {
         setShopping(!state.shopping);
         window.scrollTo(0, 0);
         return state.shopping ? renderShopping() : renderList();
+      case 'undo-tick': {
+        const last = tickHistory.pop();
+        if (last && state.list.items.some((it) => it.id === last.itemId)) await tick(last.itemId, last.checked, last.where, { undoing: true });
+        else renderShopping();
+        return;
+      }
+      case 'shop-tour':
+        return startShopTour();
       case 'finish-shop': {
         await flushTicks();
         if (!confirm('Finished? Ticked items come off the list and are saved under “Past shops” so you can repeat them.')) return;
         const r = await api(`/api/lists/${state.listId}/finish`, { method: 'POST' });
         toast(`${r.name} saved — ${plural(r.items, 'item')} done`);
+        tickHistory.length = 0;
         setShopping(false);
         return loadList();
       }
@@ -2581,6 +2772,7 @@ async function loadChanges() {
       </div>`;
     }).join('')
     : '<div class="empty">No price changes in this period yet.</div>';
+  if (rows.length) firstTimeTour('changes', onTab('changes'));
 }
 
 // ================================================================== admin
@@ -2794,6 +2986,17 @@ function helperStatus(x, latest) {
   const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
   if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
   for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
+  const st = x.setup;
+  if (st) {
+    const os = { win32: 'Windows', linux: 'Linux', darwin: 'Mac' }[st.platform] || st.platform;
+    parts.push(`On <strong>${esc(st.host || 'a computer')}</strong>${os ? ` (${esc(os)})` : ''}`);
+    if (st.browser === 'none found') parts.push('<span class="warn">no Edge/Chrome found, so Coles and Liquorland usually get blocked</span>');
+    else if (st.browser === 'off') parts.push('<span class="warn">browser mode off (Coles and Liquorland usually get blocked)</span>');
+    else if (st.browser) parts.push(`Coles & Liquorland via ${esc(st.browser)}`);
+    if (st.stores?.length) parts.push(`<span class="warn">only does ${st.stores.map((s) => esc(storeName(s))).join(', ')}</span> (COLLECT_STORES)`);
+    if (!st.coles) parts.push('<span class="warn">Coles pages off</span> (COLLECT_COLES=false)');
+    if (st.log) parts.push(`log: <code>${esc(st.log)}</code>`);
+  }
   for (const b of x.blockedBy || []) parts.push(`<span class="warn">paused for ${esc(storeName(b.store))}${b.until ? ` until ${timeOf(b.until)}` : ' today'} (bot check)</span>`);
   if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
   else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);
