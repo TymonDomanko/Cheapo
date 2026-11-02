@@ -267,6 +267,7 @@ dialog .close { position: absolute; right: 12px; top: 10px; border: none; backgr
 .changes-note p { margin: 0 0 6px; }
 .changes-note ul { margin: 6px 0; padding-left: 18px; font-size: 14px; }
 .changes-note .good { color: var(--good); }
+.shop-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .shared-store { margin: 12px 0; }
 .shared-store h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
 .shared-items { list-style: none; margin: 0; padding: 0; }

@@ -1851,6 +1851,10 @@ function renderShopping() {
     </div>
     <div class="shop-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${L.items.length}" aria-valuenow="${ticked}">
       <span style="width:${L.items.length ? (ticked / L.items.length) * 100 : 0}%"></span></div>
+    <div class="shop-tools">
+      <button type="button" class="small" id="undo-tick" ${tickHistory.length ? '' : 'disabled'} title="Undo your last tick">↶ Undo</button>
+      <button type="button" class="small ghost" id="remove-ticked" ${ticked ? '' : 'disabled'}>Remove ticked${ticked ? ` (${ticked})` : ''}</button>
+    </div>
     ${lists.length > 1 ? `<div class="shop-tabs" role="tablist" aria-label="Which shop">
       <button role="tab" data-shop-store="all" aria-selected="${current === 'all'}">All shops</button>
       ${lists.map((l) => `<button role="tab" data-shop-store="${l.id}" aria-selected="${current === l.id}">${l.title}
@@ -1884,7 +1888,14 @@ function isTicked(it) {
   return it.id in pending ? tickState(pending[it.id]) : !!it.checkedAt;
 }
 
-async function tick(itemId, checked, where = {}) {
+// Ticks made here, newest last, so Undo can take them back one at a time.
+const tickHistory = [];
+
+async function tick(itemId, checked, where = {}, { undoing = false } = {}) {
+  if (!undoing) {
+    tickHistory.push({ itemId, checked: !checked, where });
+    if (tickHistory.length > 50) tickHistory.shift();
+  }
   const pending = pendingTicks();
   pending[itemId] = { checked, store: where.store || null, aisle: where.aisle || null, at: new Date().toISOString() };
   savePendingTicks(pending);
@@ -2364,11 +2375,29 @@ $('#list-root').addEventListener('click', async (e) => {
         setShopping(!state.shopping);
         window.scrollTo(0, 0);
         return state.shopping ? renderShopping() : renderList();
+      case 'undo-tick': {
+        const last = tickHistory.pop();
+        if (last && state.list.items.some((it) => it.id === last.itemId)) await tick(last.itemId, last.checked, last.where, { undoing: true });
+        else renderShopping();
+        return;
+      }
+      case 'remove-ticked': {
+        await flushTicks();
+        const n = state.list.items.filter(isTicked).length;
+        if (!confirm(`Take the ${plural(n, 'ticked item')} off the list? (“Finish shop” does the same and also saves the shop under “Past shops”.)`)) return;
+        const r = await api(`/api/lists/${state.listId}/items?ticked=1`, { method: 'DELETE' });
+        tickHistory.length = 0;
+        toast(`${plural(r.removed, 'item')} removed`);
+        await loadList();
+        if (!state.list.items.length) setShopping(false);
+        return state.shopping ? renderShopping() : renderList();
+      }
       case 'finish-shop': {
         await flushTicks();
         if (!confirm('Finished? Ticked items come off the list and are saved under “Past shops” so you can repeat them.')) return;
         const r = await api(`/api/lists/${state.listId}/finish`, { method: 'POST' });
         toast(`${r.name} saved — ${plural(r.items, 'item')} done`);
+        tickHistory.length = 0;
         setShopping(false);
         return loadList();
       }
