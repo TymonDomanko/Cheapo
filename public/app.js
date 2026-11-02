@@ -2986,6 +2986,17 @@ function helperStatus(x, latest) {
   const parts = [x.last_seen_at ? `Last connected <strong>${ago(x.last_seen_at)}</strong>` : 'Hasn’t connected yet'];
   if (x.version) parts.push(x.upToDate ? '<span class="state ready">✓ up to date</span>' : '<span class="state pending">older version</span> (it updates itself)');
   for (const s of x.shops || []) parts.push(`${chip(s.store)} ${esc(s.part)}`);
+  const st = x.setup;
+  if (st) {
+    const os = { win32: 'Windows', linux: 'Linux', darwin: 'Mac' }[st.platform] || st.platform;
+    parts.push(`On <strong>${esc(st.host || 'a computer')}</strong>${os ? ` (${esc(os)})` : ''}`);
+    if (st.browser === 'none found') parts.push('<span class="warn">no Edge/Chrome found, so Coles and Liquorland usually get blocked</span>');
+    else if (st.browser === 'off') parts.push('<span class="warn">browser mode off (Coles and Liquorland usually get blocked)</span>');
+    else if (st.browser) parts.push(`Coles & Liquorland via ${esc(st.browser)}`);
+    if (st.stores?.length) parts.push(`<span class="warn">only does ${st.stores.map((s) => esc(storeName(s))).join(', ')}</span> (COLLECT_STORES)`);
+    if (!st.coles) parts.push('<span class="warn">Coles pages off</span> (COLLECT_COLES=false)');
+    if (st.log) parts.push(`log: <code>${esc(st.log)}</code>`);
+  }
   for (const b of x.blockedBy || []) parts.push(`<span class="warn">paused for ${esc(storeName(b.store))}${b.until ? ` until ${timeOf(b.until)}` : ' today'} (bot check)</span>`);
   if (x.coles?.blockedUntil) parts.push(`<span class="warn">Coles paused by a bot check until ${timeOf(x.coles.blockedUntil)}</span>`);
   else if (x.coles?.doing) parts.push(`Coles: ${esc(x.coles.doing)}`);

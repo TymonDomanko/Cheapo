@@ -28,6 +28,7 @@
 // needs this to ask for the restart.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +39,32 @@ const RESTART = 75;
 
 // Settings from .env next to the collector (a downloaded one has it filled in).
 loadEnvFile(path.join(ROOT, '.env'));
+
+// Everything it prints also goes to a log file, as the program usually runs
+// minimised or with no window at all. (Docker keeps its own logs.)
+const LOG_FILE = fs.existsSync('/.dockerenv') || process.env.COLLECT_LOG_FILE === 'false' ? null
+  : process.env.COLLECT_LOG_FILE || path.join(process.env.GROCERY_COLLECTOR_HOME
+    || (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'GroceryCollector')
+      : path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'grocery-collector')), 'collector.log');
+if (LOG_FILE) {
+  try {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 2e6) fs.renameSync(LOG_FILE, LOG_FILE.replace(/\.log$/, '.old.log'));
+    for (const level of ['log', 'warn', 'error']) {
+      const print = console[level].bind(console);
+      console[level] = (...a) => {
+        print(...a);
+        try {
+          fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${a.map((x) => (typeof x === 'string' ? x : x?.stack || JSON.stringify(x))).join(' ')}\n`);
+        } catch {
+          /* disk full or folder gone: the window still has it */
+        }
+      };
+    }
+  } catch {
+    /* can't write there: carry on without a log file */
+  }
+}
 
 const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -59,14 +86,19 @@ const VERSION = collectorVersion((p) => fs.readFileSync(path.join(ROOT, p), 'utf
 // Shops that block programs (Coles, Liquorland) go through a real browser when
 // this computer has one (Edge on every Windows PC; Chrome or Chromium on Linux).
 // COLLECT_BROWSER=false turns that off; BROWSER_SHOPS chooses the shops.
+let browserNote = 'off';
 if (process.env.COLLECT_BROWSER !== 'false' && process.env.BROWSER_SHOPS === undefined) {
   const { findBrowser } = await import('../scrapers/devtools-browser.js');
   const found = findBrowser();
   if (found) {
     process.env.BROWSER_SHOPS = 'coles,liquorland';
-    console.log(`Coles and Liquorland will go through ${path.basename(found)} (no window; COLLECT_BROWSER=false turns this off).`);
+    browserNote = path.basename(found);
+    console.log(`Coles and Liquorland will go through ${browserNote} (no window; COLLECT_BROWSER=false turns this off).`);
+  } else {
+    browserNote = 'none found';
+    console.log('No Edge, Chrome or Chromium found, so Coles and Liquorland are fetched the usual way (they often block that).');
   }
-}
+} else if (process.env.BROWSER_SHOPS) browserNote = `${path.basename(process.env.BROWSER_PATH || 'browser')} for ${process.env.BROWSER_SHOPS}`;
 
 // Scrapers read proxy settings when loaded, so load them after .env.
 const { SCRAPERS } = await import('../scrapers/registry.js');
@@ -93,11 +125,22 @@ function loadEnvFile(file) {
   }
 }
 
+// How this helper is set up, for the site's Admin page (so nobody has to find its window).
+const ascii = (v) => String(v).replace(/[^\x20-\x7e]/g, '?');
+const setup = () => ascii(JSON.stringify({
+  host: os.hostname(),
+  platform: process.platform,
+  browser: browserNote,
+  stores: named.length ? named : listed,
+  coles: helpColes,
+  log: LOG_FILE,
+}).slice(0, 600));
 const headers = () => ({
   'Content-Type': 'application/json',
   Authorization: `Bearer ${token}`,
   'X-Collector-Version': VERSION,
   'X-Collector-Mode': MODE,
+  'X-Collector-Setup': setup(),
 });
 
 /** Talk to the site, retrying network hiccups. Uses Node's normal fetch (no scraper proxy). */

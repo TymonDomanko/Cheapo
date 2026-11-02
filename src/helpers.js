@@ -40,8 +40,29 @@ export function adoptSiteToken() {
   d.prepare("INSERT INTO app_settings (key, value) VALUES ('helpers:adopted', ?)").run(nowIso());
 }
 
+// How each helper says it's set up (computer, browser, shops), as it last told us.
+// Kept in memory: helpers say so every time they check in.
+const setups = new Map();
+function readSetup(text) {
+  try {
+    const x = JSON.parse(text);
+    const str = (v, n = 80) => (v == null ? null : String(v).slice(0, n));
+    return {
+      host: str(x.host), platform: str(x.platform, 20), browser: str(x.browser), log: str(x.log, 200),
+      stores: Array.isArray(x.stores) ? x.stores.map((s) => str(s, 20)).slice(0, 20) : [],
+      coles: x.coles !== false,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** A collector talked to us. */
-export function touch(worker, { version, mode } = {}) {
+export function touch(worker, { version, mode, setup } = {}) {
+  if (worker.helperId && setup) {
+    const s = readSetup(setup);
+    if (s) setups.set(worker.helperId, s);
+  }
   if (worker.helperId) {
     getDb().prepare('UPDATE collectors SET last_seen_at = ?, version = COALESCE(?, version), mode = COALESCE(?, mode) WHERE id = ?')
       .run(nowIso(), version ? String(version).slice(0, 40) : null, mode ? String(mode).slice(0, 20) : null, worker.helperId);
@@ -60,7 +81,7 @@ export function nameOf(id) {
 
 export function list() {
   return getDb().prepare('SELECT id, name, email, created_at, disabled, last_seen_at, version, mode, invite_expires, coles_max FROM collectors ORDER BY id').all()
-    .map(({ invite_expires: until, ...h }) => ({ ...h, disabled: !!h.disabled, worker: `h${h.id}`, inviteUntil: until && Date.parse(until) > Date.now() ? until : null }));
+    .map(({ invite_expires: until, ...h }) => ({ ...h, disabled: !!h.disabled, worker: `h${h.id}`, inviteUntil: until && Date.parse(until) > Date.now() ? until : null, setup: setups.get(h.id) || null }));
 }
 
 function get(id) {
