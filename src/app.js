@@ -457,7 +457,7 @@ export function createApp() {
     }
     return { added };
   }));
-  app.delete('/api/lists/:id/items', requireUser, h((req) => ({ removed: lists.clearItems(id(req.params.id), req.user.id, { ticked: req.query.ticked === '1' }) })));
+  app.delete('/api/lists/:id/items', requireUser, h((req) => lists.clearItems(id(req.params.id), req.user.id)));
 
   app.patch('/api/items/:id', requireUser, h((req) => lists.updateItem(id(req.params.id), req.user.id, req.body || {})));
   app.delete('/api/items/:id', requireUser, h((req) => lists.removeItem(id(req.params.id), req.user.id)));

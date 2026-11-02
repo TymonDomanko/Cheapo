@@ -293,10 +293,9 @@ export function removeItem(itemId, userId) {
   getDb().prepare('DELETE FROM list_items WHERE id = ?').run(itemId);
 }
 
-/** Empty a list, or (ticked) take off just what's ticked. Returns how many came off. */
-export function clearItems(listId, userId, { ticked = false } = {}) {
+export function clearItems(listId, userId) {
   requireMember(listId, userId);
-  return getDb().prepare(`DELETE FROM list_items WHERE list_id = ?${ticked ? ' AND checked_at IS NOT NULL' : ''}`).run(listId).changes;
+  getDb().prepare('DELETE FROM list_items WHERE list_id = ?').run(listId);
 }
 
 /** @param {number|null|'auto'} productId  'auto' clears the override, null = don't buy at that store. */

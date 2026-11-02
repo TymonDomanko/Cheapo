@@ -518,16 +518,6 @@ test('tick off in the shop, finish, repeat a past shop', async () => {
   assert.equal(added.added, 1, 'adds back what is missing, skips what is already there');
   v = (await api('GET', `/api/lists/${list.id}`)).body;
   assert.equal(v.items.find((i) => i.anchor.id === milk).quantity, 2);
-
-  // Remove just the ticked items (without saving the shop).
-  await api('PUT', `/api/items/${v.items[0].id}/checked`, { checked: true });
-  const before = (await api('GET', `/api/lists/${list.id}/snapshots`)).body.length;
-  assert.equal((await api('DELETE', `/api/lists/${list.id}/items?ticked=1`)).body.removed, 1);
-  v = (await api('GET', `/api/lists/${list.id}`)).body;
-  assert.equal(v.items.length, 1, 'the unticked one stays');
-  assert.ok(!v.items[0].checkedAt);
-  assert.equal((await api('GET', `/api/lists/${list.id}/snapshots`)).body.length, before, 'not saved as a past shop');
-  assert.equal((await client()('DELETE', `/api/lists/${list.id}/items?ticked=1`)).status, 401);
 });
 
 test('admin settings: saved in the database, .env wins, secrets never shown', async () => {

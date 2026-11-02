@@ -268,6 +268,15 @@ dialog .close { position: absolute; right: 12px; top: 10px; border: none; backgr
 .changes-note ul { margin: 6px 0; padding-left: 18px; font-size: 14px; }
 .changes-note .good { color: var(--good); }
 .shop-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+/* First-time walk-through: a dimmed page with a hole round the part being explained, and a card. */
+.tour-spot { position: fixed; z-index: 1000; border-radius: var(--radius); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); pointer-events: none; transition: all 0.25s ease; }
+.tour-card { position: fixed; z-index: 1001; width: min(340px, calc(100vw - 24px)); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); transition: top 0.25s ease, left 0.25s ease; }
+.tour-card h3 { margin: 0 0 6px; font-size: 17px; }
+.tour-card p { margin: 0 0 10px; color: var(--text-2); line-height: 1.4; }
+.tour-card .tour-step { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.tour-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+.tour-buttons [data-tour="skip"] { margin-right: auto; }
+@media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; } }
 .shared-store { margin: 12px 0; }
 .shared-store h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 8px; }
 .shared-items { list-style: none; margin: 0; padding: 0; }

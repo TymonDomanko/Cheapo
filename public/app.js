@@ -1747,6 +1747,105 @@ const setShopPref = (key, value) => {
 
 // Keep the phone's screen on while shopping, where the browser allows it.
 let wakeLock = null;
+// ---------------------------------------------------------------- first-time walk-through
+// A few cards, each pointing at part of the page. Shown once (remembered on this
+// device); "? How this works" shows it again. Steps whose part isn't on the page
+// (e.g. shop tabs with one shop) are skipped.
+let tour = null;
+const seenTour = (key) => {
+  try {
+    return localStorage.getItem(`tour:${key}`) === 'done';
+  } catch {
+    return true; // no storage: don't show it on every visit
+  }
+};
+
+function startTour(key, steps) {
+  endTour();
+  const live = steps.filter((st) => document.querySelector(st.target));
+  if (!live.length) return;
+  const spot = document.createElement('div');
+  spot.className = 'tour-spot';
+  const card = document.createElement('div');
+  card.className = 'tour-card';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-live', 'polite');
+  document.body.append(spot, card);
+  let i = 0;
+  const finish = () => {
+    try {
+      localStorage.setItem(`tour:${key}`, 'done');
+    } catch {
+      /* storage blocked */
+    }
+    endTour();
+  };
+  const show = () => {
+    const st = live[i];
+    card.innerHTML = `<p class="tour-step">${i + 1} of ${live.length}</p>
+      <h3>${st.title}</h3><p>${st.text}</p>
+      <div class="tour-buttons">
+        <button type="button" class="small ghost" data-tour="skip">${i === live.length - 1 ? 'Close' : 'Skip'}</button>
+        ${i ? '<button type="button" class="small" data-tour="back">Back</button>' : ''}
+        <button type="button" class="small primary" data-tour="next">${i === live.length - 1 ? 'Got it' : 'Next'}</button>
+      </div>`;
+    document.querySelector(st.target)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(place, 350);
+    place();
+    card.querySelector('[data-tour="next"]').focus({ preventScroll: true });
+  };
+  // Re-find the part each time: the shop page redraws itself as ticks come in.
+  const place = () => {
+    const el = document.querySelector(live[i].target);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const pad = 6;
+    Object.assign(spot.style, { top: `${r.top - pad}px`, left: `${r.left - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
+    const below = r.bottom + 14 + card.offsetHeight < innerHeight - 70 || r.top < card.offsetHeight + 24;
+    card.style.top = `${below ? Math.min(r.bottom + 14, innerHeight - card.offsetHeight - 12) : Math.max(12, r.top - card.offsetHeight - 14)}px`;
+    card.style.left = `${Math.max(12, Math.min(r.left, innerWidth - card.offsetWidth - 12))}px`;
+  };
+  card.addEventListener('click', (e) => {
+    const what = e.target.closest('[data-tour]')?.dataset.tour;
+    if (what === 'skip' || (what === 'next' && i === live.length - 1)) return finish();
+    if (what === 'next') i++;
+    else if (what === 'back') i--;
+    else return;
+    show();
+  });
+  const onKey = (e) => e.key === 'Escape' && finish();
+  addEventListener('keydown', onKey);
+  addEventListener('resize', place);
+  addEventListener('scroll', place, { passive: true });
+  tour = {
+    place,
+    end() {
+      removeEventListener('keydown', onKey);
+      removeEventListener('resize', place);
+      removeEventListener('scroll', place);
+      spot.remove();
+      card.remove();
+    },
+  };
+  show();
+}
+
+function endTour() {
+  tour?.end();
+  tour = null;
+}
+
+function startShopTour() {
+  startTour('shop', [
+    { target: '.shop-section .checklist li', title: 'Tick things off', text: 'Tap an item as it goes in the trolley. Each shop’s list is in the order its sections usually come, and it learns the way you walk your shop.' },
+    { target: '#undo-tick', title: 'Tapped the wrong one?', text: 'Undo takes back your last tick. Keep tapping to step further back.' },
+    { target: '.shop-tabs', title: 'One shop at a time', text: 'Going to more than one shop? Pick a shop to see just what to get there.' },
+    { target: '.hide-ticked', title: 'Less to scroll', text: 'Hide what you’ve already got, so only what’s left shows.' },
+    { target: '#scan-btn', title: 'Scan a barcode', text: 'Scan a product to tick it off without hunting for it on the list.' },
+    { target: '#finish-shop', title: 'Done?', text: 'Finish shop takes the ticked items off your list and saves the shop under “Past shops”, so you can repeat it and see what you spent.' },
+  ]);
+}
+
 async function keepScreenOn(on) {
   try {
     if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
@@ -1763,6 +1862,7 @@ document.addEventListener('visibilitychange', () => state.shopping && keepScreen
 
 function setShopping(on) {
   state.shopping = on;
+  if (!on) endTour();
   setShopPref('on', on);
   keepScreenOn(on);
 }
@@ -1853,7 +1953,7 @@ function renderShopping() {
       <span style="width:${L.items.length ? (ticked / L.items.length) * 100 : 0}%"></span></div>
     <div class="shop-tools">
       <button type="button" class="small" id="undo-tick" ${tickHistory.length ? '' : 'disabled'} title="Undo your last tick">↶ Undo</button>
-      <button type="button" class="small ghost" id="remove-ticked" ${ticked ? '' : 'disabled'}>Remove ticked${ticked ? ` (${ticked})` : ''}</button>
+      <button type="button" class="small ghost" id="shop-tour">? How this works</button>
     </div>
     ${lists.length > 1 ? `<div class="shop-tabs" role="tablist" aria-label="Which shop">
       <button role="tab" data-shop-store="all" aria-selected="${current === 'all'}">All shops</button>
@@ -1864,6 +1964,8 @@ function renderShopping() {
     <p class="hint">Each shop’s list is sorted by section, in the order most supermarkets are laid out. Tap an item to cross it out.
       ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
     ${showing.map(section).join('')}`;
+  if (tour) tour.place();
+  else if (!seenTour('shop')) setTimeout(() => state.shopping && !tour && startShopTour(), 400);
 }
 
 function pendingTicks() {
@@ -2381,17 +2483,8 @@ $('#list-root').addEventListener('click', async (e) => {
         else renderShopping();
         return;
       }
-      case 'remove-ticked': {
-        await flushTicks();
-        const n = state.list.items.filter(isTicked).length;
-        if (!confirm(`Take the ${plural(n, 'ticked item')} off the list? (“Finish shop” does the same and also saves the shop under “Past shops”.)`)) return;
-        const r = await api(`/api/lists/${state.listId}/items?ticked=1`, { method: 'DELETE' });
-        tickHistory.length = 0;
-        toast(`${plural(r.removed, 'item')} removed`);
-        await loadList();
-        if (!state.list.items.length) setShopping(false);
-        return state.shopping ? renderShopping() : renderList();
-      }
+      case 'shop-tour':
+        return startShopTour();
       case 'finish-shop': {
         await flushTicks();
         if (!confirm('Finished? Ticked items come off the list and are saved under “Past shops” so you can repeat them.')) return;
