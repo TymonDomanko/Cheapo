@@ -126,6 +126,8 @@ function showTab(name) {
 }
 
 function show(name) {
+  endTour();
+  $('#help-btn').hidden = !['compare', 'list', 'changes', 'settings'].includes(name);
   $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   $$('.tab').forEach((t) => (t.hidden = t.id !== `tab-${name}`));
   window.scrollTo(0, 0);
@@ -152,6 +154,7 @@ async function route() {
     if (page === 'settings') {
       fillSettings();
       fillInstallCard();
+      firstTimeTour('settings', () => !$('#tab-settings').hidden);
     }
     else if (page === 'privacy') renderPrivacy();
     else if (page === 'verify-email') confirmEmail();
@@ -796,6 +799,7 @@ async function renderHome(seq) {
   if (!h.regulars?.length) sections.reverse();
   box.innerHTML = `${sections.join('')}
     <p><button type="button" class="small" id="browse-specials">Browse all specials</button></p>`;
+  firstTimeTour('compare', onTab('compare'));
 }
 
 function dealCardShell(p, inner) {
@@ -1423,6 +1427,7 @@ function renderList() {
     ${L.items.length ? totalBar(L) : ''}
     ${renderStorePanel(L)}
     ${L.items.length ? renderSummary(L) : ''}`;
+  if (L.items.length) firstTimeTour('list', () => !state.shopping && !$('#tab-list').hidden);
 }
 
 /** What `qty` of a product costs this shopper (multi-buys and their member prices). Mirrors src/promos.js. */
@@ -1762,7 +1767,7 @@ const seenTour = (key) => {
 
 function startTour(key, steps) {
   endTour();
-  const live = steps.filter((st) => document.querySelector(st.target));
+  const live = steps.filter((st) => visible(document.querySelector(st.target)));
   if (!live.length) return;
   const spot = document.createElement('div');
   spot.className = 'tour-spot';
@@ -1797,7 +1802,7 @@ function startTour(key, steps) {
   // Re-find the part each time: the shop page redraws itself as ticks come in.
   const place = () => {
     const el = document.querySelector(live[i].target);
-    if (!el) return;
+    if (!visible(el)) return;
     const r = el.getBoundingClientRect();
     const pad = 6;
     Object.assign(spot.style, { top: `${r.top - pad}px`, left: `${r.left - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
@@ -1814,12 +1819,14 @@ function startTour(key, steps) {
     show();
   });
   const onKey = (e) => e.key === 'Escape' && finish();
+  const timer = setInterval(place, 500); // the page redraws itself (ticks, polling)
   addEventListener('keydown', onKey);
   addEventListener('resize', place);
   addEventListener('scroll', place, { passive: true });
   tour = {
     place,
     end() {
+      clearInterval(timer);
       removeEventListener('keydown', onKey);
       removeEventListener('resize', place);
       removeEventListener('scroll', place);
@@ -1833,6 +1840,64 @@ function startTour(key, steps) {
 function endTour() {
   tour?.end();
   tour = null;
+}
+
+const visible = (el) => !!el && el.getClientRects().length > 0;
+
+/** Show a page's walk-through the first time someone sees it (once the page has drawn). */
+function firstTimeTour(key, stillHere) {
+  if (tour || seenTour(key)) return;
+  setTimeout(() => !tour && !document.querySelector('dialog[open]') && stillHere() && TOURS[key](), 600);
+}
+
+$('#help-btn').addEventListener('click', () => {
+  const key = currentTour();
+  if (key) TOURS[key]();
+});
+
+const onTab = (name) => () => !$(`#tab-${name}`).hidden;
+
+const TOURS = {
+  shop: () => startShopTour(),
+  compare: () => startTour('compare', [
+    { target: '#q', title: 'Search once, see every shop', text: 'Type what you’re after, like “milk 2L” or “bread”. You get the cheapest at each of your shops, side by side.' },
+    { target: '#mode-filter', title: 'Same brand, or any brand?', text: '“Any brand” compares the same size from every brand, so you see the cheapest swap. “Same brand” only matches that exact product.' },
+    { target: '#sort-filter', title: 'Cheapest per kg or litre', text: 'Sort by price per kg / L to find the best value, not just the lowest sticker price.' },
+    { target: '#specials', title: 'Just the specials', text: 'Tick this to see only what’s on special right now.' },
+    { target: '#compare-scan', title: 'Scan in the shop', text: 'Scan a barcode to see what the same thing costs at the other shops.' },
+    { target: '#add-to-wrap', title: 'Add to a list', text: 'Press “+ List” on any result to add it here. Your list then works out which shop is cheapest for each thing.' },
+    { target: '#results .home-section', title: 'Deals worth knowing', text: 'Before you search, this shows things you buy often that are on sale, and specials that don’t come round often.' },
+    { target: '.tabs', title: 'Find your way around', text: 'Lists is your shopping list and the in-the-shop checklist. Price changes shows the biggest rises and drops.' },
+  ]),
+  list: () => startTour('list', [
+    { target: '#quick-add', title: 'Add things fast', text: 'Type something and press Add, and it finds the product. “Add as note” adds exactly what you typed. “Paste a list” takes a whole list at once.' },
+    { target: '#items .item', title: 'Each item, at its cheapest shop', text: 'Each thing shows the shop where it’s cheapest and what the others charge. Options lets you change the brand matching or where to buy it.' },
+    { target: '.total-bar', title: 'Your total', text: 'What the whole list costs if you buy each thing where it’s cheapest, and how much that saves over one shop.' },
+    { target: '.store-panel', title: 'Where you shop', text: 'Untick a shop you don’t want to go to. Each card shows what that shop saves you on this list.' },
+    { target: '#shop-mode', title: 'In the shop', text: 'Turns the list into a checklist for each shop, sorted by section, to tick off as you go.' },
+    { target: '.list-menu summary', title: 'More', text: 'Share the list with your household, start another list, see your past shops and what you’ve spent.' },
+  ]),
+  changes: () => startTour('changes', [
+    { target: '#changes-dir', title: 'Rises and drops', text: 'See what’s gone up, what’s come down, or both.' },
+    { target: '#changes-days', title: 'How far back', text: 'The last day, week or month.' },
+    { target: '#changes .change', title: 'Price history', text: 'Tap a product to see its price over time and how often it goes on special.' },
+  ]),
+  settings: () => startTour('settings', [
+    { target: '#install-card', title: 'Put it on your phone', text: 'Add Cheapo to your home screen so it opens like an app.' },
+    { target: '#shops-form', title: 'Your shops', text: 'Choose the shops you go to. Prices and lists only use these.' },
+    { target: '#alerts-form', title: 'Emails and member prices', text: 'Choose what we email you about, and turn on member prices for the loyalty programs you’re in.' },
+    { target: '#watch-list', title: 'Watching', text: 'Products you’re watching. We email you when they drop in price.' },
+  ]),
+};
+
+/** Which walk-through fits what's on screen now. */
+function currentTour() {
+  const page = location.pathname.slice(1);
+  if (page === 'settings') return 'settings';
+  if (page) return null;
+  const tab = location.hash.slice(1) || 'compare';
+  if (tab === 'list') return state.shopping ? 'shop' : user() && state.list ? 'list' : null;
+  return TOURS[tab] ? tab : null;
 }
 
 function startShopTour() {
@@ -1964,8 +2029,7 @@ function renderShopping() {
     <p class="hint">Each shop’s list is sorted by section, in the order most supermarkets are laid out. Tap an item to cross it out.
       ${L.members.length > 1 ? 'Ticks show up for everyone on this list, so you can split up.' : ''}</p>
     ${showing.map(section).join('')}`;
-  if (tour) tour.place();
-  else if (!seenTour('shop')) setTimeout(() => state.shopping && !tour && startShopTour(), 400);
+  firstTimeTour('shop', () => state.shopping && !$('#tab-list').hidden);
 }
 
 function pendingTicks() {
@@ -2703,6 +2767,7 @@ async function loadChanges() {
       </div>`;
     }).join('')
     : '<div class="empty">No price changes in this period yet.</div>';
+  if (rows.length) firstTimeTour('changes', onTab('changes'));
 }
 
 // ================================================================== admin

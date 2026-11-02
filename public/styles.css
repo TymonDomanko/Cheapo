@@ -110,7 +110,7 @@ input[type="search"], select, input[type="number"] {
   display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; justify-content: space-between;
   padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.brand { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; }
+.brand { display: grid; grid-template-columns: 1fr auto auto; column-gap: 8px; align-items: center; }
 .brand h1 { font-size: 18px; grid-column: 1; }
 /* The logo: the winking specials sticker and a "Cheapo!" wordmark */
 .brand-name { display: flex; align-items: center; gap: 8px; }
@@ -119,6 +119,8 @@ input[type="search"], select, input[type="number"] {
 .brand-text.bang::after { content: "!"; color: var(--text); }
 .brand .sub { grid-column: 1; }
 .theme-toggle { grid-column: 2; grid-row: 1 / span 2; width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; color: var(--text-2); border-color: var(--border); }
+.help-btn { grid-column: 3; font-weight: 700; font-size: 17px; }
+.help-btn[hidden] { display: none; }
 .brand .sub { color: var(--muted); font-size: 13px; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tabs button { border: none; background: transparent; padding: 8px 12px; color: var(--text-2); }
@@ -560,6 +562,7 @@ a.plain-link:hover { text-decoration: underline; }
   .brand { display: flex; align-items: center; gap: 10px; flex: 1; }
   .brand .sub { display: none; }
   .theme-toggle { margin-left: auto; width: 34px; height: 34px; }
+  .help-btn { margin-left: 0; }
   .account-wide { display: none; }
   .account-menu { display: block; }
   /* The tabs become an app-style bar along the bottom. */
