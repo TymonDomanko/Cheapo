@@ -17,6 +17,17 @@ const TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', '
 const fetching = new Map(); // url → promise, so a photo is fetched once however many ask
 const failed = new Map(); // url → when it last failed: don't keep asking a shop for a broken photo
 
+// What a file is, from its first bytes. Shops' servers don't always say it
+// properly (Coles' says "image/jpg"), so the bytes decide.
+function sniff(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buf.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (buf.subarray(4, 8).toString('latin1') === 'ftyp' && /^avi[fs]/.test(buf.subarray(8, 12).toString('latin1'))) return 'image/avif';
+  return null;
+}
+
 const fileFor = (url) => path.join(DIR, crypto.createHash('sha256').update(url).digest('hex').slice(0, 32));
 
 /** The product's photo as a file here: { file, type }, or null if there isn't one (or it can't be fetched). */
@@ -43,10 +54,11 @@ async function download(url, base) {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'image/avif,image/webp,image/*,*/*;q=0.8' },
     signal: AbortSignal.timeout(20000),
   });
-  const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!res.ok || !TYPES[type]) throw new Error(`HTTP ${res.status} ${type}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (!buf.length || buf.length > MAX_BYTES) throw new Error('too big');
+  if (!buf.length || buf.length > MAX_BYTES) throw new Error('empty or too big');
+  const type = sniff(buf);
+  if (!type) throw new Error(`not a photo (${res.headers.get('content-type')})`);
   fs.mkdirSync(DIR, { recursive: true });
   const file = `${base}.${TYPES[type]}`;
   fs.writeFileSync(`${file}.tmp`, buf);

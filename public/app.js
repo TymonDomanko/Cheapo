@@ -943,13 +943,18 @@ const imageSrc = (p) => (p.id ? `/img/${p.id}` : p.image_url);
 
 function thumb(p) {
   return p.image_url
-    ? `<img class="thumb" src="${esc(imageSrc(p))}" alt="" loading="lazy">`
+    ? `<img class="thumb" src="${esc(imageSrc(p))}" data-orig="${esc(p.image_url)}" alt="" loading="lazy">`
     : NO_IMAGE;
 }
 
 // A product photo that won't load gets the same placeholder (inline onerror isn't allowed by the page's security policy).
+// If our copy can't be had, the shop's own server gets a go first.
 document.addEventListener('error', (e) => {
-  if (e.target.matches?.('img.thumb')) e.target.outerHTML = NO_IMAGE;
+  const img = e.target;
+  if (img.dataset?.orig && /^https:\/\//.test(img.dataset.orig)) {
+    img.src = img.dataset.orig;
+    delete img.dataset.orig;
+  } else if (img.matches?.('img.thumb')) img.outerHTML = NO_IMAGE;
 }, true);
 
 /** Is this shopper a member of the store's loyalty scheme (so member prices apply)? */
@@ -1087,7 +1092,7 @@ async function openProduct(id) {
   const s = d.stats;
   box.innerHTML = `
     <div class="detail-head">
-      ${p.image_url ? `<img src="${esc(imageSrc(p))}" alt="">` : ''}
+      ${p.image_url ? `<img src="${esc(imageSrc(p))}" data-orig="${esc(p.image_url)}" alt="">` : ''}
       <div>
         <h2>${esc(p.name)}</h2>
         <div class="hint">${chip(p.store)} · ${esc(p.size_text || '')} · ${esc(p.category || '')}</div>
